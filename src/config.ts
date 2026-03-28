@@ -1,0 +1,106 @@
+import * as path from 'node:path';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+
+export interface EngramConfig {
+  database: { path: string };
+  search: {
+    mode: 'core' | 'hybrid';
+    timeDecayHalfLifeDays: number;
+    defaultLimit: number;
+    projectScope: boolean;
+  };
+  chunking: {
+    maxTokensPerChunk: number;
+    truncateToolOutputLines: number;
+    truncateToolOutputTailLines: number;
+  };
+  hooks: {
+    autoRecall: boolean;
+    recallLimit: number;
+    minRelevanceScore: number;
+  };
+}
+
+function getXdgDataHome(): string {
+  return process.env['XDG_DATA_HOME'] || path.join(os.homedir(), '.local', 'share');
+}
+
+function getXdgConfigHome(): string {
+  return process.env['XDG_CONFIG_HOME'] || path.join(os.homedir(), '.config');
+}
+
+export function getDefaultDbPath(): string {
+  return path.join(getXdgDataHome(), 'engram', 'memory.db');
+}
+
+export function getConfigFilePath(): string {
+  return path.join(getXdgConfigHome(), 'engram', 'config.json');
+}
+
+export function getDefaultConfig(): EngramConfig {
+  return {
+    database: {
+      path: getDefaultDbPath(),
+    },
+    search: {
+      mode: 'core',
+      timeDecayHalfLifeDays: 30,
+      defaultLimit: 5,
+      projectScope: true,
+    },
+    chunking: {
+      maxTokensPerChunk: 512,
+      truncateToolOutputLines: 20,
+      truncateToolOutputTailLines: 5,
+    },
+    hooks: {
+      autoRecall: true,
+      recallLimit: 3,
+      minRelevanceScore: 0,
+    },
+  };
+}
+
+function deepMerge(
+  base: Record<string, unknown>,
+  override: Record<string, unknown>
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...base };
+  for (const key of Object.keys(override)) {
+    const baseVal = base[key];
+    const overrideVal = override[key];
+    if (
+      baseVal &&
+      typeof baseVal === 'object' &&
+      !Array.isArray(baseVal) &&
+      overrideVal &&
+      typeof overrideVal === 'object' &&
+      !Array.isArray(overrideVal)
+    ) {
+      result[key] = deepMerge(
+        baseVal as Record<string, unknown>,
+        overrideVal as Record<string, unknown>
+      );
+    } else if (overrideVal !== undefined) {
+      result[key] = overrideVal;
+    }
+  }
+  return result;
+}
+
+export function loadConfig(configPath?: string): EngramConfig {
+  const defaults = getDefaultConfig();
+  const filePath = configPath || getConfigFilePath();
+
+  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const userConfig = JSON.parse(raw) as Record<string, unknown>;
+    return deepMerge(
+      defaults as unknown as Record<string, unknown>,
+      userConfig
+    ) as unknown as EngramConfig;
+  } catch {
+    return defaults;
+  }
+}
