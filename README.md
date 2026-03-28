@@ -25,19 +25,43 @@ Claude Codeのセッション会話を自動的に記録し、過去の議論や
 | 6   | 最小依存               | coreモードのランタイム依存はbetter-sqlite3のみです。CLIにはnode:util.parseArgsを使用しています                 |
 | 7   | DB肥大化対策           | セッション保存時に自動メンテナンスが実行されます。古いチャンクの削除とDBサイズ制限を24時間ごとにチェックします |
 
-## sui-memoryからの主要改善点
+## 類似ツールとの比較
 
-| 領域               | sui-memory                        | Engram                                                                                      |
-| ------------------ | --------------------------------- | ------------------------------------------------------------------------------------------- |
-| 言語               | Python                            | TypeScript                                                                                  |
-| ランタイム依存     | sentence-transformers, sqlite-vec | better-sqlite3のみ(coreモード)。hybridではsqlite-vec, @huggingface/transformersを追加       |
-| モデルダウンロード | Ruri v3-310m (約600MB)            | coreでは不要。hybridではRuri v3-30m ONNX (約37MB, int8)                                     |
-| チャンク分割       | Q&A形式ルールベース               | ターンベース + サイズ適応 + メタデータ抽出                                                  |
-| 検索               | RRF (FTS5 + ベクトル)             | core: FTS5 trigram + BM25 + 時間減衰 + リランカー。hybrid: FTS5 + Ruri v3ベクトル + RRF統合 |
-| 記憶注入           | 明示的検索のみ                    | UserPromptSubmit hookで自動注入(常時参照)                                                   |
-| セットアップ       | `uv sync`                         | `npm link` + `engram setup`(hook自動設定、`--hybrid`対応)                                   |
-| 記憶管理           | なし                              | CLI経由で編集、削除、エクスポート、類似チャンクのマージが可能                               |
-| DB肥大化対策       | なし                              | 自動メンテナンス(90日超削除、サイズ上限制御、24時間間隔)                                    |
+| 領域               | sui-memory                        | claude-mem                    | Engram                                            |
+| ------------------ | --------------------------------- | ----------------------------- | ------------------------------------------------- |
+| 言語               | Python                            | Bun/Python/JS                 | TypeScript                                        |
+| ランタイム依存     | sentence-transformers, sqlite-vec | Chroma, Claude Agent SDK等    | better-sqlite3のみ(coreモード)                    |
+| モデルダウンロード | Ruri v3-310m (約600MB)            | 内部embedding                 | coreでは不要。hybridではRuri v3-30m (約37MB)      |
+| チャンク分割       | Q&A形式ルールベース               | AI圧縮(APIトークン消費あり)   | ルールベース(トークン消費ゼロ)                    |
+| データモデル       | Q&Aペア                           | observation + session summary | ターンベースチャンク + メタデータ                 |
+| 検索               | RRF (FTS5 + ベクトル)             | FTS5 + Chroma + 3層段階開示   | FTS5 + BM25 + 時間減衰 + リランカー(+ RRF hybrid) |
+| 記憶注入           | 明示的検索のみ                    | MCP Server経由で明示的検索    | UserPromptSubmit hookで自動注入(常時参照)         |
+| セットアップ       | `uv sync`                         | npm install -g                | `npm link` + `engram setup`                       |
+| Web UI             | なし                              | localhost:37777で可視化       | なし                                              |
+| 記憶管理           | なし                              | Web UI経由                    | CLI経由で編集、削除、エクスポート、マージ         |
+| DB肥大化対策       | なし                              | AI圧縮による暗黙的な削減      | 自動メンテナンス(90日超削除、サイズ上限制御)      |
+| プライバシータグ   | なし                              | `<private>`タグで除外可能     | なし                                              |
+| observation分類    | なし                              | bugfix, feature等を自動分類   | なし                                              |
+
+### Engramにあってclaude-memにない機能
+
+- プロンプト送信時の自動記憶注入(hookベースの常時参照)
+- 時間減衰による新しい記憶の優先
+- 保存時のトークン消費ゼロ(ルールベースのチャンク分割)
+- 日本語特化embedding(Ruri v3)によるhybrid検索
+- CLI経由での記憶の直接編集、削除、エクスポート
+- 自動メンテナンスによるDB肥大化防止
+- 類似チャンクの検出とマージ
+
+### claude-memにあってEngramにない機能
+
+- AI圧縮によるセッション要約の自動生成(observation + summary形式)
+- Web UIによるリアルタイムメモリストリーム可視化
+- `<private>`タグによる機密データの除外
+- observationの自動分類(bugfix, feature, discovery等)
+- MCP Serverとしての動作(MCPツール経由での検索)
+- Chroma専用ベクトルDBによるセマンティック検索
+- 3層段階開示パターンによるトークン効率化
 
 ## 検索モード
 
