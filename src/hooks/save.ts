@@ -1,10 +1,11 @@
 import * as fs from 'node:fs';
 import { loadConfig } from '../config';
 import { getDatabase } from '../db/connection';
-import { initializeSchema } from '../db/schema';
+import { initializeSchema, initializeHybridSchema } from '../db/schema';
 import { Store } from '../db/store';
 import { parseTranscript } from '../parser/transcript';
 import { buildChunks } from '../parser/chunker';
+import { runAutoMaintenance } from '../maintenance/auto';
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -52,12 +53,35 @@ export async function handleSave(
       firstMessage: firstHuman?.kind === 'user' ? firstHuman.text.slice(0, 200) : undefined,
       lastMessage: lastHuman?.kind === 'user' ? lastHuman.text.slice(0, 200) : undefined,
     });
+
+    // hybridモード: 新チャンクのembeddingを生成
+    if (config.search.mode === 'hybrid') {
+      try {
+        initializeHybridSchema(db, config.embedding.dimensions);
+
+        const { getEmbedding } = await import('../search/embedding');
+        const missingIds = store.getChunkIdsWithoutEmbedding();
+        const docPrefix = '検索文書: ';
+        for (const id of missingIds) {
+          const chunk = store.getChunk(id);
+          if (chunk) {
+            const emb = await getEmbedding(docPrefix + chunk.content.slice(0, 512), config);
+            store.insertEmbedding(id, emb);
+          }
+        }
+      } catch (err) {
+        process.stderr.write(`engram hybrid embedding error: ${String(err)}\n`);
+      }
+    }
+
+    // 自動メンテナンス（頻度制限あり）
+    runAutoMaintenance(store, config);
   } finally {
     db.close();
   }
 }
 
-export async function runSave(): Promise<void> {
+export async function runSave(configPath?: string): Promise<void> {
   try {
     const raw = await readStdin();
     const input = JSON.parse(raw) as {
@@ -65,7 +89,7 @@ export async function runSave(): Promise<void> {
       transcript_path: string;
       cwd: string;
     };
-    await handleSave(input);
+    await handleSave(input, configPath);
   } catch (err) {
     process.stderr.write(`engram save error: ${String(err)}\n`);
     process.exit(0);

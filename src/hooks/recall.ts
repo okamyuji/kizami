@@ -4,7 +4,7 @@ import { getDatabase } from '../db/connection';
 import { initializeSchema } from '../db/schema';
 import { Store } from '../db/store';
 import { searchFts } from '../search/fts';
-import { rankResults } from '../search/hybrid';
+import { rankResults, reciprocalRankFusion } from '../search/hybrid';
 import { formatResults } from '../search/formatter';
 
 async function readStdin(): Promise<string> {
@@ -31,19 +31,40 @@ export async function handleRecall(
     const store = new Store(db);
 
     const projectPath = fs.realpathSync(input.cwd);
+    const limit = config.search.defaultLimit;
+    const allProjects = !config.search.projectScope;
 
-    const results = searchFts(store, {
+    const ftsResults = searchFts(store, {
       query: input.prompt,
       projectPath,
-      limit: config.search.defaultLimit,
-      allProjects: !config.search.projectScope,
+      limit,
+      allProjects,
     });
+
+    let results = ftsResults;
+
+    // hybridモード: FTS + ベクトル検索をRRFで統合
+    if (config.search.mode === 'hybrid' && store.hasVecTable()) {
+      try {
+        const { getEmbedding } = await import('../search/embedding');
+        const queryPrefix = '検索クエリ: ';
+        const queryEmbedding = await getEmbedding(queryPrefix + input.prompt, config);
+
+        const vecResults = allProjects
+          ? store.searchVecAll(queryEmbedding, limit)
+          : store.searchVec(queryEmbedding, projectPath, limit);
+
+        if (vecResults.length > 0) {
+          results = reciprocalRankFusion(ftsResults, vecResults);
+        }
+      } catch {
+        // ベクトル検索に失敗した場合はFTS結果をそのまま使用
+      }
+    }
 
     if (results.length === 0) return '';
 
-    const ranked = rankResults(results, config.search.timeDecayHalfLifeDays);
-
-    // Filter by minimum relevance score
+    const ranked = rankResults(results, config.search.timeDecayHalfLifeDays, input.prompt);
     const filtered = ranked.filter((r) => r.score >= config.hooks.minRelevanceScore);
 
     if (filtered.length === 0) return '';
@@ -54,7 +75,7 @@ export async function handleRecall(
   }
 }
 
-export async function runRecall(): Promise<void> {
+export async function runRecall(configPath?: string): Promise<void> {
   try {
     const raw = await readStdin();
     const input = JSON.parse(raw) as {
@@ -62,7 +83,7 @@ export async function runRecall(): Promise<void> {
       session_id: string;
       cwd: string;
     };
-    const result = await handleRecall(input);
+    const result = await handleRecall(input, configPath);
     if (result) {
       process.stdout.write(result);
     }

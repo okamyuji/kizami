@@ -14,6 +14,8 @@ import { runRecall } from './hooks/recall';
 import { setupHooks } from './hooks/setup';
 import { importClaudeMem } from './import/claude-mem';
 import type { ImportResult } from './import/claude-mem';
+import { mergeChunks } from './maintenance/merge';
+import type { MergeResult } from './maintenance/merge';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -49,22 +51,22 @@ function parseDuration(value: string): number {
 
 // ── Command Handlers ─────────────────────────────────────────────────
 
-export async function cmdSave(stdin: boolean): Promise<void> {
+export async function cmdSave(stdin: boolean, configPath?: string): Promise<void> {
   if (!stdin) {
     console.log('Usage: engram save --stdin');
     console.log('  Reads JSON from stdin (SessionEnd hook).');
     return;
   }
-  await runSave();
+  await runSave(configPath);
 }
 
-export async function cmdRecall(stdin: boolean): Promise<void> {
+export async function cmdRecall(stdin: boolean, configPath?: string): Promise<void> {
   if (!stdin) {
     console.log('Usage: engram recall --stdin');
     console.log('  Reads JSON from stdin (UserPromptSubmit hook).');
     return;
   }
-  await runRecall();
+  await runRecall(configPath);
 }
 
 export function cmdSearch(
@@ -88,7 +90,7 @@ export function cmdSearch(
       return [];
     }
 
-    const ranked = rankResults(results, config.search.timeDecayHalfLifeDays);
+    const ranked = rankResults(results, config.search.timeDecayHalfLifeDays, query);
     const output = formatResults(ranked, config.search.defaultLimit);
     console.log(output);
     return ranked;
@@ -199,8 +201,8 @@ export function cmdStats(options: { config?: string }): StoreStats {
   }
 }
 
-export async function cmdSetup(): Promise<void> {
-  await setupHooks();
+export async function cmdSetup(hybrid: boolean): Promise<void> {
+  await setupHooks({ hybrid });
 }
 
 export function cmdPrune(olderThan: string, options: { config?: string }): number {
@@ -279,6 +281,36 @@ export async function cmdImportClaudeMem(options: {
   return result;
 }
 
+export function cmdMerge(options: {
+  threshold?: string;
+  project?: string;
+  dryRun?: boolean;
+  config?: string;
+}): MergeResult {
+  const config = loadConfig(options.config);
+  const db = getDatabase(config.database.path);
+  initializeSchema(db);
+
+  try {
+    const threshold = options.threshold ? parseFloat(options.threshold) : undefined;
+    const result = mergeChunks(db, {
+      similarityThreshold: threshold,
+      projectPath: options.project ? path.resolve(options.project) : undefined,
+      dryRun: options.dryRun,
+    });
+
+    if (options.dryRun) {
+      console.log('Dry run — no data was modified.');
+    }
+    console.log(`Similar groups found: ${result.groupsFound}`);
+    console.log(`Chunks in groups:    ${result.chunksMerged}`);
+    console.log(`Chunks removed:      ${result.chunksRemoved}`);
+    return result;
+  } finally {
+    db.close();
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 function showUsage(): void {
@@ -295,6 +327,7 @@ Commands:
   setup             Auto-configure Claude Code hooks
   prune             Bulk delete old memories
   export            Export as JSON/Markdown
+  merge             Merge similar chunks
   import-claude-mem Import from claude-mem database
 
 Options:
@@ -321,6 +354,8 @@ async function main(): Promise<void> {
       format: { type: 'string' },
       source: { type: 'string' },
       'dry-run': { type: 'boolean', default: false },
+      threshold: { type: 'string' },
+      hybrid: { type: 'boolean', default: false },
     },
   });
 
@@ -339,11 +374,11 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'save':
-      await cmdSave(!!values['stdin']);
+      await cmdSave(!!values['stdin'], sharedOpts.config);
       break;
 
     case 'recall':
-      await cmdRecall(!!values['stdin']);
+      await cmdRecall(!!values['stdin'], sharedOpts.config);
       break;
 
     case 'search': {
@@ -393,7 +428,7 @@ async function main(): Promise<void> {
       break;
 
     case 'setup':
-      await cmdSetup();
+      await cmdSetup(!!values['hybrid']);
       break;
 
     case 'prune': {
@@ -411,6 +446,15 @@ async function main(): Promise<void> {
       cmdExport({
         format: values['format'] as string | undefined,
         ...sharedOpts,
+      });
+      break;
+
+    case 'merge':
+      cmdMerge({
+        threshold: values['threshold'] as string | undefined,
+        project: sharedOpts.project,
+        dryRun: values['dry-run'] as boolean | undefined,
+        config: sharedOpts.config,
       });
       break;
 

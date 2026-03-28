@@ -9,23 +9,49 @@ export interface FtsSearchOptions {
 
 const DEFAULT_LIMIT = 20;
 const MIN_KEYWORD_LENGTH = 3;
+const CJK_RANGE = /[\u3000-\u9fff\uf900-\ufaff]/;
+const NGRAM_SIZE = 3;
+const MAX_CJK_NGRAMS_PER_TOKEN = 8;
 
 /**
  * FTS5 trigram の MATCH はクエリ文字列全体を部分文字列として検索します。
  * そのため長いプロンプトをそのまま渡すとヒットしません。
  * プロンプトをキーワードに分割し、各キーワードで個別に検索して結果を統合します。
+ *
+ * 日本語などCJKテキストはスペース区切りがないため、
+ * 助詞・記号で分割した上でN-gramに展開してFTS5 trigramに適合させます。
  */
 function extractKeywords(text: string): string[] {
-  // 空白・句読点で分割し、trigram検索に必要な3文字以上のトークンを抽出
-  const tokens = text.split(/[\s、。,.!?;:()[\]{}「」『』・\n\r\t]+/);
+  // 空白・句読点・日本語助詞で分割
+  const tokens = text.split(
+    /[\s、。,.!?;:()[\]{}「」『』・\n\r\t]+|(?<=[はがをにでとものかへもやばてり])(?=[^\s])/
+  );
   const keywords: string[] = [];
   const seen = new Set<string>();
 
+  const addKeyword = (kw: string): void => {
+    const lower = kw.toLowerCase();
+    if (lower.length >= MIN_KEYWORD_LENGTH && !seen.has(lower)) {
+      seen.add(lower);
+      keywords.push(kw);
+    }
+  };
+
   for (const token of tokens) {
     const trimmed = token.trim();
-    if (trimmed.length >= MIN_KEYWORD_LENGTH && !seen.has(trimmed.toLowerCase())) {
-      seen.add(trimmed.toLowerCase());
-      keywords.push(trimmed);
+    if (trimmed.length < MIN_KEYWORD_LENGTH) continue;
+
+    if (trimmed.length > NGRAM_SIZE && CJK_RANGE.test(trimmed)) {
+      // CJKを含む長いトークンはN-gramに分割してFTS5 trigramで検索可能にする
+      const step = Math.max(
+        1,
+        Math.floor((trimmed.length - NGRAM_SIZE) / (MAX_CJK_NGRAMS_PER_TOKEN - 1))
+      );
+      for (let i = 0; i <= trimmed.length - NGRAM_SIZE; i += step) {
+        addKeyword(trimmed.substring(i, i + NGRAM_SIZE));
+      }
+    } else {
+      addKeyword(trimmed);
     }
   }
 

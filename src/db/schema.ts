@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
+import { createRequire } from 'node:module';
 
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS chunks (
@@ -58,6 +59,16 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 `;
 
+const SCHEMA_V2 = `
+CREATE TABLE IF NOT EXISTS maintenance_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action TEXT NOT NULL,
+  chunks_deleted INTEGER NOT NULL DEFAULT 0,
+  bytes_freed INTEGER NOT NULL DEFAULT 0,
+  executed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`;
+
 function getSchemaVersion(db: Database.Database): number {
   try {
     const row = db.prepare('SELECT MAX(version) as version FROM schema_version').get() as
@@ -66,6 +77,28 @@ function getSchemaVersion(db: Database.Database): number {
     return row?.version ?? 0;
   } catch {
     return 0;
+  }
+}
+
+export function initializeHybridSchema(db: Database.Database, dimensions: number): void {
+  try {
+    const esmRequire = createRequire(import.meta.url);
+    const sqliteVec = esmRequire('sqlite-vec') as { load: (db: Database.Database) => void };
+    sqliteVec.load(db);
+
+    // chunks_vecが既に存在するかチェック
+    const exists = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks_vec'")
+      .get();
+    if (!exists) {
+      db.exec(`CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[${dimensions}])`);
+      db.exec(
+        `CREATE TABLE IF NOT EXISTS chunks_vec_map (chunk_id INTEGER PRIMARY KEY, vec_rowid INTEGER NOT NULL)`
+      );
+    }
+  } catch (err) {
+    // sqlite-vecが利用できない場合はスキップ
+    throw new Error(`sqlite-vec initialization failed: ${String(err)}`);
   }
 }
 
@@ -79,7 +112,12 @@ export function initializeSchema(db: Database.Database): void {
   db.transaction(() => {
     if (currentVersion < 1) {
       db.exec(SCHEMA_V1);
-      db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(CURRENT_SCHEMA_VERSION);
     }
+    if (currentVersion < 2) {
+      db.exec(SCHEMA_V2);
+    }
+    db.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)').run(
+      CURRENT_SCHEMA_VERSION
+    );
   })();
 }

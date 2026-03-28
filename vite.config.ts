@@ -17,6 +17,8 @@ export default defineConfig({
         ...builtinModules,
         ...builtinModules.map((m) => `node:${m}`),
         'better-sqlite3',
+        'sqlite-vec',
+        '@huggingface/transformers',
       ],
       output: {
         banner: (chunk) => {

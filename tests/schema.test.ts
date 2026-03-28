@@ -70,7 +70,7 @@ describe('schema', () => {
     const row = db.prepare('SELECT MAX(version) as version FROM schema_version').get() as {
       version: number;
     };
-    expect(row.version).toBe(1);
+    expect(row.version).toBe(2);
     db.close();
   });
 
@@ -81,7 +81,7 @@ describe('schema', () => {
     const row = db.prepare('SELECT MAX(version) as version FROM schema_version').get() as {
       version: number;
     };
-    expect(row.version).toBe(1);
+    expect(row.version).toBe(2);
     db.close();
   });
 });

@@ -218,7 +218,10 @@ export class Store {
       count: number;
     };
     const sizeRow = this.db
-      .prepare('SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()')
+      .prepare(
+        `SELECT (page_count - freelist_count) * page_size as size
+         FROM pragma_page_count(), pragma_page_size(), pragma_freelist_count()`
+      )
       .get() as {
       size: number;
     };
@@ -228,6 +231,116 @@ export class Store {
       totalSessions: sessionsRow.count,
       dbSizeBytes: sizeRow?.size ?? 0,
     };
+  }
+
+  insertEmbedding(chunkId: number, embedding: Float32Array): void {
+    const buf = Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
+    const info = this.db.prepare('INSERT INTO chunks_vec (embedding) VALUES (?)').run(buf);
+    this.db
+      .prepare('INSERT OR REPLACE INTO chunks_vec_map (chunk_id, vec_rowid) VALUES (?, ?)')
+      .run(chunkId, info.lastInsertRowid);
+  }
+
+  searchVec(queryEmbedding: Float32Array, projectPath: string, limit: number): SearchResult[] {
+    const buf = Buffer.from(
+      queryEmbedding.buffer,
+      queryEmbedding.byteOffset,
+      queryEmbedding.byteLength
+    );
+    return this.db
+      .prepare(
+        `SELECT c.id, c.content, c.session_id AS sessionId, c.created_at AS createdAt,
+                c.metadata, v.distance AS rank
+         FROM chunks_vec v
+         JOIN chunks_vec_map m ON m.vec_rowid = v.rowid
+         JOIN chunks c ON c.id = m.chunk_id
+         WHERE v.embedding MATCH ?
+           AND c.project_path = ?
+         ORDER BY v.distance
+         LIMIT ?`
+      )
+      .all(buf, projectPath, limit) as SearchResult[];
+  }
+
+  searchVecAll(queryEmbedding: Float32Array, limit: number): SearchResult[] {
+    const buf = Buffer.from(
+      queryEmbedding.buffer,
+      queryEmbedding.byteOffset,
+      queryEmbedding.byteLength
+    );
+    return this.db
+      .prepare(
+        `SELECT c.id, c.content, c.session_id AS sessionId, c.created_at AS createdAt,
+                c.metadata, v.distance AS rank
+         FROM chunks_vec v
+         JOIN chunks_vec_map m ON m.vec_rowid = v.rowid
+         JOIN chunks c ON c.id = m.chunk_id
+         WHERE v.embedding MATCH ?
+         ORDER BY v.distance
+         LIMIT ?`
+      )
+      .all(buf, limit) as SearchResult[];
+  }
+
+  hasVecTable(): boolean {
+    const row = this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks_vec'")
+      .get();
+    return !!row;
+  }
+
+  getChunkIdsWithoutEmbedding(): number[] {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT c.id FROM chunks c
+           LEFT JOIN chunks_vec_map m ON c.id = m.chunk_id
+           WHERE m.chunk_id IS NULL`
+        )
+        .all() as { id: number }[];
+      return rows.map((r) => r.id);
+    } catch {
+      return [];
+    }
+  }
+
+  getLastMaintenanceTime(): string | null {
+    try {
+      const row = this.db
+        .prepare('SELECT executed_at FROM maintenance_log ORDER BY executed_at DESC LIMIT 1')
+        .get() as { executed_at: string } | undefined;
+      return row?.executed_at ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  logMaintenance(action: string, chunksDeleted: number, bytesFreed: number): void {
+    this.db
+      .prepare('INSERT INTO maintenance_log (action, chunks_deleted, bytes_freed) VALUES (?, ?, ?)')
+      .run(action, chunksDeleted, bytesFreed);
+  }
+
+  vacuum(): void {
+    this.db.pragma('wal_checkpoint(TRUNCATE)');
+  }
+
+  deleteOldestChunks(count: number): number {
+    const result = this.db
+      .prepare(
+        'DELETE FROM chunks WHERE id IN (SELECT id FROM chunks ORDER BY created_at ASC, id ASC LIMIT ?)'
+      )
+      .run(count);
+    return result.changes;
+  }
+
+  deleteOrphanedSessions(): number {
+    const result = this.db
+      .prepare(
+        'DELETE FROM sessions WHERE session_id NOT IN (SELECT DISTINCT session_id FROM chunks)'
+      )
+      .run();
+    return result.changes;
   }
 
   private rowToChunk(row: Record<string, unknown>): Chunk {

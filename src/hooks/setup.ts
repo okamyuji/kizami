@@ -1,9 +1,10 @@
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
+import { createRequire } from 'node:module';
 import { getDatabase } from '../db/connection';
 import { initializeSchema } from '../db/schema';
-import { getDefaultDbPath } from '../config';
+import { getDefaultDbPath, getConfigFilePath, getDefaultConfig } from '../config';
 
 interface HookEntry {
   type: string;
@@ -22,6 +23,7 @@ interface ClaudeSettings {
 export interface SetupOptions {
   settingsPath?: string;
   dbPath?: string;
+  hybrid?: boolean;
 }
 
 function getDefaultSettingsPath(): string {
@@ -49,16 +51,56 @@ function isEngramHook(hook: HookEntry): boolean {
 
 function mergeHooks(existing: HookMatcher[] | undefined, newMatcher: HookMatcher): HookMatcher[] {
   if (!existing) return [newMatcher];
-
-  // Remove any existing engram hook matchers
   const filtered = existing.filter((matcher) => !matcher.hooks.some((h) => isEngramHook(h)));
-
   return [...filtered, newMatcher];
+}
+
+function writeEngramConfig(mode: 'core' | 'hybrid'): void {
+  const configPath = getConfigFilePath();
+  const defaults = getDefaultConfig();
+  defaults.search.mode = mode;
+
+  const configDir = path.dirname(configPath);
+  fs.mkdirSync(configDir, { recursive: true });
+
+  // 既存設定があればmodeだけ更新
+  let config: Record<string, unknown> = {};
+  try {
+    const raw = fs.readFileSync(configPath, 'utf-8');
+    config = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    // 新規作成
+  }
+
+  if (!config['search']) {
+    config['search'] = {};
+  }
+  (config['search'] as Record<string, unknown>)['mode'] = mode;
+
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  console.log(`  Config: ${configPath} (mode: ${mode})`);
+}
+
+function checkHybridDependencies(): { available: boolean; missing: string[] } {
+  const esmRequire = createRequire(import.meta.url);
+  const missing: string[] = [];
+  try {
+    esmRequire.resolve('sqlite-vec');
+  } catch {
+    missing.push('sqlite-vec');
+  }
+  try {
+    esmRequire.resolve('@huggingface/transformers');
+  } catch {
+    missing.push('@huggingface/transformers');
+  }
+  return { available: missing.length === 0, missing };
 }
 
 export async function setupHooks(options?: SetupOptions): Promise<void> {
   const settingsPath = options?.settingsPath ?? getDefaultSettingsPath();
   const settings = readSettings(settingsPath);
+  const hybrid = options?.hybrid ?? false;
 
   const errorLogPath = path.join(
     process.env['XDG_DATA_HOME'] || path.join(os.homedir(), '.local', 'share'),
@@ -100,6 +142,22 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     initializeSchema(db);
   } finally {
     db.close();
+  }
+
+  // Write engram config
+  writeEngramConfig(hybrid ? 'hybrid' : 'core');
+
+  // Hybrid mode dependency check
+  if (hybrid) {
+    const deps = checkHybridDependencies();
+    if (!deps.available) {
+      console.log(
+        `  Warning: hybridモードに必要なパッケージがありません: ${deps.missing.join(', ')}`
+      );
+      console.log(`  以下を実行してください: npm install -g ${deps.missing.join(' ')}`);
+    } else {
+      console.log('  Hybrid dependencies: OK');
+    }
   }
 
   console.log('engram hooks installed successfully.');

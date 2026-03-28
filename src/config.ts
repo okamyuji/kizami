@@ -20,10 +20,26 @@ export interface EngramConfig {
     recallLimit: number;
     minRelevanceScore: number;
   };
+  maintenance: {
+    enabled: boolean;
+    intervalHours: number;
+    maxChunkAgeDays: number;
+    maxDbSizeMB: number;
+  };
+  embedding: {
+    model: string;
+    quantized: boolean;
+    dimensions: number;
+    cacheDir: string;
+  };
 }
 
 function getXdgDataHome(): string {
   return process.env['XDG_DATA_HOME'] || path.join(os.homedir(), '.local', 'share');
+}
+
+function getXdgCacheHome(): string {
+  return process.env['XDG_CACHE_HOME'] || path.join(os.homedir(), '.cache');
 }
 
 function getXdgConfigHome(): string {
@@ -58,6 +74,18 @@ export function getDefaultConfig(): EngramConfig {
       autoRecall: true,
       recallLimit: 3,
       minRelevanceScore: 0,
+    },
+    maintenance: {
+      enabled: true,
+      intervalHours: 24,
+      maxChunkAgeDays: 90,
+      maxDbSizeMB: 100,
+    },
+    embedding: {
+      model: 'sirasagi62/ruri-v3-30m-ONNX',
+      quantized: true,
+      dimensions: 256,
+      cacheDir: path.join(getXdgCacheHome(), 'engram', 'models'),
     },
   };
 }

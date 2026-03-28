@@ -1,4 +1,5 @@
 import type { SearchResult } from '../db/store';
+import { rerank } from './reranker';
 
 export interface ScoredResult extends SearchResult {
   score: number;
@@ -113,7 +114,49 @@ function deduplicateBySession(results: ScoredResult[]): ScoredResult[] {
   return output.sort((a, b) => b.score - a.score);
 }
 
-export function rankResults(results: SearchResult[], halfLifeDays?: number): ScoredResult[] {
+/**
+ * Reciprocal Rank Fusion (RRF) でFTS結果とベクトル検索結果を統合します。
+ * k=60は原論文(Cormack et al., 2009)で最も安定していると報告された値です。
+ */
+export function reciprocalRankFusion(
+  ftsResults: SearchResult[],
+  vecResults: SearchResult[],
+  k: number = 60
+): SearchResult[] {
+  const scores = new Map<number, { result: SearchResult; score: number }>();
+
+  for (let i = 0; i < ftsResults.length; i++) {
+    const r = ftsResults[i];
+    const existing = scores.get(r.id);
+    const rrfScore = 1 / (i + 1 + k);
+    if (existing) {
+      existing.score += rrfScore;
+    } else {
+      scores.set(r.id, { result: r, score: rrfScore });
+    }
+  }
+
+  for (let i = 0; i < vecResults.length; i++) {
+    const r = vecResults[i];
+    const existing = scores.get(r.id);
+    const rrfScore = 1 / (i + 1 + k);
+    if (existing) {
+      existing.score += rrfScore;
+    } else {
+      scores.set(r.id, { result: r, score: rrfScore });
+    }
+  }
+
+  return [...scores.values()]
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => ({ ...entry.result, rank: -entry.score }));
+}
+
+export function rankResults(
+  results: SearchResult[],
+  halfLifeDays?: number,
+  query?: string
+): ScoredResult[] {
   if (results.length === 0) {
     return [];
   }
@@ -135,5 +178,12 @@ export function rankResults(results: SearchResult[], halfLifeDays?: number): Sco
   scored = scored.map((r) => ({ ...r, score: scoreMap.get(r.id) ?? r.score }));
 
   // Step 3: Deduplicate by session adjacency
-  return deduplicateBySession(scored);
+  const deduped = deduplicateBySession(scored);
+
+  // Step 4: Rerank with query-document relevance scoring
+  if (query) {
+    return rerank(query, deduped);
+  }
+
+  return deduped;
 }
