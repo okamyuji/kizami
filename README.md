@@ -27,16 +27,17 @@ Claude Codeのセッション会話を自動的に記録し、過去の議論や
 
 ## sui-memoryからの主要改善点
 
-| 領域               | sui-memory                        | Engram                                                |
-| ------------------ | --------------------------------- | ----------------------------------------------------- |
-| 言語               | Python                            | TypeScript                                            |
-| ランタイム依存     | sentence-transformers, sqlite-vec | better-sqlite3のみ(coreモード)                        |
-| モデルダウンロード | Ruri v3-310m (約600MB)            | 不要(FTS5 trigram検索がデフォルト)                    |
-| チャンク分割       | Q&A形式ルールベース               | ターンベース + サイズ適応 + メタデータ抽出            |
-| 検索               | RRF (FTS5 + ベクトル)             | FTS5 trigram + BM25 + 時間減衰 + プロジェクトスコープ |
-| 記憶注入           | 明示的検索のみ                    | UserPromptSubmit hookで自動注入(常時参照)             |
-| セットアップ       | `uv sync`                         | `pnpm install -g` + `engram setup`(hook自動設定)      |
-| 記憶管理           | なし                              | CLI経由で編集、削除、エクスポートが可能               |
+| 領域 | sui-memory | Engram |
+| --- | --- | --- |
+| 言語 | Python | TypeScript |
+| ランタイム依存 | sentence-transformers, sqlite-vec | better-sqlite3のみ(coreモード)。hybridではsqlite-vec, @huggingface/transformersを追加 |
+| モデルダウンロード | Ruri v3-310m (約600MB) | coreでは不要。hybridではRuri v3-30m ONNX (約37MB, int8) |
+| チャンク分割 | Q&A形式ルールベース | ターンベース + サイズ適応 + メタデータ抽出 |
+| 検索 | RRF (FTS5 + ベクトル) | core: FTS5 trigram + BM25 + 時間減衰 + リランカー。hybrid: FTS5 + Ruri v3ベクトル + RRF統合 |
+| 記憶注入 | 明示的検索のみ | UserPromptSubmit hookで自動注入(常時参照) |
+| セットアップ | `uv sync` | `npm link` + `engram setup`(hook自動設定、`--hybrid`対応) |
+| 記憶管理 | なし | CLI経由で編集、削除、エクスポート、類似チャンクのマージが可能 |
+| DB肥大化対策 | なし | 自動メンテナンス(90日超削除、サイズ上限制御、24時間間隔) |
 
 ## 検索モード
 
