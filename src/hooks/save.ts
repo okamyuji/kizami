@@ -82,7 +82,7 @@ export async function handleSave(
 }
 
 export async function runSave(configPath?: string): Promise<void> {
-  // SessionEnd hookではCtrl+C等のシグナルがプロセスグループ経由で伝播するため無視する
+  // SIGINTハンドラはcli.tsのトップレベルで早期登録済み（ここは念のため二重登録）
   process.on('SIGINT', () => {});
   process.on('SIGTERM', () => {});
 

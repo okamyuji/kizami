@@ -112,7 +112,7 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     hooks: [
       {
         type: 'command',
-        command: `kizami save --stdin 2>> ${errorLogPath}`,
+        command: `bash -c 'trap "" INT TERM; kizami save --stdin 2>> ${errorLogPath}'`,
       },
     ],
   };

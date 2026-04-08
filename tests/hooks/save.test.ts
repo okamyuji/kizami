@@ -140,7 +140,7 @@ describe('handleSave', () => {
 });
 
 describe('runSave signal handling', () => {
-  it('should survive SIGINT and exit with code 0', async () => {
+  it('should survive SIGINT when wrapped with bash trap (production hook)', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-sig-'));
     const sigDbPath = path.join(tmpDir, 'test.db');
     const cfgPath = path.join(tmpDir, 'config.json');
@@ -155,10 +155,13 @@ describe('runSave signal handling', () => {
 
     const cliPath = path.resolve(__dirname, '../../dist/cli.js');
 
+    // 本番のhook commandと同じく bash -c 'trap "" INT TERM; ...' で実行
     const exitCode = await new Promise<number | null>((resolve) => {
-      const child = spawn('node', [cliPath, 'save', '--stdin', '--config', cfgPath], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+      const child = spawn(
+        'bash',
+        ['-c', `trap "" INT TERM; node ${cliPath} save --stdin --config ${cfgPath}`],
+        { stdio: ['pipe', 'pipe', 'pipe'] }
+      );
       child.stdin.write(stdinData);
       child.stdin.end();
       setTimeout(() => child.kill('SIGINT'), 50);

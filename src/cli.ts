@@ -477,6 +477,14 @@ async function main(): Promise<void> {
   }
 }
 
+// SessionEnd hookではCtrl+C等のSIGINTがプロセスに到達する。
+// 主防御はhook commandのbash trap（setup.ts参照）だが、
+// ESMのimport解決後・main()前にも二重で登録しておく。
+if (process.argv[2] === 'save' || process.argv[2] === 'recall') {
+  process.on('SIGINT', () => {});
+  process.on('SIGTERM', () => {});
+}
+
 main().catch((err) => {
   console.error(`kizami error: ${String(err)}`);
   process.exitCode = 1;
