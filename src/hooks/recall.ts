@@ -20,9 +20,10 @@ export async function handleRecall(
   input: {
     prompt: string;
     session_id: string;
-    cwd: string;
+    cwd?: string;
   },
-  configPath?: string
+  configPath?: string,
+  projectOverride?: string
 ): Promise<string> {
   const config = loadConfig(configPath);
   const db = getDatabase(config.database.path);
@@ -31,7 +32,8 @@ export async function handleRecall(
     initializeSchema(db);
     const store = new Store(db);
 
-    const projectPath = fs.realpathSync(input.cwd);
+    const rawPath = projectOverride || input.cwd || process.cwd();
+    const projectPath = fs.realpathSync(rawPath);
     const isTiered = config.search.projectScope === 'tiered';
     const allProjects = config.search.projectScope === false;
     const scopedOnly = config.search.projectScope === true;
@@ -111,15 +113,15 @@ export async function handleRecall(
   }
 }
 
-export async function runRecall(configPath?: string): Promise<void> {
+export async function runRecall(configPath?: string, projectOverride?: string): Promise<void> {
   try {
     const raw = await readStdin();
     const input = JSON.parse(raw) as {
       prompt: string;
       session_id: string;
-      cwd: string;
+      cwd?: string;
     };
-    const result = await handleRecall(input, configPath);
+    const result = await handleRecall(input, configPath, projectOverride);
     if (result) {
       process.stdout.write(result);
     }

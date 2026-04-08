@@ -175,6 +175,68 @@ describe('handleRecall', () => {
     expect(result).toContain('[from: project]');
   });
 
+  it('should use projectOverride when cwd is not provided', async () => {
+    const resolvedTmp = fs.realpathSync(tmpDir);
+    store.insertChunks([
+      makeChunk({
+        content: 'React project override content for testing',
+        projectPath: resolvedTmp,
+      }),
+    ]);
+    db.close();
+
+    const result = await handleRecall(
+      {
+        prompt: 'React',
+        session_id: 'current-session',
+        // cwd intentionally omitted
+      },
+      configPath,
+      tmpDir
+    );
+
+    expect(result).toContain('project override');
+  });
+
+  it('should fallback to process.cwd() when neither cwd nor projectOverride provided', async () => {
+    store.insertChunks([makeChunk({ content: 'Some test content' })]);
+    db.close();
+
+    // Should not throw even with no cwd or projectOverride
+    const result = await handleRecall(
+      {
+        prompt: 'nonexistent query xyz',
+        session_id: 'current-session',
+      },
+      configPath
+    );
+
+    expect(typeof result).toBe('string');
+  });
+
+  it('should prefer projectOverride over input.cwd', async () => {
+    const resolvedTmp = fs.realpathSync(tmpDir);
+    store.insertChunks([
+      makeChunk({
+        content: 'React correct override content for testing',
+        projectPath: resolvedTmp,
+      }),
+    ]);
+    db.close();
+
+    const result = await handleRecall(
+      {
+        prompt: 'React',
+        session_id: 'current-session',
+        cwd: '/nonexistent/path/that/should/not/be/used',
+      },
+      configPath,
+      tmpDir
+    );
+
+    expect(result).toContain('correct override');
+  });
+
   it('should fallback to true for invalid projectScope in tiered mode', async () => {
     const resolvedTmp = fs.realpathSync(tmpDir);
     const badConfigPath = path.join(tmpDir, 'bad-config.json');

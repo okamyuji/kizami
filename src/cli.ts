@@ -60,13 +60,17 @@ export async function cmdSave(stdin: boolean, configPath?: string): Promise<void
   await runSave(configPath);
 }
 
-export async function cmdRecall(stdin: boolean, configPath?: string): Promise<void> {
+export async function cmdRecall(
+  stdin: boolean,
+  configPath?: string,
+  projectPath?: string
+): Promise<void> {
   if (!stdin) {
     console.log('Usage: kizami recall --stdin');
     console.log('  Reads JSON from stdin (UserPromptSubmit hook).');
     return;
   }
-  await runRecall(configPath);
+  await runRecall(configPath, projectPath);
 }
 
 export function cmdSearch(
@@ -378,7 +382,7 @@ async function main(): Promise<void> {
       break;
 
     case 'recall':
-      await cmdRecall(!!values['stdin'], sharedOpts.config);
+      await cmdRecall(!!values['stdin'], sharedOpts.config, sharedOpts.project);
       break;
 
     case 'search': {
