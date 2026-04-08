@@ -1,5 +1,5 @@
-import type { Store } from '../db/store';
-import type { EngramConfig } from '../config';
+import type { Store } from '@/db/store';
+import type { EngramConfig } from '@/config';
 
 export interface MaintenanceResult {
   skipped: boolean;

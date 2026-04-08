@@ -1,4 +1,4 @@
-import type { ScoredResult } from './hybrid';
+import type { ScoredResult } from '@/search/hybrid';
 
 /**
  * クエリとドキュメントの関連度をスコアリングするリランカーです。

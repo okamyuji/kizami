@@ -2,9 +2,9 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { getDatabase } from '../db/connection';
-import { initializeSchema } from '../db/schema';
-import { getDefaultDbPath, getConfigFilePath, getDefaultConfig } from '../config';
+import { getDatabase } from '@/db/connection';
+import { initializeSchema } from '@/db/schema';
+import { getDefaultDbPath, getConfigFilePath, getDefaultConfig } from '@/config';
 
 interface HookEntry {
   type: string;

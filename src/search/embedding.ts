@@ -1,4 +1,4 @@
-import type { EngramConfig } from '../config';
+import type { EngramConfig } from '@/config';
 
 let pipelineInstance: unknown = null;
 let loadingPromise: Promise<unknown> | null = null;

@@ -1,5 +1,5 @@
-import type { SearchResult } from '../db/store';
-import { rerank } from './reranker';
+import type { SearchResult } from '@/db/store';
+import { rerank } from '@/search/reranker';
 
 export interface ScoredResult extends SearchResult {
   score: number;

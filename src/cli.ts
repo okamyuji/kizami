@@ -1,23 +1,23 @@
 import { parseArgs } from 'node:util';
 import * as path from 'node:path';
-import { loadConfig } from './config';
-import { getDatabase } from './db/connection';
-import { initializeSchema } from './db/schema';
-import { Store } from './db/store';
-import type { StoreStats, Session } from './db/store';
-import { searchFts } from './search/fts';
-import { rankResults } from './search/hybrid';
-import type { ScoredResult } from './search/hybrid';
-import { formatResults } from './search/formatter';
-import { runSave } from './hooks/save';
-import { runRecall } from './hooks/recall';
-import { setupHooks } from './hooks/setup';
-import { importClaudeMem } from './import/claude-mem';
-import type { ImportResult } from './import/claude-mem';
-import { mergeChunks } from './maintenance/merge';
-import type { MergeResult } from './maintenance/merge';
-import { recoverTranscripts } from './hooks/recover';
-import type { RecoverResult } from './hooks/recover';
+import { loadConfig } from '@/config';
+import { getDatabase } from '@/db/connection';
+import { initializeSchema } from '@/db/schema';
+import { Store } from '@/db/store';
+import type { StoreStats, Session } from '@/db/store';
+import { searchFts } from '@/search/fts';
+import { rankResults } from '@/search/hybrid';
+import type { ScoredResult } from '@/search/hybrid';
+import { formatResults } from '@/search/formatter';
+import { runSave } from '@/hooks/save';
+import { runRecall } from '@/hooks/recall';
+import { setupHooks } from '@/hooks/setup';
+import { importClaudeMem } from '@/import/claude-mem';
+import type { ImportResult } from '@/import/claude-mem';
+import { mergeChunks } from '@/maintenance/merge';
+import type { MergeResult } from '@/maintenance/merge';
+import { recoverTranscripts } from '@/hooks/recover';
+import type { RecoverResult } from '@/hooks/recover';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 

@@ -1,11 +1,11 @@
 import * as fs from 'node:fs';
-import { loadConfig } from '../config';
-import { getDatabase } from '../db/connection';
-import { initializeSchema, initializeHybridSchema } from '../db/schema';
-import { Store } from '../db/store';
-import { parseTranscript } from '../parser/transcript';
-import { buildChunks } from '../parser/chunker';
-import { runAutoMaintenance } from '../maintenance/auto';
+import { loadConfig } from '@/config';
+import { getDatabase } from '@/db/connection';
+import { initializeSchema, initializeHybridSchema } from '@/db/schema';
+import { Store } from '@/db/store';
+import { parseTranscript } from '@/parser/transcript';
+import { buildChunks } from '@/parser/chunker';
+import { runAutoMaintenance } from '@/maintenance/auto';
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];

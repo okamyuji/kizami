@@ -1,4 +1,4 @@
-import type { Store, SearchResult } from '../db/store';
+import type { Store, SearchResult } from '@/db/store';
 
 export interface FtsSearchOptions {
   query: string;

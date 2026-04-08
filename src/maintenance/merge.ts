@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
-import type { Chunk } from '../db/store';
-import { Store } from '../db/store';
+import type { Chunk } from '@/db/store';
+import { Store } from '@/db/store';
 
 export interface MergeOptions {
   similarityThreshold?: number; // 0.0-1.0、デフォルト0.6

@@ -1,13 +1,13 @@
 import * as fs from 'node:fs';
-import { loadConfig } from '../config';
-import { getDatabase } from '../db/connection';
-import { initializeSchema } from '../db/schema';
-import type { SearchResult } from '../db/store';
-import { Store } from '../db/store';
-import { searchFts } from '../search/fts';
-import { rankResults, applyProjectPenalty, reciprocalRankFusion } from '../search/hybrid';
-import { formatResults } from '../search/formatter';
-import { recoverTranscripts } from './recover';
+import { loadConfig } from '@/config';
+import { getDatabase } from '@/db/connection';
+import { initializeSchema } from '@/db/schema';
+import type { SearchResult } from '@/db/store';
+import { Store } from '@/db/store';
+import { searchFts } from '@/search/fts';
+import { rankResults, applyProjectPenalty, reciprocalRankFusion } from '@/search/hybrid';
+import { formatResults } from '@/search/formatter';
+import { recoverTranscripts } from '@/hooks/recover';
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];

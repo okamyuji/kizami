@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { getDefaultDbPath } from '../config';
+import { getDefaultDbPath } from '@/config';
 
 export function getDatabase(dbPath?: string): Database.Database {
   const resolvedPath = dbPath || getDefaultDbPath();

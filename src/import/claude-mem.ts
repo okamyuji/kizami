@@ -1,11 +1,11 @@
 import Database from 'better-sqlite3';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { loadConfig } from '../config';
-import { getDatabase } from '../db/connection';
-import { initializeSchema } from '../db/schema';
-import { Store } from '../db/store';
-import type { Chunk, Session } from '../db/store';
+import { loadConfig } from '@/config';
+import { getDatabase } from '@/db/connection';
+import { initializeSchema } from '@/db/schema';
+import { Store } from '@/db/store';
+import type { Chunk, Session } from '@/db/store';
 
 export interface ImportOptions {
   sourcePath?: string; // claude-mem DB path, default ~/.claude-mem/claude-mem.db

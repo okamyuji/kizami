@@ -1,11 +1,11 @@
-import type { Chunk } from '../db/store';
+import type { Chunk } from '@/db/store';
 import type {
   TranscriptMessage,
   AssistantMessage,
   TextContent,
   ToolUseContent,
-} from './transcript';
-import { extractMetadata } from './metadata';
+} from '@/parser/transcript';
+import { extractMetadata } from '@/parser/metadata';
 
 interface Turn {
   human: string;

@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { ScoredResult } from './hybrid';
+import type { ScoredResult } from '@/search/hybrid';
 
 const MAX_CONTENT_LENGTH = 500;
 const DEFAULT_LIMIT = 10;
