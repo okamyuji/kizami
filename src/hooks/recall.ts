@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import { loadConfig } from '../config';
 import { getDatabase } from '../db/connection';
 import { initializeSchema } from '../db/schema';
+import type { SearchResult } from '../db/store';
 import { Store } from '../db/store';
 import { searchFts } from '../search/fts';
 import { rankResults, reciprocalRankFusion } from '../search/hybrid';
@@ -34,6 +35,7 @@ export async function handleRecall(
     const isTiered = config.search.projectScope === 'tiered';
     const allProjects = config.search.projectScope === false;
     const limit = isTiered ? config.search.defaultLimit * 3 : config.search.defaultLimit;
+    const targetCount = config.hooks.recallLimit;
 
     const ftsResults = searchFts(store, {
       query: input.prompt,
@@ -43,7 +45,7 @@ export async function handleRecall(
       tiered: isTiered,
     });
 
-    let results = ftsResults;
+    let results: SearchResult[] = ftsResults;
 
     // hybridモード: FTS + ベクトル検索をRRFで統合
     if (config.search.mode === 'hybrid' && store.hasVecTable()) {
@@ -66,18 +68,48 @@ export async function handleRecall(
 
     if (results.length === 0) return '';
 
-    const ranked = rankResults(
+    // 段階的パラメータ緩和: 結果が目標数に満たない場合、パラメータを順次緩和
+    let halfLifeDays = config.search.timeDecayHalfLifeDays;
+    let crossPenalty = isTiered ? config.search.crossProjectPenalty : undefined;
+    const minScore = config.hooks.minRelevanceScore;
+
+    let ranked = rankResults(
       results,
-      config.search.timeDecayHalfLifeDays,
+      halfLifeDays,
       input.prompt,
       isTiered ? projectPath : undefined,
-      isTiered ? config.search.crossProjectPenalty : undefined
+      crossPenalty
     );
-    const filtered = ranked.filter((r) => r.score >= config.hooks.minRelevanceScore);
+    let filtered = ranked.filter((r) => r.score >= minScore);
+
+    // Phase 1: crossProjectPenaltyを緩和 (tieredモードのみ)
+    if (filtered.length < targetCount && isTiered && crossPenalty != null && crossPenalty < 1.0) {
+      crossPenalty = Math.min(crossPenalty * 3, 1.0);
+      ranked = rankResults(results, halfLifeDays, input.prompt, projectPath, crossPenalty);
+      filtered = ranked.filter((r) => r.score >= minScore);
+    }
+
+    // Phase 2: 時間減衰を緩和 (半減期を3倍に延長)
+    if (filtered.length < targetCount) {
+      halfLifeDays = halfLifeDays * 3;
+      ranked = rankResults(
+        results,
+        halfLifeDays,
+        input.prompt,
+        isTiered ? projectPath : undefined,
+        crossPenalty
+      );
+      filtered = ranked.filter((r) => r.score >= minScore);
+    }
+
+    // Phase 3: minRelevanceScoreを緩和
+    if (filtered.length < targetCount && minScore > 0) {
+      filtered = ranked.filter((r) => r.score >= 0);
+    }
 
     if (filtered.length === 0) return '';
 
-    return formatResults(filtered, config.hooks.recallLimit);
+    return formatResults(filtered, targetCount);
   } finally {
     db.close();
   }
