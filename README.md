@@ -91,7 +91,7 @@ pnpm build
 npm link
 ```
 
-これで`kizami`コマンドがPATHに追加されます。miseやnvm等のバージョン管理ツールを使っている場合は、リンク後に`mise reshim`等でshimを更新してください。
+これで`kizami`コマンドがPATHに追加されます。ビルドスクリプトが`dist/cli.js`に実行権限を自動付与します。miseやnvm等のバージョン管理ツールを使っている場合は、リンク後に`mise reshim`等でshimを更新してください。
 
 ## セットアップ
 

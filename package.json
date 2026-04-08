@@ -6,7 +6,7 @@
     "kizami": "./dist/cli.js"
   },
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && chmod +x dist/cli.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "format": "prettier --check src/ tests/",
