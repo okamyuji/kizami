@@ -9,7 +9,7 @@ import type { Chunk, Session } from '../db/store';
 
 export interface ImportOptions {
   sourcePath?: string; // claude-mem DB path, default ~/.claude-mem/claude-mem.db
-  configPath?: string; // engram config path
+  configPath?: string; // kizami config path
   project?: string; // filter by project name
   dryRun?: boolean; // just report counts, don't import
 }
@@ -144,10 +144,10 @@ export async function importClaudeMem(options?: ImportOptions): Promise<ImportRe
   // Open claude-mem DB read-only
   const sourceDb = new Database(sourcePath, { readonly: true });
 
-  // Open engram DB
-  const engramDb = getDatabase(config.database.path);
-  initializeSchema(engramDb);
-  const store = new Store(engramDb);
+  // Open kizami DB
+  const kizamiDb = getDatabase(config.database.path);
+  initializeSchema(kizamiDb);
+  const store = new Store(kizamiDb);
 
   try {
     // Read sessions from claude-mem
@@ -180,7 +180,7 @@ export async function importClaudeMem(options?: ImportOptions): Promise<ImportRe
       }
 
       // Check if already imported by looking for existing chunks with this sessionId
-      const existing = engramDb
+      const existing = kizamiDb
         .prepare('SELECT COUNT(*) as count FROM chunks WHERE session_id = ?')
         .get(sessionId) as { count: number };
 
@@ -253,6 +253,6 @@ export async function importClaudeMem(options?: ImportOptions): Promise<ImportRe
     return { sessionsImported, chunksImported, skipped };
   } finally {
     sourceDb.close();
-    engramDb.close();
+    kizamiDb.close();
   }
 }

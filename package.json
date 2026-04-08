@@ -1,9 +1,9 @@
 {
-  "name": "engram-memory",
+  "name": "kizami",
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "engram": "./dist/cli.js"
+    "kizami": "./dist/cli.js"
   },
   "scripts": {
     "build": "vite build",

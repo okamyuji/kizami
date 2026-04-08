@@ -17,7 +17,7 @@ describe('cli commands', () => {
   let configPath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-cli-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-cli-'));
     dbPath = path.join(tmpDir, 'test.db');
     db = getDatabase(dbPath);
     initializeSchema(db);

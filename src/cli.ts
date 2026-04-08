@@ -53,7 +53,7 @@ function parseDuration(value: string): number {
 
 export async function cmdSave(stdin: boolean, configPath?: string): Promise<void> {
   if (!stdin) {
-    console.log('Usage: engram save --stdin');
+    console.log('Usage: kizami save --stdin');
     console.log('  Reads JSON from stdin (SessionEnd hook).');
     return;
   }
@@ -62,7 +62,7 @@ export async function cmdSave(stdin: boolean, configPath?: string): Promise<void
 
 export async function cmdRecall(stdin: boolean, configPath?: string): Promise<void> {
   if (!stdin) {
-    console.log('Usage: engram recall --stdin');
+    console.log('Usage: kizami recall --stdin');
     console.log('  Reads JSON from stdin (UserPromptSubmit hook).');
     return;
   }
@@ -140,7 +140,7 @@ export function cmdDelete(options: {
       store.deleteChunk(id);
       console.log(`Chunk ${id} deleted.`);
     } else {
-      console.log('Usage: engram delete --session <id> | --before <date> | --chunk <id>');
+      console.log('Usage: kizami delete --session <id> | --before <date> | --chunk <id>');
     }
   } finally {
     close();
@@ -314,7 +314,7 @@ export function cmdMerge(options: {
 // ── Main ─────────────────────────────────────────────────────────────
 
 function showUsage(): void {
-  console.log(`engram <command> [options]
+  console.log(`kizami <command> [options]
 
 Commands:
   save              Save transcript (SessionEnd hook, reads stdin)
@@ -384,7 +384,7 @@ async function main(): Promise<void> {
     case 'search': {
       const query = positionals.slice(1).join(' ');
       if (!query) {
-        console.error('Usage: engram search <query>');
+        console.error('Usage: kizami search <query>');
         process.exitCode = 1;
         return;
       }
@@ -396,7 +396,7 @@ async function main(): Promise<void> {
       const idStr = positionals[1];
       const content = values['content'] as string | undefined;
       if (!idStr || !content) {
-        console.error('Usage: engram edit <chunk-id> --content <text>');
+        console.error('Usage: kizami edit <chunk-id> --content <text>');
         process.exitCode = 1;
         return;
       }
@@ -434,7 +434,7 @@ async function main(): Promise<void> {
     case 'prune': {
       const olderThan = values['older-than'] as string | undefined;
       if (!olderThan) {
-        console.error('Usage: engram prune --older-than <duration>  (e.g., 90d, 24h)');
+        console.error('Usage: kizami prune --older-than <duration>  (e.g., 90d, 24h)');
         process.exitCode = 1;
         return;
       }
@@ -474,6 +474,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(`engram error: ${String(err)}`);
+  console.error(`kizami error: ${String(err)}`);
   process.exitCode = 1;
 });

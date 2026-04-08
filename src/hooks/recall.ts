@@ -124,7 +124,7 @@ export async function runRecall(configPath?: string): Promise<void> {
       process.stdout.write(result);
     }
   } catch (err) {
-    process.stderr.write(`engram recall error: ${String(err)}\n`);
+    process.stderr.write(`kizami recall error: ${String(err)}\n`);
     process.exit(0);
   }
 }

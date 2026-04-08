@@ -9,7 +9,7 @@ describe('schema', () => {
   const tmpDirs: string[] = [];
 
   function makeDb() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-schema-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-schema-'));
     tmpDirs.push(dir);
     const dbPath = path.join(dir, 'test.db');
     return getDatabase(dbPath);

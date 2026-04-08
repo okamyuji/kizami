@@ -34,7 +34,7 @@ describe('runAutoMaintenance', () => {
   let dbPath: string;
 
   beforeEach(() => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-auto-test-'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-auto-test-'));
     dbPath = path.join(tmpDir, 'test.db');
     db = getDatabase(dbPath);
     initializeSchema(db);

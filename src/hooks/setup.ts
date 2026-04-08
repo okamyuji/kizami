@@ -46,7 +46,7 @@ function writeSettings(settingsPath: string, settings: ClaudeSettings): void {
 }
 
 function isEngramHook(hook: HookEntry): boolean {
-  return hook.command.includes('engram ');
+  return hook.command.includes('kizami ');
 }
 
 function mergeHooks(existing: HookMatcher[] | undefined, newMatcher: HookMatcher): HookMatcher[] {
@@ -104,7 +104,7 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
 
   const errorLogPath = path.join(
     process.env['XDG_DATA_HOME'] || path.join(os.homedir(), '.local', 'share'),
-    'engram',
+    'kizami',
     'error.log'
   );
 
@@ -112,7 +112,7 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     hooks: [
       {
         type: 'command',
-        command: `engram save --stdin 2>> ${errorLogPath}`,
+        command: `kizami save --stdin 2>> ${errorLogPath}`,
       },
     ],
   };
@@ -121,7 +121,7 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     hooks: [
       {
         type: 'command',
-        command: 'engram recall --stdin --limit 3 --min-score 0.01',
+        command: 'kizami recall --stdin --limit 3 --min-score 0.01',
       },
     ],
   };
@@ -144,7 +144,7 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     db.close();
   }
 
-  // Write engram config
+  // Write kizami config
   writeEngramConfig(hybrid ? 'hybrid' : 'core');
 
   // Hybrid mode dependency check
@@ -160,7 +160,7 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     }
   }
 
-  console.log('engram hooks installed successfully.');
+  console.log('kizami hooks installed successfully.');
   console.log(`  Settings: ${settingsPath}`);
   console.log(`  Database: ${dbPath}`);
   console.log(`  Error log: ${errorLogPath}`);

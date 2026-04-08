@@ -15,7 +15,7 @@ describe('searchFts', () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-fts-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-fts-'));
     db = getDatabase(path.join(tmpDir, 'test.db'));
     initializeSchema(db);
     store = new Store(db);

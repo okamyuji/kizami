@@ -14,7 +14,7 @@ describe('store', () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-store-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-store-'));
     db = getDatabase(path.join(tmpDir, 'test.db'));
     initializeSchema(db);
     store = new Store(db);

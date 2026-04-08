@@ -19,18 +19,18 @@ describe('config', () => {
 
   it('should resolve default db path under XDG_DATA_HOME', () => {
     const dbPath = getDefaultDbPath();
-    expect(dbPath).toContain('engram');
+    expect(dbPath).toContain('kizami');
     expect(dbPath).toContain('memory.db');
   });
 
   it('should resolve config file path under XDG_CONFIG_HOME', () => {
     const configPath = getConfigFilePath();
-    expect(configPath).toContain('engram');
+    expect(configPath).toContain('kizami');
     expect(configPath).toContain('config.json');
   });
 
   it('should load config from file and merge with defaults', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-test-'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-test-'));
     const configPath = path.join(tmpDir, 'config.json');
     fs.writeFileSync(
       configPath,
@@ -55,7 +55,7 @@ describe('config', () => {
 
   describe('validateConfig', () => {
     it('should accept valid projectScope values', () => {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-test-'));
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-test-'));
 
       for (const value of [true, false, 'tiered']) {
         const configPath = path.join(tmpDir, 'config.json');
@@ -68,7 +68,7 @@ describe('config', () => {
     });
 
     it('should fallback to true for invalid projectScope', () => {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-test-'));
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-test-'));
       const configPath = path.join(tmpDir, 'config.json');
       fs.writeFileSync(configPath, JSON.stringify({ search: { projectScope: 'tierd' } }));
 
@@ -79,7 +79,7 @@ describe('config', () => {
     });
 
     it('should clamp crossProjectPenalty to 0-1 range', () => {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-test-'));
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-test-'));
       const configPath = path.join(tmpDir, 'config.json');
 
       fs.writeFileSync(configPath, JSON.stringify({ search: { crossProjectPenalty: -0.5 } }));

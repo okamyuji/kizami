@@ -110,7 +110,7 @@ describe('mergeChunks', () => {
   }
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-merge-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-merge-'));
     db = getDatabase(path.join(tmpDir, 'test.db'));
     initializeSchema(db);
     store = new Store(db);

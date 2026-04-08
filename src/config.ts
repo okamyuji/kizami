@@ -48,11 +48,11 @@ function getXdgConfigHome(): string {
 }
 
 export function getDefaultDbPath(): string {
-  return path.join(getXdgDataHome(), 'engram', 'memory.db');
+  return path.join(getXdgDataHome(), 'kizami', 'memory.db');
 }
 
 export function getConfigFilePath(): string {
-  return path.join(getXdgConfigHome(), 'engram', 'config.json');
+  return path.join(getXdgConfigHome(), 'kizami', 'config.json');
 }
 
 export function getDefaultConfig(): EngramConfig {
@@ -87,7 +87,7 @@ export function getDefaultConfig(): EngramConfig {
       model: 'sirasagi62/ruri-v3-30m-ONNX',
       quantized: true,
       dimensions: 256,
-      cacheDir: path.join(getXdgCacheHome(), 'engram', 'models'),
+      cacheDir: path.join(getXdgCacheHome(), 'kizami', 'models'),
     },
   };
 }

@@ -8,7 +8,7 @@ describe('connection', () => {
   const tmpDirs: string[] = [];
 
   function makeTmpDb(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-conn-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-conn-'));
     tmpDirs.push(dir);
     return path.join(dir, 'test.db');
   }
@@ -21,7 +21,7 @@ describe('connection', () => {
   });
 
   it('should create database file and parent directories', () => {
-    const dbPath = path.join(os.tmpdir(), `engram-conn-${Date.now()}`, 'nested', 'test.db');
+    const dbPath = path.join(os.tmpdir(), `kizami-conn-${Date.now()}`, 'nested', 'test.db');
     const db = getDatabase(dbPath);
     expect(fs.existsSync(dbPath)).toBe(true);
     db.close();

@@ -164,17 +164,17 @@ function seedClaudeMemDb(db: Database.Database): void {
 describe('importClaudeMem', () => {
   let tmpDir: string;
   let sourceDbPath: string;
-  let engramDbPath: string;
-  let engramConfigPath: string;
+  let kizamiDbPath: string;
+  let kizamiConfigPath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-import-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-import-'));
     sourceDbPath = path.join(tmpDir, 'claude-mem.db');
-    engramDbPath = path.join(tmpDir, 'engram.db');
-    engramConfigPath = path.join(tmpDir, 'config.json');
+    kizamiDbPath = path.join(tmpDir, 'kizami.db');
+    kizamiConfigPath = path.join(tmpDir, 'config.json');
 
-    // Create config pointing to tmp engram DB
-    fs.writeFileSync(engramConfigPath, JSON.stringify({ database: { path: engramDbPath } }));
+    // Create config pointing to tmp kizami DB
+    fs.writeFileSync(kizamiConfigPath, JSON.stringify({ database: { path: kizamiDbPath } }));
 
     // Create and seed the claude-mem DB
     const sourceDb = new Database(sourceDbPath);
@@ -190,7 +190,7 @@ describe('importClaudeMem', () => {
   it('should import all sessions, observations, and summaries', async () => {
     const result = await importClaudeMem({
       sourcePath: sourceDbPath,
-      configPath: engramConfigPath,
+      configPath: kizamiConfigPath,
     });
 
     expect(result.sessionsImported).toBe(2);
@@ -199,11 +199,11 @@ describe('importClaudeMem', () => {
     expect(result.chunksImported).toBe(4);
     expect(result.skipped).toBe(0);
 
-    // Verify in engram DB
-    const engramDb = getDatabase(engramDbPath);
-    initializeSchema(engramDb);
+    // Verify in kizami DB
+    const kizamiDb = getDatabase(kizamiDbPath);
+    initializeSchema(kizamiDb);
     try {
-      const chunks = engramDb
+      const chunks = kizamiDb
         .prepare('SELECT * FROM chunks WHERE session_id = ? ORDER BY chunk_index')
         .all('mem-session-1') as Record<string, unknown>[];
       expect(chunks.length).toBe(3);
@@ -230,7 +230,7 @@ describe('importClaudeMem', () => {
       expect(chunks[2]['content'] as string).toContain('Request: Fix the login bug');
 
       // Verify session was created
-      const sessions = engramDb
+      const sessions = kizamiDb
         .prepare('SELECT * FROM sessions WHERE session_id = ?')
         .all('mem-session-1') as Record<string, unknown>[];
       expect(sessions.length).toBe(1);
@@ -238,7 +238,7 @@ describe('importClaudeMem', () => {
       expect(sessions[0]['first_message']).toBe('Fix the login bug');
       expect(sessions[0]['chunk_count']).toBe(3);
     } finally {
-      engramDb.close();
+      kizamiDb.close();
     }
   });
 
@@ -246,13 +246,13 @@ describe('importClaudeMem', () => {
     // First import
     await importClaudeMem({
       sourcePath: sourceDbPath,
-      configPath: engramConfigPath,
+      configPath: kizamiConfigPath,
     });
 
     // Second import — same data
     const result = await importClaudeMem({
       sourcePath: sourceDbPath,
-      configPath: engramConfigPath,
+      configPath: kizamiConfigPath,
     });
 
     expect(result.sessionsImported).toBe(0);
@@ -260,22 +260,22 @@ describe('importClaudeMem', () => {
     expect(result.skipped).toBe(2);
 
     // Verify no duplicates
-    const engramDb = getDatabase(engramDbPath);
-    initializeSchema(engramDb);
+    const kizamiDb = getDatabase(kizamiDbPath);
+    initializeSchema(kizamiDb);
     try {
-      const row = engramDb.prepare('SELECT COUNT(*) as count FROM chunks').get() as {
+      const row = kizamiDb.prepare('SELECT COUNT(*) as count FROM chunks').get() as {
         count: number;
       };
       expect(row.count).toBe(4);
     } finally {
-      engramDb.close();
+      kizamiDb.close();
     }
   });
 
   it('should filter by project name', async () => {
     const result = await importClaudeMem({
       sourcePath: sourceDbPath,
-      configPath: engramConfigPath,
+      configPath: kizamiConfigPath,
       project: 'my-project',
     });
 
@@ -287,7 +287,7 @@ describe('importClaudeMem', () => {
   it('should support dry-run mode', async () => {
     const result = await importClaudeMem({
       sourcePath: sourceDbPath,
-      configPath: engramConfigPath,
+      configPath: kizamiConfigPath,
       dryRun: true,
     });
 
@@ -296,15 +296,15 @@ describe('importClaudeMem', () => {
     expect(result.skipped).toBe(0);
 
     // Verify nothing was actually written
-    const engramDb = getDatabase(engramDbPath);
-    initializeSchema(engramDb);
+    const kizamiDb = getDatabase(kizamiDbPath);
+    initializeSchema(kizamiDb);
     try {
-      const row = engramDb.prepare('SELECT COUNT(*) as count FROM chunks').get() as {
+      const row = kizamiDb.prepare('SELECT COUNT(*) as count FROM chunks').get() as {
         count: number;
       };
       expect(row.count).toBe(0);
     } finally {
-      engramDb.close();
+      kizamiDb.close();
     }
   });
 
@@ -321,7 +321,7 @@ describe('importClaudeMem', () => {
 
     const result = await importClaudeMem({
       sourcePath: sourceDbPath,
-      configPath: engramConfigPath,
+      configPath: kizamiConfigPath,
     });
 
     // 2 regular sessions imported + 1 null-session skipped

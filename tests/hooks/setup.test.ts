@@ -10,9 +10,9 @@ describe('setupHooks', () => {
   let dbPath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-setup-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-setup-'));
     settingsPath = path.join(tmpDir, '.claude', 'settings.json');
-    dbPath = path.join(tmpDir, 'engram', 'memory.db');
+    dbPath = path.join(tmpDir, 'kizami', 'memory.db');
   });
 
   afterEach(() => {
@@ -30,8 +30,8 @@ describe('setupHooks', () => {
     expect(settings.hooks.UserPromptSubmit).toHaveLength(1);
 
     expect(settings.hooks.SessionEnd[0].hooks[0].type).toBe('command');
-    expect(settings.hooks.SessionEnd[0].hooks[0].command).toContain('engram save');
-    expect(settings.hooks.UserPromptSubmit[0].hooks[0].command).toContain('engram recall');
+    expect(settings.hooks.SessionEnd[0].hooks[0].command).toContain('kizami save');
+    expect(settings.hooks.UserPromptSubmit[0].hooks[0].command).toContain('kizami recall');
   });
 
   it('should preserve existing settings', async () => {
@@ -46,7 +46,7 @@ describe('setupHooks', () => {
     expect(settings.hooks).toBeDefined();
   });
 
-  it('should preserve non-engram hooks', async () => {
+  it('should preserve non-kizami hooks', async () => {
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
     fs.writeFileSync(
       settingsPath,
@@ -65,20 +65,20 @@ describe('setupHooks', () => {
     await setupHooks({ settingsPath, dbPath });
 
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-    // Should have both: the existing non-engram hook and the new engram hook
+    // Should have both: the existing non-kizami hook and the new kizami hook
     expect(settings.hooks.SessionEnd).toHaveLength(2);
     expect(settings.hooks.SessionEnd[0].hooks[0].command).toContain('other-tool');
-    expect(settings.hooks.SessionEnd[1].hooks[0].command).toContain('engram save');
+    expect(settings.hooks.SessionEnd[1].hooks[0].command).toContain('kizami save');
   });
 
-  it('should replace existing engram hooks on re-run', async () => {
+  it('should replace existing kizami hooks on re-run', async () => {
     // Run setup twice
     await setupHooks({ settingsPath, dbPath });
     await setupHooks({ settingsPath, dbPath });
 
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
 
-    // Should still have only one engram hook per event
+    // Should still have only one kizami hook per event
     expect(settings.hooks.SessionEnd).toHaveLength(1);
     expect(settings.hooks.UserPromptSubmit).toHaveLength(1);
   });

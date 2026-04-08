@@ -13,7 +13,7 @@ describe('handleSave', () => {
   let configPath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-save-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-save-'));
     dbPath = path.join(tmpDir, 'test.db');
     configPath = path.join(tmpDir, 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({ database: { path: dbPath } }), 'utf-8');

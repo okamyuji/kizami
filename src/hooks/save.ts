@@ -70,7 +70,7 @@ export async function handleSave(
           }
         }
       } catch (err) {
-        process.stderr.write(`engram hybrid embedding error: ${String(err)}\n`);
+        process.stderr.write(`kizami hybrid embedding error: ${String(err)}\n`);
       }
     }
 
@@ -91,7 +91,7 @@ export async function runSave(configPath?: string): Promise<void> {
     };
     await handleSave(input, configPath);
   } catch (err) {
-    process.stderr.write(`engram save error: ${String(err)}\n`);
+    process.stderr.write(`kizami save error: ${String(err)}\n`);
     process.exit(0);
   }
 }

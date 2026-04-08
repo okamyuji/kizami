@@ -24,7 +24,7 @@ describe.skipIf(!transcriptExists)('integration: real transcript', () => {
 
   beforeAll(async () => {
     // Create temp directory with config pointing to test DB
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-integration-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-integration-'));
     dbPath = path.join(tmpDir, 'test.db');
     configPath = path.join(tmpDir, 'config.json');
     fs.writeFileSync(
@@ -79,7 +79,7 @@ describe.skipIf(!transcriptExists)('integration: real transcript', () => {
   it('Step 4: should recall memories via hook handler', async () => {
     const output = await handleRecall(
       {
-        prompt: 'engram memory system',
+        prompt: 'kizami memory system',
         session_id: 'test-session',
         cwd: '/Users/yujiokamoto/devs/claude',
       },
@@ -131,7 +131,7 @@ describe.skipIf(!claudeMemExists)('integration: claude-mem import', () => {
   let dbPath: string;
 
   beforeAll(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-cm-import-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-cm-import-'));
     dbPath = path.join(tmpDir, 'test.db');
     configPath = path.join(tmpDir, 'config.json');
     fs.writeFileSync(
@@ -188,7 +188,7 @@ describe.skipIf(!claudeMemExists)('integration: claude-mem import', () => {
 
   it('Step 5: should support project-filtered import', async () => {
     // Use a separate DB for this test
-    const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-cm-filter-'));
+    const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-cm-filter-'));
     const dbPath2 = path.join(tmpDir2, 'test.db');
     const configPath2 = path.join(tmpDir2, 'config.json');
     fs.writeFileSync(configPath2, JSON.stringify({ database: { path: dbPath2 } }));
@@ -196,12 +196,12 @@ describe.skipIf(!claudeMemExists)('integration: claude-mem import', () => {
     const result = await importClaudeMem({
       sourcePath: CLAUDE_MEM_DB,
       configPath: configPath2,
-      project: 'engram',
+      project: 'kizami',
     });
 
     expect(result.sessionsImported).toBeGreaterThanOrEqual(0);
     console.log(
-      `  Project filter "engram": ${result.sessionsImported} sessions, ${result.chunksImported} chunks`
+      `  Project filter "kizami": ${result.sessionsImported} sessions, ${result.chunksImported} chunks`
     );
     fs.rmSync(tmpDir2, { recursive: true, force: true });
   });
