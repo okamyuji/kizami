@@ -34,6 +34,7 @@ export async function handleRecall(
     const projectPath = fs.realpathSync(input.cwd);
     const isTiered = config.search.projectScope === 'tiered';
     const allProjects = config.search.projectScope === false;
+    const scopedOnly = config.search.projectScope === true;
     const limit = isTiered ? config.search.defaultLimit * 3 : config.search.defaultLimit;
     const targetCount = config.hooks.recallLimit;
 
@@ -54,9 +55,10 @@ export async function handleRecall(
         const queryPrefix = '検索クエリ: ';
         const queryEmbedding = await getEmbedding(queryPrefix + input.prompt, config);
 
-        const vecResults = allProjects
-          ? store.searchVecAll(queryEmbedding, limit)
-          : store.searchVec(queryEmbedding, projectPath, limit);
+        // tiered/allProjectsでは全プロジェクト横断、scopedではローカルのみ
+        const vecResults = scopedOnly
+          ? store.searchVec(queryEmbedding, projectPath, limit)
+          : store.searchVecAll(queryEmbedding, limit);
 
         if (vecResults.length > 0) {
           results = reciprocalRankFusion(ftsResults, vecResults);
@@ -73,13 +75,8 @@ export async function handleRecall(
     let crossPenalty = isTiered ? config.search.crossProjectPenalty : undefined;
     const minScore = config.hooks.minRelevanceScore;
 
-    let ranked = rankResults(
-      results,
-      halfLifeDays,
-      input.prompt,
-      isTiered ? projectPath : undefined,
-      crossPenalty
-    );
+    // currentProjectPathは常に渡す (allProjectsモードでもisLocalProject判定に使用)
+    let ranked = rankResults(results, halfLifeDays, input.prompt, projectPath, crossPenalty);
     let filtered = ranked.filter((r) => r.score >= minScore);
 
     // Phase 1: crossProjectPenaltyを緩和 (tieredモードのみ)
@@ -92,13 +89,7 @@ export async function handleRecall(
     // Phase 2: 時間減衰を緩和 (半減期を3倍に延長)
     if (filtered.length < targetCount) {
       halfLifeDays = halfLifeDays * 3;
-      ranked = rankResults(
-        results,
-        halfLifeDays,
-        input.prompt,
-        isTiered ? projectPath : undefined,
-        crossPenalty
-      );
+      ranked = rankResults(results, halfLifeDays, input.prompt, projectPath, crossPenalty);
       filtered = ranked.filter((r) => r.score >= minScore);
     }
 

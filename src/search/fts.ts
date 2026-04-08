@@ -84,45 +84,30 @@ export function searchFts(store: Store, options: FtsSearchOptions): SearchResult
     return [];
   }
 
+  // tieredモードではsearchAllで全プロジェクト横断検索し、
+  // ランキングフェーズでprojectPathに基づくペナルティを適用する
+  const useAll = allProjects || tiered;
+
   // 2文字以下のクエリはLIKE検索にフォールバック
   if (query.length < MIN_KEYWORD_LENGTH) {
-    if (tiered) {
-      const local = store.searchLike(query, projectPath, limit);
-      const all = store.searchLikeAll(query, limit);
-      return deduplicateResults([...local, ...all]).slice(0, limit);
-    }
-    return allProjects
-      ? store.searchLikeAll(query, limit)
-      : store.searchLike(query, projectPath, limit);
+    return useAll ? store.searchLikeAll(query, limit) : store.searchLike(query, projectPath, limit);
   }
 
   const keywords = extractKeywords(query);
 
   // キーワードがない場合（全て短すぎる場合）はLIKE検索
   if (keywords.length === 0) {
-    if (tiered) {
-      const local = store.searchLike(query, projectPath, limit);
-      const all = store.searchLikeAll(query, limit);
-      return deduplicateResults([...local, ...all]).slice(0, limit);
-    }
-    return allProjects
-      ? store.searchLikeAll(query, limit)
-      : store.searchLike(query, projectPath, limit);
+    return useAll ? store.searchLikeAll(query, limit) : store.searchLike(query, projectPath, limit);
   }
 
   // 各キーワードでFTS5検索し、結果を統合
   const allResults: SearchResult[] = [];
   for (const keyword of keywords) {
     try {
-      if (tiered) {
-        allResults.push(...store.searchFTS(keyword, projectPath, limit));
-        allResults.push(...store.searchFTSAll(keyword, limit));
-      } else {
-        const results = allProjects
-          ? store.searchFTSAll(keyword, limit)
-          : store.searchFTS(keyword, projectPath, limit);
-        allResults.push(...results);
-      }
+      const results = useAll
+        ? store.searchFTSAll(keyword, limit)
+        : store.searchFTS(keyword, projectPath, limit);
+      allResults.push(...results);
     } catch {
       // FTS5 MATCH でエラーが出るクエリ(特殊文字など)はスキップ
     }

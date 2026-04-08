@@ -186,14 +186,19 @@ export function rankResults(
   // Step 4: Rerank with query-document relevance scoring
   let ranked = query ? rerank(query, deduped) : deduped;
 
-  // Step 5: Apply cross-project penalty (tiered mode)
-  if (currentProjectPath != null && crossProjectPenalty != null) {
+  // Step 5: Identify local project and apply cross-project penalty
+  if (currentProjectPath != null) {
     ranked = ranked.map((r) => ({
       ...r,
       isLocalProject: r.projectPath === currentProjectPath,
-      score: r.projectPath === currentProjectPath ? r.score : r.score * crossProjectPenalty,
+      score:
+        r.projectPath !== currentProjectPath && crossProjectPenalty != null
+          ? r.score * crossProjectPenalty
+          : r.score,
     }));
-    ranked.sort((a, b) => b.score - a.score);
+    if (crossProjectPenalty != null) {
+      ranked.sort((a, b) => b.score - a.score);
+    }
   }
 
   return ranked;
