@@ -16,6 +16,8 @@ import { importClaudeMem } from './import/claude-mem';
 import type { ImportResult } from './import/claude-mem';
 import { mergeChunks } from './maintenance/merge';
 import type { MergeResult } from './maintenance/merge';
+import { recoverTranscripts } from './hooks/recover';
+import type { RecoverResult } from './hooks/recover';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -315,6 +317,24 @@ export function cmdMerge(options: {
   }
 }
 
+export async function cmdRecover(options: { config?: string }): Promise<RecoverResult> {
+  const result = await recoverTranscripts(options.config);
+  if (result.recovered === 0 && result.errors === 0) {
+    console.log('No unsaved transcripts found.');
+  } else {
+    console.log(`Recovered: ${result.recovered}`);
+    console.log(`Skipped:   ${result.skipped}`);
+    console.log(`Errors:    ${result.errors}`);
+    if (result.details.length > 0) {
+      console.log('\nDetails:');
+      for (const d of result.details) {
+        console.log(`  ${d}`);
+      }
+    }
+  }
+  return result;
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 function showUsage(): void {
@@ -332,6 +352,7 @@ Commands:
   prune             Bulk delete old memories
   export            Export as JSON/Markdown
   merge             Merge similar chunks
+  recover           Recover unsaved transcripts from ~/.claude/projects/
   import-claude-mem Import from claude-mem database
 
 Options:
@@ -460,6 +481,10 @@ async function main(): Promise<void> {
         dryRun: values['dry-run'] as boolean | undefined,
         config: sharedOpts.config,
       });
+      break;
+
+    case 'recover':
+      await cmdRecover({ config: sharedOpts.config });
       break;
 
     case 'import-claude-mem':

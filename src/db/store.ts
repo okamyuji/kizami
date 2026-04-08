@@ -292,6 +292,13 @@ export class Store {
     return !!row;
   }
 
+  hasSession(sessionId: string): boolean {
+    const row = this.db
+      .prepare('SELECT 1 FROM sessions WHERE session_id = ? LIMIT 1')
+      .get(sessionId);
+    return !!row;
+  }
+
   getChunkIdsWithoutEmbedding(): number[] {
     try {
       const rows = this.db

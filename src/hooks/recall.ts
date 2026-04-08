@@ -7,6 +7,7 @@ import { Store } from '../db/store';
 import { searchFts } from '../search/fts';
 import { rankResults, applyProjectPenalty, reciprocalRankFusion } from '../search/hybrid';
 import { formatResults } from '../search/formatter';
+import { recoverTranscripts } from './recover';
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -121,6 +122,10 @@ export async function runRecall(configPath?: string, projectOverride?: string): 
       session_id: string;
       cwd?: string;
     };
+
+    // 非同期でリカバリを実行（結果を待たず、失敗しても無視）
+    recoverTranscripts(configPath).catch(() => {});
+
     const result = await handleRecall(input, configPath, projectOverride);
     if (result) {
       process.stdout.write(result);
