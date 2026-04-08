@@ -82,6 +82,10 @@ export async function handleSave(
 }
 
 export async function runSave(configPath?: string): Promise<void> {
+  // SessionEnd hookではCtrl+C等のシグナルがプロセスグループ経由で伝播するため無視する
+  process.on('SIGINT', () => {});
+  process.on('SIGTERM', () => {});
+
   try {
     const raw = await readStdin();
     const input = JSON.parse(raw) as {
