@@ -127,6 +127,14 @@ npm link
 
 初回のsave時にRuri v3 embeddingモデル(約37MB, int8)が自動でダウンロードされます。
 
+coreモードからhybridモードに切り替えた場合、既存チャンクにはembeddingがありません。以下のコマンドで一括生成できます。
+
+```bash
+kizami embed --backfill
+```
+
+`kizami setup --hybrid`の実行時にembeddingのないチャンクが検出されると、このコマンドの実行を促すメッセージが表示されます。
+
 ## 使い方
 
 ### メモリの検索
@@ -231,6 +239,22 @@ kizami merge --dry-run --all-projects
 ```bash
 kizami merge --threshold 0.7 --all-projects
 ```
+
+### embeddingの一括生成
+
+coreモードからhybridモードに切り替えた際、既存チャンクのembeddingを一括生成します。
+
+```bash
+kizami embed --backfill
+```
+
+生成前に件数だけ確認したい場合は`--dry-run`を使います。
+
+```bash
+kizami embed --backfill --dry-run
+```
+
+新規チャンクのembeddingはsave時に自動生成されるため、通常はこのコマンドを実行する必要はありません。
 
 ### 共通オプション
 
@@ -889,7 +913,8 @@ kizami/
 │   └── hooks/
 │       ├── save.ts             # SessionEndハンドラ
 │       ├── recall.ts           # UserPromptSubmitハンドラ
-│       └── setup.ts            # hook自動設定
+│       ├── setup.ts            # hook自動設定
+│       └── embed.ts            # embedding一括生成
 └── tests/
     ├── parser/
     ├── search/

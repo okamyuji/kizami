@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
 import { getDefaultDbPath, getConfigFilePath, getDefaultConfig } from '@/config';
+import { Store } from '@/db/store';
 
 interface HookEntry {
   type: string;
@@ -140,24 +141,33 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
   const db = getDatabase(dbPath);
   try {
     initializeSchema(db);
+
+    // Write kizami config
+    writeEngramConfig(hybrid ? 'hybrid' : 'core');
+
+    // Hybrid mode dependency check
+    if (hybrid) {
+      const deps = checkHybridDependencies();
+      if (!deps.available) {
+        console.log(
+          `  Warning: hybridモードに必要なパッケージがありません: ${deps.missing.join(', ')}`
+        );
+        console.log(`  以下を実行してください: npm install -g ${deps.missing.join(' ')}`);
+      } else {
+        console.log('  Hybrid dependencies: OK');
+
+        // Check for chunks without embeddings
+        const store = new Store(db);
+        const missingCount = store.getChunkIdsWithoutEmbedding().length;
+        if (missingCount > 0) {
+          console.log(
+            `  Note: ${missingCount} chunks need embeddings. Run: kizami embed --backfill`
+          );
+        }
+      }
+    }
   } finally {
     db.close();
-  }
-
-  // Write kizami config
-  writeEngramConfig(hybrid ? 'hybrid' : 'core');
-
-  // Hybrid mode dependency check
-  if (hybrid) {
-    const deps = checkHybridDependencies();
-    if (!deps.available) {
-      console.log(
-        `  Warning: hybridモードに必要なパッケージがありません: ${deps.missing.join(', ')}`
-      );
-      console.log(`  以下を実行してください: npm install -g ${deps.missing.join(' ')}`);
-    } else {
-      console.log('  Hybrid dependencies: OK');
-    }
   }
 
   console.log('kizami hooks installed successfully.');

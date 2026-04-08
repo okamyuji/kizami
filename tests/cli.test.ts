@@ -7,7 +7,16 @@ import { getDatabase } from '../src/db/connection';
 import { initializeSchema } from '../src/db/schema';
 import { Store } from '../src/db/store';
 import type { Chunk, Session } from '../src/db/store';
-import { cmdSearch, cmdEdit, cmdDelete, cmdList, cmdStats, cmdPrune, cmdExport } from '../src/cli';
+import {
+  cmdSearch,
+  cmdEdit,
+  cmdDelete,
+  cmdList,
+  cmdStats,
+  cmdPrune,
+  cmdExport,
+  cmdEmbed,
+} from '../src/cli';
 
 describe('cli commands', () => {
   let db: Database.Database;
@@ -227,6 +236,18 @@ describe('cli commands', () => {
       });
 
       expect(() => JSON.parse(output)).not.toThrow();
+    });
+  });
+
+  describe('embed', () => {
+    it('should show usage when --backfill is not provided', async () => {
+      const result = await cmdEmbed({ config: configPath });
+      expect(result.total).toBe(0);
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Usage'));
+    });
+
+    it('should report error when not in hybrid mode', async () => {
+      await expect(cmdEmbed({ backfill: true, config: configPath })).rejects.toThrow('hybrid mode');
     });
   });
 });

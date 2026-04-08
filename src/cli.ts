@@ -18,6 +18,8 @@ import { mergeChunks } from '@/maintenance/merge';
 import type { MergeResult } from '@/maintenance/merge';
 import { recoverTranscripts } from '@/hooks/recover';
 import type { RecoverResult } from '@/hooks/recover';
+import { backfillEmbeddings } from '@/hooks/embed';
+import type { BackfillResult } from '@/hooks/embed';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -335,6 +337,36 @@ export async function cmdRecover(options: { config?: string }): Promise<RecoverR
   return result;
 }
 
+export async function cmdEmbed(options: {
+  backfill?: boolean;
+  dryRun?: boolean;
+  config?: string;
+}): Promise<BackfillResult> {
+  if (!options.backfill) {
+    console.log('Usage: kizami embed --backfill [--dry-run]');
+    console.log('  Generate embeddings for chunks that do not have them.');
+    return { total: 0, processed: 0, skipped: 0 };
+  }
+
+  const result = await backfillEmbeddings({
+    configPath: options.config,
+    dryRun: options.dryRun,
+  });
+
+  if (result.total === 0) {
+    console.log('All chunks already have embeddings.');
+  } else if (options.dryRun) {
+    console.log(`Dry run — ${result.total} chunks need embeddings.`);
+  } else {
+    console.log(`Embeddings generated: ${result.processed}`);
+    if (result.skipped > 0) {
+      console.log(`Skipped: ${result.skipped}`);
+    }
+  }
+
+  return result;
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 function showUsage(): void {
@@ -352,6 +384,7 @@ Commands:
   prune             Bulk delete old memories
   export            Export as JSON/Markdown
   merge             Merge similar chunks
+  embed             Generate embeddings for hybrid mode (--backfill)
   recover           Recover unsaved transcripts from ~/.claude/projects/
   import-claude-mem Import from claude-mem database
 
@@ -381,6 +414,7 @@ async function main(): Promise<void> {
       'dry-run': { type: 'boolean', default: false },
       threshold: { type: 'string' },
       hybrid: { type: 'boolean', default: false },
+      backfill: { type: 'boolean', default: false },
     },
   });
 
@@ -478,6 +512,14 @@ async function main(): Promise<void> {
       cmdMerge({
         threshold: values['threshold'] as string | undefined,
         project: sharedOpts.project,
+        dryRun: values['dry-run'] as boolean | undefined,
+        config: sharedOpts.config,
+      });
+      break;
+
+    case 'embed':
+      await cmdEmbed({
+        backfill: values['backfill'] as boolean | undefined,
         dryRun: values['dry-run'] as boolean | undefined,
         config: sharedOpts.config,
       });
