@@ -3,6 +3,7 @@ import { rerank } from './reranker';
 
 export interface ScoredResult extends SearchResult {
   score: number;
+  isLocalProject?: boolean;
 }
 
 function normalizeScore(rank: number | undefined): number {
@@ -155,7 +156,9 @@ export function reciprocalRankFusion(
 export function rankResults(
   results: SearchResult[],
   halfLifeDays?: number,
-  query?: string
+  query?: string,
+  currentProjectPath?: string,
+  crossProjectPenalty?: number
 ): ScoredResult[] {
   if (results.length === 0) {
     return [];
@@ -181,9 +184,17 @@ export function rankResults(
   const deduped = deduplicateBySession(scored);
 
   // Step 4: Rerank with query-document relevance scoring
-  if (query) {
-    return rerank(query, deduped);
+  let ranked = query ? rerank(query, deduped) : deduped;
+
+  // Step 5: Apply cross-project penalty (tiered mode)
+  if (currentProjectPath != null && crossProjectPenalty != null) {
+    ranked = ranked.map((r) => ({
+      ...r,
+      isLocalProject: r.projectPath === currentProjectPath,
+      score: r.projectPath === currentProjectPath ? r.score : r.score * crossProjectPenalty,
+    }));
+    ranked.sort((a, b) => b.score - a.score);
   }
 
-  return deduped;
+  return ranked;
 }

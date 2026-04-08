@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import type { ScoredResult } from './hybrid';
 
 const MAX_CONTENT_LENGTH = 500;
@@ -17,6 +18,10 @@ function formatDate(isoString: string): string {
   }
 }
 
+function extractProjectName(projectPath: string): string {
+  return path.basename(projectPath);
+}
+
 export function formatResults(results: ScoredResult[], limit?: number): string {
   if (results.length === 0) {
     return '';
@@ -30,8 +35,10 @@ export function formatResults(results: ScoredResult[], limit?: number): string {
     const date = formatDate(r.createdAt);
     const score = r.score.toFixed(2);
     const content = truncate(r.content, MAX_CONTENT_LENGTH);
+    const projectTag =
+      r.isLocalProject === false ? ` [from: ${extractProjectName(r.projectPath)}]` : '';
 
-    return `---\n[${date} ${sessionShort}] (relevance: ${score})\n${content}\n---`;
+    return `---\n[${date} ${sessionShort}]${projectTag} (relevance: ${score})\n${content}\n---`;
   });
 
   return header + '\n' + entries.join('\n\n') + '\n';

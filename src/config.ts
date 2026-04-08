@@ -8,7 +8,8 @@ export interface EngramConfig {
     mode: 'core' | 'hybrid';
     timeDecayHalfLifeDays: number;
     defaultLimit: number;
-    projectScope: boolean;
+    projectScope: boolean | 'tiered';
+    crossProjectPenalty: number;
   };
   chunking: {
     maxTokensPerChunk: number;
@@ -64,6 +65,7 @@ export function getDefaultConfig(): EngramConfig {
       timeDecayHalfLifeDays: 30,
       defaultLimit: 5,
       projectScope: true,
+      crossProjectPenalty: 0.3,
     },
     chunking: {
       maxTokensPerChunk: 512,

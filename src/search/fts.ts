@@ -5,6 +5,7 @@ export interface FtsSearchOptions {
   projectPath: string;
   limit?: number;
   allProjects?: boolean;
+  tiered?: boolean;
 }
 
 const DEFAULT_LIMIT = 20;
@@ -71,7 +72,13 @@ function deduplicateResults(results: SearchResult[]): SearchResult[] {
 }
 
 export function searchFts(store: Store, options: FtsSearchOptions): SearchResult[] {
-  const { query, projectPath, limit = DEFAULT_LIMIT, allProjects = false } = options;
+  const {
+    query,
+    projectPath,
+    limit = DEFAULT_LIMIT,
+    allProjects = false,
+    tiered = false,
+  } = options;
 
   if (query.length === 0) {
     return [];
@@ -79,6 +86,11 @@ export function searchFts(store: Store, options: FtsSearchOptions): SearchResult
 
   // 2文字以下のクエリはLIKE検索にフォールバック
   if (query.length < MIN_KEYWORD_LENGTH) {
+    if (tiered) {
+      const local = store.searchLike(query, projectPath, limit);
+      const all = store.searchLikeAll(query, limit);
+      return deduplicateResults([...local, ...all]).slice(0, limit);
+    }
     return allProjects
       ? store.searchLikeAll(query, limit)
       : store.searchLike(query, projectPath, limit);
@@ -88,6 +100,11 @@ export function searchFts(store: Store, options: FtsSearchOptions): SearchResult
 
   // キーワードがない場合（全て短すぎる場合）はLIKE検索
   if (keywords.length === 0) {
+    if (tiered) {
+      const local = store.searchLike(query, projectPath, limit);
+      const all = store.searchLikeAll(query, limit);
+      return deduplicateResults([...local, ...all]).slice(0, limit);
+    }
     return allProjects
       ? store.searchLikeAll(query, limit)
       : store.searchLike(query, projectPath, limit);
@@ -97,10 +114,15 @@ export function searchFts(store: Store, options: FtsSearchOptions): SearchResult
   const allResults: SearchResult[] = [];
   for (const keyword of keywords) {
     try {
-      const results = allProjects
-        ? store.searchFTSAll(keyword, limit)
-        : store.searchFTS(keyword, projectPath, limit);
-      allResults.push(...results);
+      if (tiered) {
+        allResults.push(...store.searchFTS(keyword, projectPath, limit));
+        allResults.push(...store.searchFTSAll(keyword, limit));
+      } else {
+        const results = allProjects
+          ? store.searchFTSAll(keyword, limit)
+          : store.searchFTS(keyword, projectPath, limit);
+        allResults.push(...results);
+      }
     } catch {
       // FTS5 MATCH でエラーが出るクエリ(特殊文字など)はスキップ
     }

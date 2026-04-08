@@ -31,14 +31,16 @@ export async function handleRecall(
     const store = new Store(db);
 
     const projectPath = fs.realpathSync(input.cwd);
-    const limit = config.search.defaultLimit;
-    const allProjects = !config.search.projectScope;
+    const isTiered = config.search.projectScope === 'tiered';
+    const allProjects = config.search.projectScope === false;
+    const limit = isTiered ? config.search.defaultLimit * 3 : config.search.defaultLimit;
 
     const ftsResults = searchFts(store, {
       query: input.prompt,
       projectPath,
       limit,
       allProjects,
+      tiered: isTiered,
     });
 
     let results = ftsResults;
@@ -64,7 +66,13 @@ export async function handleRecall(
 
     if (results.length === 0) return '';
 
-    const ranked = rankResults(results, config.search.timeDecayHalfLifeDays, input.prompt);
+    const ranked = rankResults(
+      results,
+      config.search.timeDecayHalfLifeDays,
+      input.prompt,
+      isTiered ? projectPath : undefined,
+      isTiered ? config.search.crossProjectPenalty : undefined
+    );
     const filtered = ranked.filter((r) => r.score >= config.hooks.minRelevanceScore);
 
     if (filtered.length === 0) return '';
