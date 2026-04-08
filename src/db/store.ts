@@ -256,11 +256,12 @@ export class Store {
          JOIN chunks_vec_map m ON m.vec_rowid = v.rowid
          JOIN chunks c ON c.id = m.chunk_id
          WHERE v.embedding MATCH ?
+           AND k = ?
            AND c.project_path = ?
          ORDER BY v.distance
          LIMIT ?`
       )
-      .all(buf, projectPath, limit) as SearchResult[];
+      .all(buf, limit, projectPath, limit) as SearchResult[];
   }
 
   searchVecAll(queryEmbedding: Float32Array, limit: number): SearchResult[] {
@@ -277,10 +278,11 @@ export class Store {
          JOIN chunks_vec_map m ON m.vec_rowid = v.rowid
          JOIN chunks c ON c.id = m.chunk_id
          WHERE v.embedding MATCH ?
+           AND k = ?
          ORDER BY v.distance
          LIMIT ?`
       )
-      .all(buf, limit) as SearchResult[];
+      .all(buf, limit, limit) as SearchResult[];
   }
 
   hasVecTable(): boolean {
