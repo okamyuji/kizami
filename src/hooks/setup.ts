@@ -121,7 +121,7 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     hooks: [
       {
         type: 'command',
-        command: 'kizami recall --stdin --limit 3 --min-score 0.01',
+        command: 'kizami recall --stdin',
       },
     ],
   };

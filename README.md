@@ -325,13 +325,15 @@ hybridモードではベクトル検索結果とRRFで統合します。
 
 #### 段階的パラメータ緩和
 
-recallLimit(デフォルト3件)に満たない場合、以下の順序でパラメータを自動緩和します。
+`minRelevanceScore`が0(デフォルト)の場合、recallLimit(デフォルト3件)に満たないとき以下の順序でパラメータを自動緩和します。
 
 1. **crossProjectPenalty緩和**(tieredモードのみ): ペナルティを3倍に引き上げ(0.3→0.9)、クロスプロジェクト結果をより多く許容します
 2. **時間減衰緩和**: 半減期を3倍に延長(30日→90日)し、古いメモリも拾いやすくします
 3. **minRelevanceScore緩和**: スコア閾値を0に下げ、低関連度の結果も返します
 
 各フェーズは前のフェーズで目標件数に達しなかった場合にのみ実行されます。
+
+`minRelevanceScore`が0より大きい場合、フォールバックカスケードは無効になります。閾値を下回る結果は注入されず、該当する記憶がなければ0件を返します。これにより低関連度のノイズ注入を防止できます。
 
 ## データモデル
 
@@ -649,7 +651,7 @@ UserPromptSubmit hook(自動記憶注入)の設定は以下のとおりです。
         "hooks": [
           {
             "type": "command",
-            "command": "kizami recall --stdin --limit 3 --min-score 0.01"
+            "command": "kizami recall --stdin"
           }
         ]
       }
@@ -657,6 +659,8 @@ UserPromptSubmit hook(自動記憶注入)の設定は以下のとおりです。
   }
 }
 ```
+
+注入件数や関連度閾値はCLIフラグではなく `~/.config/kizami/config.json` の `hooks` セクションで設定します(`recallLimit`、`minRelevanceScore`)。
 
 UserPromptSubmit hookの処理の流れは以下のとおりです。
 
@@ -764,7 +768,7 @@ maintenanceセクションは自動メンテナンスの設定です。embedding
 | chunking    | truncateToolOutputTailLines | 5                                 | ツール出力の末尾保持行数です                                                                                         |
 | hooks       | autoRecall                  | true                              | プロンプト送信時の自動記憶注入を有効にします                                                                         |
 | hooks       | recallLimit                 | 3                                 | 自動注入する記憶の最大件数です                                                                                       |
-| hooks       | minRelevanceScore           | 0                                 | 注入する記憶の最低関連度スコアです                                                                                   |
+| hooks       | minRelevanceScore           | 0                                 | 注入する記憶の最低関連度スコアです。0より大きい値を設定するとフォールバックカスケードが無効になります(推奨: 0.2)    |
 | maintenance | enabled                     | true                              | 自動メンテナンスを有効にします                                                                                       |
 | maintenance | intervalHours               | 24                                | メンテナンスの実行間隔(時間)です                                                                                     |
 | maintenance | maxChunkAgeDays             | 90                                | この日数を超えたチャンクを自動削除します                                                                             |
@@ -773,6 +777,67 @@ maintenanceセクションは自動メンテナンスの設定です。embedding
 | embedding   | quantized                   | true                              | int8量子化モデルを使用します                                                                                         |
 | embedding   | dimensions                  | 256                               | embeddingの次元数です                                                                                                |
 | embedding   | cacheDir                    | `$XDG_CACHE_HOME/kizami/models`   | モデルのキャッシュディレクトリです                                                                                   |
+
+### 推奨設定
+
+別PCへのセットアップ時は、以下の設定を推奨します。
+
+**~/.config/kizami/config.json**:
+
+```json
+{
+  "search": {
+    "mode": "core",
+    "projectScope": "tiered",
+    "crossProjectPenalty": 0.3
+  },
+  "hooks": {
+    "recallLimit": 3,
+    "minRelevanceScore": 0.2
+  }
+}
+```
+
+**~/.claude/settings.json** のhook設定:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kizami recall --stdin"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kizami save --stdin 2>> ~/.local/share/kizami/error.log"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+各設定のポイントは以下のとおりです。
+
+| 設定 | 推奨値 | 理由 |
+| --- | --- | --- |
+| projectScope | `"tiered"` | 現プロジェクト優先＋他プロジェクトのフォールバックで検索漏れを減らします |
+| minRelevanceScore | `0.2` | 無関係なクエリでのノイズ注入を防止します。0だとフォールバックカスケードにより常にrecallLimit件返されます |
+| recallLimit | `3` | 注入量とコンテキスト消費のバランスが取れています |
+
+`minRelevanceScore`を0.2に設定すると、デフォルト(0)と比較して注入量が約50%削減されます(実測値: 16,452ch → 8,379ch / 10クエリ)。低関連度の結果が除外される一方、高関連度のクエリでは結果が維持されます。閾値が低すぎると感じる場合は0.3に、高すぎる場合は0.1に調整してください。
+
+**注意**: `recallLimit`と`minRelevanceScore`はCLIフラグ(`--limit`、`--min-score`)ではなくconfig.jsonで設定します。CLIフラグは認識されません(`strict: false`のため無視されます)。
 
 設定値のバリデーションは読み込み時に自動で行われます。`projectScope`にtypo（例: `"tierd"`）を指定した場合はデフォルトの`true`にフォールバックします。`crossProjectPenalty`は0-1の範囲にクランプされます。
 
