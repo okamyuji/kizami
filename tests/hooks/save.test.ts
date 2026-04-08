@@ -142,9 +142,12 @@ describe('handleSave', () => {
 describe('runSave signal handling', () => {
   it('should survive SIGINT when wrapped with bash trap (production hook)', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-sig-'));
-    const sigDbPath = path.join(tmpDir, 'test.db');
     const cfgPath = path.join(tmpDir, 'config.json');
-    fs.writeFileSync(cfgPath, JSON.stringify({ database: { path: sigDbPath } }), 'utf-8');
+    fs.writeFileSync(
+      cfgPath,
+      JSON.stringify({ database: { path: path.join(tmpDir, 'test.db') } }),
+      'utf-8'
+    );
 
     const fixtureTranscript = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
     const stdinData = JSON.stringify({
@@ -153,14 +156,16 @@ describe('runSave signal handling', () => {
       cwd: tmpDir,
     });
 
-    const cliPath = path.resolve(__dirname, '../../dist/cli.js');
-
-    // 本番のhook commandと同じく bash -c 'trap "" INT TERM; ...' で実行
+    // process.execPathとcwdオプションを使い、シェルを経由せず直接起動する
+    const projectRoot = path.resolve(__dirname, '../..');
     const exitCode = await new Promise<number | null>((resolve) => {
       const child = spawn(
-        'bash',
-        ['-c', `trap "" INT TERM; node ${cliPath} save --stdin --config ${cfgPath}`],
-        { stdio: ['pipe', 'pipe', 'pipe'] }
+        process.execPath,
+        ['dist/cli.js', 'save', '--stdin', '--config', cfgPath],
+        {
+          cwd: projectRoot,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }
       );
       child.stdin.write(stdinData);
       child.stdin.end();
