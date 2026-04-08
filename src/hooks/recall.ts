@@ -82,28 +82,29 @@ export async function handleRecall(
     let ranked = applyProjectPenalty(prepenalty, projectPath, crossPenalty);
     let filtered = ranked.filter((r) => r.score >= minScore);
 
-    // Phase 1: crossProjectPenaltyを緩和 (tieredモードのみ)
-    // prepenaltyを再利用し、ペナルティだけ再適用（rerankなし）
-    if (filtered.length < targetCount && isTiered && crossPenalty != null && crossPenalty < 1.0) {
-      crossPenalty = Math.min(crossPenalty * 3, 1.0);
-      ranked = applyProjectPenalty(prepenalty, projectPath, crossPenalty);
-      filtered = ranked.filter((r) => r.score >= minScore);
-    }
+    // minScore>0: ユーザーが品質閾値を明示的に設定している場合、
+    // フォールバックカスケードを適用しない（低品質な注入を防止）
+    // minScore=0（デフォルト）: 従来どおりフォールバックで件数を確保
+    if (minScore === 0) {
+      // Phase 1: crossProjectPenaltyを緩和 (tieredモードのみ)
+      if (filtered.length < targetCount && isTiered && crossPenalty != null && crossPenalty < 1.0) {
+        crossPenalty = Math.min(crossPenalty * 3, 1.0);
+        ranked = applyProjectPenalty(prepenalty, projectPath, crossPenalty);
+        filtered = ranked.filter((r) => r.score >= minScore);
+      }
 
-    // Phase 2: 時間減衰を緩和 (半減期を3倍に延長)
-    // 時間減衰が変わるためStep 1-4の再実行が必要。
-    // crossProjectPenaltyはrankResultsに渡さず、applyProjectPenaltyで分離適用する
-    // （Phase 1でprepenaltyキャッシュを再利用する設計と統一するため）
-    if (filtered.length < targetCount) {
-      halfLifeDays = halfLifeDays * 3;
-      prepenalty = rankResults(results, halfLifeDays, input.prompt, projectPath);
-      ranked = applyProjectPenalty(prepenalty, projectPath, crossPenalty);
-      filtered = ranked.filter((r) => r.score >= minScore);
-    }
+      // Phase 2: 時間減衰を緩和 (半減期を3倍に延長)
+      if (filtered.length < targetCount) {
+        halfLifeDays = halfLifeDays * 3;
+        prepenalty = rankResults(results, halfLifeDays, input.prompt, projectPath);
+        ranked = applyProjectPenalty(prepenalty, projectPath, crossPenalty);
+        filtered = ranked.filter((r) => r.score >= minScore);
+      }
 
-    // Phase 3: minRelevanceScoreを緩和
-    if (filtered.length < targetCount && minScore > 0) {
-      filtered = ranked.filter((r) => r.score >= 0);
+      // Phase 3: minRelevanceScoreを緩和
+      if (filtered.length < targetCount) {
+        filtered = ranked.filter((r) => r.score >= 0);
+      }
     }
 
     if (filtered.length === 0) return '';
