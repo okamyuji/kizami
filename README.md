@@ -774,6 +774,8 @@ maintenanceセクションは自動メンテナンスの設定です。embedding
 | embedding   | dimensions                  | 256                               | embeddingの次元数です                                                                                                |
 | embedding   | cacheDir                    | `$XDG_CACHE_HOME/engram/models`   | モデルのキャッシュディレクトリです                                                                                   |
 
+設定値のバリデーションは読み込み時に自動で行われます。`projectScope`にtypo（例: `"tierd"`）を指定した場合はデフォルトの`true`にフォールバックします。`crossProjectPenalty`は0-1の範囲にクランプされます。
+
 ## 依存パッケージ
 
 coreモードのランタイム依存は1個のみです。hybridモードでは追加で2個の依存が必要です。CLIには`node:util.parseArgs`、パスには`node:path`、ファイルIOには`node:fs/readline`を使用しています。
