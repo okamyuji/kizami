@@ -5,7 +5,7 @@ import { initializeSchema } from '../db/schema';
 import type { SearchResult } from '../db/store';
 import { Store } from '../db/store';
 import { searchFts } from '../search/fts';
-import { rankResults, reciprocalRankFusion } from '../search/hybrid';
+import { rankResults, applyProjectPenalty, reciprocalRankFusion } from '../search/hybrid';
 import { formatResults } from '../search/formatter';
 
 async function readStdin(): Promise<string> {
@@ -55,7 +55,6 @@ export async function handleRecall(
         const queryPrefix = '検索クエリ: ';
         const queryEmbedding = await getEmbedding(queryPrefix + input.prompt, config);
 
-        // tiered/allProjectsでは全プロジェクト横断、scopedではローカルのみ
         const vecResults = scopedOnly
           ? store.searchVec(queryEmbedding, projectPath, limit)
           : store.searchVecAll(queryEmbedding, limit);
@@ -70,26 +69,30 @@ export async function handleRecall(
 
     if (results.length === 0) return '';
 
-    // 段階的パラメータ緩和: 結果が目標数に満たない場合、パラメータを順次緩和
     let halfLifeDays = config.search.timeDecayHalfLifeDays;
     let crossPenalty = isTiered ? config.search.crossProjectPenalty : undefined;
     const minScore = config.hooks.minRelevanceScore;
 
-    // currentProjectPathは常に渡す (allProjectsモードでもisLocalProject判定に使用)
-    let ranked = rankResults(results, halfLifeDays, input.prompt, projectPath, crossPenalty);
+    // Step 1-4（正規化→時間減衰→重複除去→リランク）を1回実行し、ペナルティなしの結果を保持
+    let prepenalty = rankResults(results, halfLifeDays, input.prompt, projectPath);
+    // Step 5: ペナルティ適用
+    let ranked = applyProjectPenalty(prepenalty, projectPath, crossPenalty);
     let filtered = ranked.filter((r) => r.score >= minScore);
 
     // Phase 1: crossProjectPenaltyを緩和 (tieredモードのみ)
+    // prepenaltyを再利用し、ペナルティだけ再適用（rerankなし）
     if (filtered.length < targetCount && isTiered && crossPenalty != null && crossPenalty < 1.0) {
       crossPenalty = Math.min(crossPenalty * 3, 1.0);
-      ranked = rankResults(results, halfLifeDays, input.prompt, projectPath, crossPenalty);
+      ranked = applyProjectPenalty(prepenalty, projectPath, crossPenalty);
       filtered = ranked.filter((r) => r.score >= minScore);
     }
 
     // Phase 2: 時間減衰を緩和 (半減期を3倍に延長)
+    // 時間減衰が変わるためStep 1-4の再実行が必要
     if (filtered.length < targetCount) {
       halfLifeDays = halfLifeDays * 3;
-      ranked = rankResults(results, halfLifeDays, input.prompt, projectPath, crossPenalty);
+      prepenalty = rankResults(results, halfLifeDays, input.prompt, projectPath);
+      ranked = applyProjectPenalty(prepenalty, projectPath, crossPenalty);
       filtered = ranked.filter((r) => r.score >= minScore);
     }
 

@@ -119,6 +119,19 @@ function deepMerge(
   return result;
 }
 
+function validateConfig(config: EngramConfig): EngramConfig {
+  // projectScope: boolean | 'tiered' のみ許容、不正値はデフォルトにフォールバック
+  const ps = config.search.projectScope;
+  if (ps !== true && ps !== false && ps !== 'tiered') {
+    config.search.projectScope = true;
+  }
+
+  // crossProjectPenalty: 0-1 にクランプ
+  config.search.crossProjectPenalty = Math.max(0, Math.min(1, config.search.crossProjectPenalty));
+
+  return config;
+}
+
 export function loadConfig(configPath?: string): EngramConfig {
   const defaults = getDefaultConfig();
   const filePath = configPath || getConfigFilePath();
@@ -126,10 +139,11 @@ export function loadConfig(configPath?: string): EngramConfig {
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
     const userConfig = JSON.parse(raw) as Record<string, unknown>;
-    return deepMerge(
+    const merged = deepMerge(
       defaults as unknown as Record<string, unknown>,
       userConfig
     ) as unknown as EngramConfig;
+    return validateConfig(merged);
   } catch {
     return defaults;
   }
