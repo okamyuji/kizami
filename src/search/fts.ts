@@ -5,6 +5,7 @@ export interface FtsSearchOptions {
   projectPath: string;
   limit?: number;
   allProjects?: boolean;
+  tiered?: boolean;
 }
 
 const DEFAULT_LIMIT = 20;
@@ -71,33 +72,39 @@ function deduplicateResults(results: SearchResult[]): SearchResult[] {
 }
 
 export function searchFts(store: Store, options: FtsSearchOptions): SearchResult[] {
-  const { query, projectPath, limit = DEFAULT_LIMIT, allProjects = false } = options;
+  const {
+    query,
+    projectPath,
+    limit = DEFAULT_LIMIT,
+    allProjects = false,
+    tiered = false,
+  } = options;
 
   if (query.length === 0) {
     return [];
   }
 
+  // tieredモードではsearchAllで全プロジェクト横断検索し、
+  // ランキングフェーズでprojectPathに基づくペナルティを適用する
+  const useAll = allProjects || tiered;
+
   // 2文字以下のクエリはLIKE検索にフォールバック
   if (query.length < MIN_KEYWORD_LENGTH) {
-    return allProjects
-      ? store.searchLikeAll(query, limit)
-      : store.searchLike(query, projectPath, limit);
+    return useAll ? store.searchLikeAll(query, limit) : store.searchLike(query, projectPath, limit);
   }
 
   const keywords = extractKeywords(query);
 
   // キーワードがない場合（全て短すぎる場合）はLIKE検索
   if (keywords.length === 0) {
-    return allProjects
-      ? store.searchLikeAll(query, limit)
-      : store.searchLike(query, projectPath, limit);
+    return useAll ? store.searchLikeAll(query, limit) : store.searchLike(query, projectPath, limit);
   }
 
   // 各キーワードでFTS5検索し、結果を統合
   const allResults: SearchResult[] = [];
   for (const keyword of keywords) {
     try {
-      const results = allProjects
+      const results = useAll
         ? store.searchFTSAll(keyword, limit)
         : store.searchFTS(keyword, projectPath, limit);
       allResults.push(...results);

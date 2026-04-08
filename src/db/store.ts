@@ -30,6 +30,7 @@ export interface SearchResult {
   id: number;
   content: string;
   sessionId: string;
+  projectPath: string;
   createdAt: string;
   metadata: string | null;
   rank?: number;
@@ -125,8 +126,8 @@ export class Store {
     return this.db
       .prepare(
         `
-      SELECT c.id, c.content, c.session_id AS sessionId, c.created_at AS createdAt,
-             c.metadata, rank
+      SELECT c.id, c.content, c.session_id AS sessionId, c.project_path AS projectPath,
+             c.created_at AS createdAt, c.metadata, rank
       FROM chunks_fts f
       JOIN chunks c ON c.id = f.rowid
       WHERE chunks_fts MATCH ?
@@ -142,8 +143,8 @@ export class Store {
     return this.db
       .prepare(
         `
-      SELECT c.id, c.content, c.session_id AS sessionId, c.created_at AS createdAt,
-             c.metadata, rank
+      SELECT c.id, c.content, c.session_id AS sessionId, c.project_path AS projectPath,
+             c.created_at AS createdAt, c.metadata, rank
       FROM chunks_fts f
       JOIN chunks c ON c.id = f.rowid
       WHERE chunks_fts MATCH ?
@@ -158,8 +159,8 @@ export class Store {
     return this.db
       .prepare(
         `
-      SELECT c.id, c.content, c.session_id AS sessionId, c.created_at AS createdAt,
-             c.metadata
+      SELECT c.id, c.content, c.session_id AS sessionId, c.project_path AS projectPath,
+             c.created_at AS createdAt, c.metadata
       FROM chunks c
       WHERE c.content LIKE ?
         AND c.project_path = ?
@@ -174,8 +175,8 @@ export class Store {
     return this.db
       .prepare(
         `
-      SELECT c.id, c.content, c.session_id AS sessionId, c.created_at AS createdAt,
-             c.metadata
+      SELECT c.id, c.content, c.session_id AS sessionId, c.project_path AS projectPath,
+             c.created_at AS createdAt, c.metadata
       FROM chunks c
       WHERE c.content LIKE ?
       ORDER BY c.created_at DESC
@@ -249,17 +250,18 @@ export class Store {
     );
     return this.db
       .prepare(
-        `SELECT c.id, c.content, c.session_id AS sessionId, c.created_at AS createdAt,
-                c.metadata, v.distance AS rank
+        `SELECT c.id, c.content, c.session_id AS sessionId, c.project_path AS projectPath,
+                c.created_at AS createdAt, c.metadata, v.distance AS rank
          FROM chunks_vec v
          JOIN chunks_vec_map m ON m.vec_rowid = v.rowid
          JOIN chunks c ON c.id = m.chunk_id
          WHERE v.embedding MATCH ?
+           AND k = ?
            AND c.project_path = ?
          ORDER BY v.distance
          LIMIT ?`
       )
-      .all(buf, projectPath, limit) as SearchResult[];
+      .all(buf, limit, projectPath, limit) as SearchResult[];
   }
 
   searchVecAll(queryEmbedding: Float32Array, limit: number): SearchResult[] {
@@ -270,16 +272,17 @@ export class Store {
     );
     return this.db
       .prepare(
-        `SELECT c.id, c.content, c.session_id AS sessionId, c.created_at AS createdAt,
-                c.metadata, v.distance AS rank
+        `SELECT c.id, c.content, c.session_id AS sessionId, c.project_path AS projectPath,
+                c.created_at AS createdAt, c.metadata, v.distance AS rank
          FROM chunks_vec v
          JOIN chunks_vec_map m ON m.vec_rowid = v.rowid
          JOIN chunks c ON c.id = m.chunk_id
          WHERE v.embedding MATCH ?
+           AND k = ?
          ORDER BY v.distance
          LIMIT ?`
       )
-      .all(buf, limit) as SearchResult[];
+      .all(buf, limit, limit) as SearchResult[];
   }
 
   hasVecTable(): boolean {

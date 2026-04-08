@@ -8,7 +8,8 @@ export interface EngramConfig {
     mode: 'core' | 'hybrid';
     timeDecayHalfLifeDays: number;
     defaultLimit: number;
-    projectScope: boolean;
+    projectScope: boolean | 'tiered';
+    crossProjectPenalty: number;
   };
   chunking: {
     maxTokensPerChunk: number;
@@ -64,6 +65,7 @@ export function getDefaultConfig(): EngramConfig {
       timeDecayHalfLifeDays: 30,
       defaultLimit: 5,
       projectScope: true,
+      crossProjectPenalty: 0.3,
     },
     chunking: {
       maxTokensPerChunk: 512,
@@ -117,6 +119,21 @@ function deepMerge(
   return result;
 }
 
+function validateConfig(config: EngramConfig): EngramConfig {
+  const ps = config.search.projectScope;
+  const validProjectScope = ps === true || ps === false || ps === 'tiered' ? ps : true;
+  const clampedPenalty = Math.max(0, Math.min(1, config.search.crossProjectPenalty));
+
+  return {
+    ...config,
+    search: {
+      ...config.search,
+      projectScope: validProjectScope,
+      crossProjectPenalty: clampedPenalty,
+    },
+  };
+}
+
 export function loadConfig(configPath?: string): EngramConfig {
   const defaults = getDefaultConfig();
   const filePath = configPath || getConfigFilePath();
@@ -124,10 +141,11 @@ export function loadConfig(configPath?: string): EngramConfig {
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
     const userConfig = JSON.parse(raw) as Record<string, unknown>;
-    return deepMerge(
+    const merged = deepMerge(
       defaults as unknown as Record<string, unknown>,
       userConfig
     ) as unknown as EngramConfig;
+    return validateConfig(merged);
   } catch {
     return defaults;
   }

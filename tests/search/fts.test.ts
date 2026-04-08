@@ -155,4 +155,61 @@ describe('searchFts', () => {
 
     expect(results.length).toBe(2);
   });
+
+  describe('tiered mode', () => {
+    it('should return results from all projects in tiered mode', () => {
+      store.insertChunks([
+        makeChunk({ content: 'React in project A', projectPath: '/project-a' }),
+        makeChunk({
+          chunkIndex: 1,
+          content: 'React in project B',
+          projectPath: '/project-b',
+          sessionId: 'session-2',
+        }),
+      ]);
+
+      const results = searchFts(store, {
+        query: 'React',
+        projectPath: '/project-a',
+        tiered: true,
+      });
+
+      expect(results.length).toBe(2);
+    });
+
+    it('should include projectPath in results', () => {
+      store.insertChunks([
+        makeChunk({ content: 'React component design', projectPath: '/project-a' }),
+      ]);
+
+      const results = searchFts(store, {
+        query: 'React',
+        projectPath: '/project-a',
+        tiered: true,
+      });
+
+      expect(results.length).toBe(1);
+      expect(results[0].projectPath).toBe('/project-a');
+    });
+
+    it('should use LIKE for short queries in tiered mode', () => {
+      store.insertChunks([
+        makeChunk({ content: 'JS code', projectPath: '/project-a' }),
+        makeChunk({
+          chunkIndex: 1,
+          content: 'JS more',
+          projectPath: '/project-b',
+          sessionId: 'session-2',
+        }),
+      ]);
+
+      const results = searchFts(store, {
+        query: 'JS',
+        projectPath: '/project-a',
+        tiered: true,
+      });
+
+      expect(results.length).toBe(2);
+    });
+  });
 });

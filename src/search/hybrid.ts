@@ -3,6 +3,7 @@ import { rerank } from './reranker';
 
 export interface ScoredResult extends SearchResult {
   score: number;
+  isLocalProject?: boolean;
 }
 
 function normalizeScore(rank: number | undefined): number {
@@ -155,7 +156,9 @@ export function reciprocalRankFusion(
 export function rankResults(
   results: SearchResult[],
   halfLifeDays?: number,
-  query?: string
+  query?: string,
+  currentProjectPath?: string,
+  crossProjectPenalty?: number
 ): ScoredResult[] {
   if (results.length === 0) {
     return [];
@@ -181,9 +184,35 @@ export function rankResults(
   const deduped = deduplicateBySession(scored);
 
   // Step 4: Rerank with query-document relevance scoring
-  if (query) {
-    return rerank(query, deduped);
+  const ranked = query ? rerank(query, deduped) : deduped;
+
+  // Step 5: Identify local project and apply cross-project penalty
+  return applyProjectPenalty(ranked, currentProjectPath, crossProjectPenalty);
+}
+
+/**
+ * クロスプロジェクトペナルティの適用（rankResultsのStep 5を分離）。
+ * Phase 1の緩和時にrankResults全体を再実行せずにペナルティだけ再適用できる。
+ */
+export function applyProjectPenalty(
+  results: ScoredResult[],
+  currentProjectPath?: string,
+  crossProjectPenalty?: number
+): ScoredResult[] {
+  if (currentProjectPath == null) return results;
+
+  const penalized = results.map((r) => ({
+    ...r,
+    isLocalProject: r.projectPath === currentProjectPath,
+    score:
+      r.projectPath !== currentProjectPath && crossProjectPenalty != null
+        ? r.score * crossProjectPenalty
+        : r.score,
+  }));
+
+  if (crossProjectPenalty != null) {
+    penalized.sort((a, b) => b.score - a.score);
   }
 
-  return deduped;
+  return penalized;
 }
