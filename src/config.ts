@@ -120,16 +120,18 @@ function deepMerge(
 }
 
 function validateConfig(config: EngramConfig): EngramConfig {
-  // projectScope: boolean | 'tiered' のみ許容、不正値はデフォルトにフォールバック
   const ps = config.search.projectScope;
-  if (ps !== true && ps !== false && ps !== 'tiered') {
-    config.search.projectScope = true;
-  }
+  const validProjectScope = ps === true || ps === false || ps === 'tiered' ? ps : true;
+  const clampedPenalty = Math.max(0, Math.min(1, config.search.crossProjectPenalty));
 
-  // crossProjectPenalty: 0-1 にクランプ
-  config.search.crossProjectPenalty = Math.max(0, Math.min(1, config.search.crossProjectPenalty));
-
-  return config;
+  return {
+    ...config,
+    search: {
+      ...config.search,
+      projectScope: validProjectScope,
+      crossProjectPenalty: clampedPenalty,
+    },
+  };
 }
 
 export function loadConfig(configPath?: string): EngramConfig {

@@ -52,4 +52,46 @@ describe('config', () => {
     const config = loadConfig('/nonexistent/path/config.json');
     expect(config).toEqual(getDefaultConfig());
   });
+
+  describe('validateConfig', () => {
+    it('should accept valid projectScope values', () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-test-'));
+
+      for (const value of [true, false, 'tiered']) {
+        const configPath = path.join(tmpDir, 'config.json');
+        fs.writeFileSync(configPath, JSON.stringify({ search: { projectScope: value } }));
+        const config = loadConfig(configPath);
+        expect(config.search.projectScope).toBe(value);
+      }
+
+      fs.rmSync(tmpDir, { recursive: true });
+    });
+
+    it('should fallback to true for invalid projectScope', () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-test-'));
+      const configPath = path.join(tmpDir, 'config.json');
+      fs.writeFileSync(configPath, JSON.stringify({ search: { projectScope: 'tierd' } }));
+
+      const config = loadConfig(configPath);
+      expect(config.search.projectScope).toBe(true);
+
+      fs.rmSync(tmpDir, { recursive: true });
+    });
+
+    it('should clamp crossProjectPenalty to 0-1 range', () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-test-'));
+      const configPath = path.join(tmpDir, 'config.json');
+
+      fs.writeFileSync(configPath, JSON.stringify({ search: { crossProjectPenalty: -0.5 } }));
+      expect(loadConfig(configPath).search.crossProjectPenalty).toBe(0);
+
+      fs.writeFileSync(configPath, JSON.stringify({ search: { crossProjectPenalty: 2.0 } }));
+      expect(loadConfig(configPath).search.crossProjectPenalty).toBe(1);
+
+      fs.writeFileSync(configPath, JSON.stringify({ search: { crossProjectPenalty: 0.7 } }));
+      expect(loadConfig(configPath).search.crossProjectPenalty).toBe(0.7);
+
+      fs.rmSync(tmpDir, { recursive: true });
+    });
+  });
 });

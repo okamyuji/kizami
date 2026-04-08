@@ -88,7 +88,9 @@ export async function handleRecall(
     }
 
     // Phase 2: 時間減衰を緩和 (半減期を3倍に延長)
-    // 時間減衰が変わるためStep 1-4の再実行が必要
+    // 時間減衰が変わるためStep 1-4の再実行が必要。
+    // crossProjectPenaltyはrankResultsに渡さず、applyProjectPenaltyで分離適用する
+    // （Phase 1でprepenaltyキャッシュを再利用する設計と統一するため）
     if (filtered.length < targetCount) {
       halfLifeDays = halfLifeDays * 3;
       prepenalty = rankResults(results, halfLifeDays, input.prompt, projectPath);

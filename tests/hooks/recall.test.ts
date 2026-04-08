@@ -132,4 +132,85 @@ describe('handleRecall', () => {
     expect(result).toContain('correct project');
     expect(result).not.toContain('other project');
   });
+
+  it('should include cross-project results in tiered mode', async () => {
+    const resolvedTmp = fs.realpathSync(tmpDir);
+    const tieredConfigPath = path.join(tmpDir, 'tiered-config.json');
+    fs.writeFileSync(
+      tieredConfigPath,
+      JSON.stringify({
+        database: { path: dbPath },
+        search: { projectScope: 'tiered', crossProjectPenalty: 0.5 },
+      })
+    );
+
+    store.insertChunks([
+      makeChunk({
+        content: 'React local project component for testing',
+        projectPath: resolvedTmp,
+      }),
+      makeChunk({
+        chunkIndex: 1,
+        content: 'React remote project component for testing',
+        projectPath: '/remote/project',
+        sessionId: 'session-2',
+      }),
+    ]);
+    db.close();
+
+    const result = await handleRecall(
+      {
+        prompt: 'React component',
+        session_id: 'current-session',
+        cwd: tmpDir,
+      },
+      tieredConfigPath
+    );
+
+    expect(result).toContain('[Past Memory]');
+    // Both local and remote results should appear
+    expect(result).toContain('local project');
+    expect(result).toContain('remote project');
+    // Remote result should have [from: ] tag
+    expect(result).toContain('[from: project]');
+  });
+
+  it('should fallback to true for invalid projectScope in tiered mode', async () => {
+    const resolvedTmp = fs.realpathSync(tmpDir);
+    const badConfigPath = path.join(tmpDir, 'bad-config.json');
+    fs.writeFileSync(
+      badConfigPath,
+      JSON.stringify({
+        database: { path: dbPath },
+        search: { projectScope: 'tierd' },
+      })
+    );
+
+    store.insertChunks([
+      makeChunk({
+        content: 'React local only content for testing',
+        projectPath: resolvedTmp,
+      }),
+      makeChunk({
+        chunkIndex: 1,
+        content: 'React remote content for testing',
+        projectPath: '/remote/project',
+        sessionId: 'session-2',
+      }),
+    ]);
+    db.close();
+
+    const result = await handleRecall(
+      {
+        prompt: 'React',
+        session_id: 'current-session',
+        cwd: tmpDir,
+      },
+      badConfigPath
+    );
+
+    // Invalid projectScope falls back to true (scoped only)
+    expect(result).toContain('local only');
+    expect(result).not.toContain('remote content');
+  });
 });
