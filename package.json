@@ -36,6 +36,9 @@
     "onlyBuiltDependencies": [
       "better-sqlite3",
       "onnxruntime-node"
-    ]
+    ],
+    "overrides": {
+      "protobufjs@<7.5.5": "^7.5.5"
+    }
   }
 }
