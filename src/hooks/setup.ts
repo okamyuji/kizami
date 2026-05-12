@@ -117,7 +117,7 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     hooks: [
       {
         type: 'command',
-        command: `bash -c 'INPUT=$(cat); (printf "%s" "$INPUT" | kizami save --stdin </dev/null >/dev/null 2>> ${errorLogPath} &); exit 0'`,
+        command: `bash -c 'INPUT=$(cat); (printf "%s" "$INPUT" | kizami save --stdin >/dev/null 2>> "${errorLogPath}" &); exit 0'`,
       },
     ],
   };
