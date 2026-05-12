@@ -544,9 +544,10 @@ async function main(): Promise<void> {
   }
 }
 
-// SessionEnd hookではCtrl+C等のSIGINTがプロセスに到達する。
-// 主防御はhook commandのbash trap（setup.ts参照）だが、
-// ESMのimport解決後・main()前にも二重で登録しておく。
+// SessionEnd hook では /quit やプロセス終了時に SIGINT/SIGTERM が到達する。
+// 主防御は setup.ts が生成する hook command の background 化 + 親 fd 切り離し
+// （Claude Code が hook を await し切らず "Hook cancelled" 表示する問題への対策）
+// だが、ESM の import 解決後・main() 前にもシグナルハンドラを二重登録して保険にする。
 if (process.argv[2] === 'save' || process.argv[2] === 'recall') {
   process.on('SIGINT', () => {});
   process.on('SIGTERM', () => {});
