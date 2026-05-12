@@ -34,6 +34,21 @@ describe('setupHooks', () => {
     expect(settings.hooks.UserPromptSubmit[0].hooks[0].command).toContain('kizami recall');
   });
 
+  it('SessionEnd command を background 化して即 exit 0 する', async () => {
+    await setupHooks({ settingsPath, dbPath });
+
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    const command: string = settings.hooks.SessionEnd[0].hooks[0].command;
+
+    // stdin を読み切ってから subshell に流す
+    expect(command).toContain('INPUT=$(cat)');
+    // kizami save 本体は親 fd から切り離して background 起動
+    expect(command).toContain('kizami save --stdin </dev/null >/dev/null');
+    expect(command).toMatch(/&\s*\)/);
+    // ラッパー bash は即 exit 0
+    expect(command).toContain('exit 0');
+  });
+
   it('should preserve existing settings', async () => {
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify({ apiKey: 'test-key', other: true }), 'utf-8');

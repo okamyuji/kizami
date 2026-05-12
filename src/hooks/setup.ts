@@ -109,11 +109,15 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     'error.log'
   );
 
+  // SessionEnd hook は /quit 時に Claude Code 本体が hook の完了を待たず
+  // "Hook cancelled" と表示することがある (Claude Code 2.x で確認)。
+  // stdin を一度読み切ってから subshell に background で逃がし、
+  // ラッパー bash 自体は即 exit 0 することでハーネスに完了を返す。
   const saveHook: HookMatcher = {
     hooks: [
       {
         type: 'command',
-        command: `bash -c 'trap "" INT TERM; kizami save --stdin 2>> ${errorLogPath}'`,
+        command: `bash -c 'INPUT=$(cat); (printf "%s" "$INPUT" | kizami save --stdin </dev/null >/dev/null 2>> ${errorLogPath} &); exit 0'`,
       },
     ],
   };
