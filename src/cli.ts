@@ -20,6 +20,7 @@ import { recoverTranscripts } from '@/hooks/recover';
 import type { RecoverResult } from '@/hooks/recover';
 import { backfillEmbeddings } from '@/hooks/embed';
 import type { BackfillResult } from '@/hooks/embed';
+import { VERSION } from '@/version';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -392,7 +393,8 @@ Options:
   --project <path>    Project path
   --all-projects      Search across all projects
   --config <path>     Config file path
-  --stdin             Read input from stdin (for hooks)`);
+  --stdin             Read input from stdin (for hooks)
+  -v, --version       Print version and exit`);
 }
 
 async function main(): Promise<void> {
@@ -415,8 +417,14 @@ async function main(): Promise<void> {
       threshold: { type: 'string' },
       hybrid: { type: 'boolean', default: false },
       backfill: { type: 'boolean', default: false },
+      version: { type: 'boolean', short: 'v', default: false },
     },
   });
+
+  if (values['version']) {
+    console.log(VERSION);
+    return;
+  }
 
   const command = positionals[0];
 
