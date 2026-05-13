@@ -137,6 +137,52 @@ describe('handleSave', () => {
 
     db.close();
   });
+
+  it('transcript ファイルが存在しない場合は silently skip して保存しない', async () => {
+    const missingPath = path.join(tmpDir, 'does-not-exist.jsonl');
+
+    await expect(
+      handleSave(
+        {
+          session_id: 'missing-session',
+          transcript_path: missingPath,
+          cwd: tmpDir,
+        },
+        configPath
+      )
+    ).resolves.toBeUndefined();
+
+    const db = getDatabase(dbPath);
+    initializeSchema(db);
+    const store = new Store(db);
+
+    const stats = store.getStats();
+    expect(stats.totalChunks).toBe(0);
+    expect(stats.totalSessions).toBe(0);
+
+    db.close();
+  });
+
+  it('同一 session_id で 2 回保存しても UNIQUE 違反を起こさない', async () => {
+    await handleSave(
+      { session_id: 'reentry', transcript_path: fixtureTranscript, cwd: tmpDir },
+      configPath
+    );
+
+    await expect(
+      handleSave(
+        { session_id: 'reentry', transcript_path: fixtureTranscript, cwd: tmpDir },
+        configPath
+      )
+    ).resolves.toBeUndefined();
+
+    const db = getDatabase(dbPath);
+    initializeSchema(db);
+    const store = new Store(db);
+    const sessions = store.getSessionList();
+    expect(sessions.filter((s) => s.sessionId === 'reentry')).toHaveLength(1);
+    db.close();
+  });
 });
 
 describe('runSave signal handling', () => {

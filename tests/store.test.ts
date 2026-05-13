@@ -46,6 +46,55 @@ describe('store', () => {
       const row = db.prepare('SELECT COUNT(*) as count FROM chunks').get() as { count: number };
       expect(row.count).toBe(2);
     });
+
+    it('同一 session の再保存で UNIQUE 違反を出さず、最新内容で置き換える', () => {
+      // 初回: 2 chunks
+      store.insertChunks([
+        makeChunk({ chunkIndex: 0, content: 'first version chunk 0' }),
+        makeChunk({ chunkIndex: 1, content: 'first version chunk 1' }),
+      ]);
+
+      // 再保存: 同じ session_id + chunk_index で内容を更新 + 新規 chunk 追加
+      expect(() =>
+        store.insertChunks([
+          makeChunk({ chunkIndex: 0, content: 'second version chunk 0' }),
+          makeChunk({ chunkIndex: 1, content: 'second version chunk 1' }),
+          makeChunk({ chunkIndex: 2, content: 'second version chunk 2 (new)' }),
+        ])
+      ).not.toThrow();
+
+      const rows = db
+        .prepare(
+          'SELECT chunk_index, content FROM chunks WHERE session_id = ? ORDER BY chunk_index'
+        )
+        .all('session-1') as { chunk_index: number; content: string }[];
+      expect(rows).toHaveLength(3);
+      expect(rows[0].content).toBe('second version chunk 0');
+      expect(rows[1].content).toBe('second version chunk 1');
+      expect(rows[2].content).toBe('second version chunk 2 (new)');
+    });
+
+    it('別 session の chunks は再保存時に削除されない', () => {
+      store.insertChunks([makeChunk({ sessionId: 'session-a', chunkIndex: 0, content: 'A0' })]);
+      store.insertChunks([makeChunk({ sessionId: 'session-b', chunkIndex: 0, content: 'B0' })]);
+
+      // session-a を再保存しても session-b は残る
+      store.insertChunks([
+        makeChunk({ sessionId: 'session-a', chunkIndex: 0, content: 'A0-updated' }),
+      ]);
+
+      const bRows = db
+        .prepare('SELECT content FROM chunks WHERE session_id = ?')
+        .all('session-b') as { content: string }[];
+      expect(bRows).toHaveLength(1);
+      expect(bRows[0].content).toBe('B0');
+    });
+
+    it('空配列を渡しても安全に no-op で完了する', () => {
+      expect(() => store.insertChunks([])).not.toThrow();
+      const row = db.prepare('SELECT COUNT(*) as count FROM chunks').get() as { count: number };
+      expect(row.count).toBe(0);
+    });
   });
 
   describe('getChunk', () => {
