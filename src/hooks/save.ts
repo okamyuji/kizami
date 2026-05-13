@@ -30,6 +30,10 @@ export async function handleSave(
     initializeSchema(db);
     const store = new Store(db);
 
+    // transcript の jsonl は Claude Code 側が rotate/削除することがあるため、
+    // 既に存在しない場合は silently skip する (ハーネス由来の状態でユーザー対処不能)。
+    if (!fs.existsSync(input.transcript_path)) return;
+
     const messages = await parseTranscript(input.transcript_path);
     if (messages.length === 0) return;
 

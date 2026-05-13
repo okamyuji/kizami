@@ -46,12 +46,22 @@ export class Store {
   constructor(private db: Database.Database) {}
 
   insertChunks(chunks: Chunk[]): void {
+    if (chunks.length === 0) return;
+
+    const deleteBySession = this.db.prepare('DELETE FROM chunks WHERE session_id = ?');
     const insert = this.db.prepare(`
       INSERT INTO chunks (session_id, project_path, chunk_index, content, role, metadata, token_count)
       VALUES (@sessionId, @projectPath, @chunkIndex, @content, @role, @metadata, @tokenCount)
     `);
 
+    // SessionEnd hook は同じ session_id で再実行されうる (compact 後、recover 経由 等)。
+    // chunks テーブルには (session_id, chunk_index) の UNIQUE 制約があるため、
+    // 同一セッションの既存 chunks を一度クリアしてから insert することで冪等化する。
     const tx = this.db.transaction((items: Chunk[]) => {
+      const sessionIds = new Set(items.map((c) => c.sessionId));
+      for (const sid of sessionIds) {
+        deleteBySession.run(sid);
+      }
       for (const chunk of items) {
         insert.run({
           sessionId: chunk.sessionId,
