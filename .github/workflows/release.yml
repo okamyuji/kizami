@@ -10,6 +10,11 @@ permissions:
   issues: write
   pull-requests: write
 
+# JavaScript actions (actions/checkout, actions/setup-node, pnpm/action-setup) を
+# Node.js 24 ランタイムで起動させる。Node 20 ランタイムは 2026-09-16 にランナーから削除される。
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
