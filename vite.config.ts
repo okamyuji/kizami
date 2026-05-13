@@ -1,12 +1,20 @@
 import { defineConfig } from 'vite';
 import { builtinModules } from 'node:module';
 import { resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+
+const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as {
+  version: string;
+};
 
 export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
     },
+  },
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
   },
   build: {
     target: 'node20',

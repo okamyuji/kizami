@@ -1004,6 +1004,41 @@ pnpm check
 1. MCP Server化により、ツールとして明示的な検索を可能にします
 2. Web UIを実装し、ブラウザからメモリの管理を可能にします
 
+## バージョニングとリリース
+
+[Semantic Versioning 2.0.0](https://semver.org/lang/ja/) に従い、CIで自動採番します。採番は [Conventional Commits](https://www.conventionalcommits.org/ja/v1.0.0/) に従ったコミットメッセージから判定します。
+
+| コミット種別            | バージョンへの影響 |
+| ----------------------- | ------------------ |
+| `fix:` / `perf:`        | PATCH (`x.y.Z`)    |
+| `feat:`                 | MINOR (`x.Y.0`)    |
+| `feat!:` / `BREAKING CHANGE:` フッター | MAJOR (`X.0.0`)    |
+| `docs:` / `chore:` / `refactor:` / `style:` / `test:` / `build:` / `ci:` | 採番しない |
+
+### リリース運用
+
+- `main` ブランチに push されると `.github/workflows/release.yml` が `semantic-release` を実行します。
+- 直前のタグ以降のコミットを解析して次のバージョンを決定し、以下を自動実行します。
+  - `package.json` の version を更新
+  - `CHANGELOG.md` を生成/追記
+  - `vX.Y.Z` の Git タグと GitHub Release を作成
+  - `dist/cli.js` を Release アセットとして添付
+- PR では `commitlint` がコミットメッセージの規約適合を検証します。
+- 現在のバージョンは `kizami --version` (または `-v`) で確認できます。バージョン文字列はビルド時に `package.json` から `__APP_VERSION__` として注入されます。
+
+### 初回リリースのみ手動
+
+`semantic-release` は初回起動時に既存タグが無いと `1.0.0` を提案します。本リリース (`0.1.1`) は初回採番として、**マージ前に feature ブランチ上で手動でタグを打ってください**:
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+タグの参照先コミットが `main` に到達可能であれば (通常の merge commit / rebase merge であれば該当)、マージ後に発火する `release.yml` は「直近タグ `v0.1.1` 以降のコミットなし」と判断して no-op となります。以後の `main` への push (Conventional Commits 準拠) で自動採番されます。
+
+**注**: PR を squash merge で取り込む場合、タグの指すコミットが main の祖先にならないため、リリースワークフロー側で別途タグ付け直しが必要になります。本リポジトリは通常 merge commit を使う前提です。
+
 ## ライセンス
 
 MIT
