@@ -1,0 +1,11 @@
+autoInstallPeers: true
+engineStrict: true
+minimumReleaseAge: 10080
+allowBuilds:
+  better-sqlite3: true
+  onnxruntime-node: true
+  esbuild: false
+  protobufjs: false
+  sharp: false
+overrides:
+  protobufjs@<7.5.5: ^7.5.5
