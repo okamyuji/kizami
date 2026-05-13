@@ -1028,7 +1028,16 @@ pnpm check
 
 ### 初回リリースのみ手動
 
-`semantic-release` は初回起動時に既存タグが無いと `1.0.0` を提案します。本リリース (`0.1.1`) は初回採番として手動でタグを打ちます。マージ後に `git tag v0.1.1 && git push origin v0.1.1` を実行してください。以後は `main` への push で自動採番されます。
+`semantic-release` は初回起動時に既存タグが無いと `1.0.0` を提案します。本リリース (`0.1.1`) は初回採番として、**マージ前に feature ブランチ上で手動でタグを打ってください**:
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+タグの参照先コミットが `main` に到達可能であれば (通常の merge commit / rebase merge であれば該当)、マージ後に発火する `release.yml` は「直近タグ `v0.1.1` 以降のコミットなし」と判断して no-op となります。以後の `main` への push (Conventional Commits 準拠) で自動採番されます。
+
+**注**: PR を squash merge で取り込む場合、タグの指すコミットが main の祖先にならないため、リリースワークフロー側で別途タグ付け直しが必要になります。本リポジトリは通常 merge commit を使う前提です。
 
 ## ライセンス
 

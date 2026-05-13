@@ -63,13 +63,14 @@ push to main
        5. pnpm semantic-release              # 必要なら採番してリリース
             - 直近タグ以降のコミットを解析
             - 新バージョン X.Y.Z を決定
-            - package.json の version を書き換え (コミットはしない設定)
-            - CHANGELOG.md を生成/追記してコミット & push (chore(release): x.y.z [skip ci])
+            - @semantic-release/npm が package.json の version を書き換え (publish はしない)
+            - prepareCmd で pnpm build を実行 (新 version が __APP_VERSION__ に埋め込まれる)
+            - @semantic-release/git が package.json と CHANGELOG.md をコミット & push (chore(release): x.y.z [skip ci])
             - git tag vX.Y.Z を push
             - GitHub Release を作成し dist/cli.js を assets として添付
 ```
 
-**注**: ステップ 4 の `pnpm build` 時点では `package.json` のバージョンは古いので、`semantic-release` の `prepareCmd` で「採番後に再ビルド」する。
+**注**: ステップ 4 の `pnpm build` 時点では `package.json` のバージョンは古いので、`@semantic-release/npm` で version を書き換えてから `@semantic-release/exec` の `prepareCmd` で再ビルドする。
 
 ### 4.1 PR / フィーチャーブランチ
 
@@ -86,11 +87,12 @@ PR で `commitlint` を実行し、Conventional Commits 準拠かをチェック
 | `@semantic-release/commit-analyzer` | コミットからバンプ種別を決定 |
 | `@semantic-release/release-notes-generator` | リリースノート生成 |
 | `@semantic-release/changelog` | `CHANGELOG.md` 更新 |
-| `@semantic-release/exec` | 採番後にビルドを再実行 (`pnpm build`) |
-| `@semantic-release/git` | `package.json` と `CHANGELOG.md` をコミット |
+| `@semantic-release/npm` | `package.json` の version を新バージョンに書き換える (`npmPublish: false` で publish はしない) |
+| `@semantic-release/exec` | version 書き換え後にビルドを再実行 (`pnpm build`) し、新 version を `__APP_VERSION__` に埋め込む |
+| `@semantic-release/git` | 書き換え後の `package.json` と `CHANGELOG.md` をコミット & push |
 | `@semantic-release/github` | GitHub Release 作成 + `dist/cli.js` 添付 |
 
-`@semantic-release/npm` は使わない (npm publish しない)。
+`@semantic-release/npm` は publish はしない (`npmPublish: false`)。あくまで `package.json` の version 更新のためにのみ使用する。
 
 `branches`: `["main"]`。
 
