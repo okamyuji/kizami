@@ -16,7 +16,7 @@
     "format": "prettier --check src/ tests/",
     "format:fix": "prettier --write src/ tests/",
     "test": "vitest run",
-    "check": "pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm format && pnpm test && pnpm build"
+    "check": "pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm format && pnpm build && pnpm test"
   },
   "dependencies": {
     "@huggingface/transformers": "3.8.1",
