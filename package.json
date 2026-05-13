@@ -2,6 +2,10 @@
   "name": "kizami",
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "pnpm@10.33.1",
+  "engines": {
+    "node": "24.13.0"
+  },
   "bin": {
     "kizami": "./dist/cli.js"
   },
@@ -12,25 +16,25 @@
     "format": "prettier --check src/ tests/",
     "format:fix": "prettier --write src/ tests/",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm lint && pnpm format && pnpm test && pnpm build"
+    "check": "pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm format && pnpm test && pnpm build"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.1",
-    "better-sqlite3": "^12.0.0",
-    "sqlite-vec": "^0.1.7"
+    "@huggingface/transformers": "3.8.1",
+    "better-sqlite3": "12.8.0",
+    "sqlite-vec": "0.1.7"
   },
   "devDependencies": {
-    "@eslint/js": "^9.0.0",
-    "@types/better-sqlite3": "^7.6.0",
-    "@types/node": "^22.0.0",
-    "eslint": "^9.0.0",
-    "eslint-config-prettier": "^10.0.0",
-    "prettier": "^3.0.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.7.0",
-    "typescript-eslint": "^8.0.0",
-    "vite": "^6.4.2",
-    "vitest": "^3.0.0"
+    "@eslint/js": "9.39.4",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "22.19.15",
+    "eslint": "9.39.4",
+    "eslint-config-prettier": "10.1.8",
+    "prettier": "3.8.1",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.57.2",
+    "vite": "6.4.2",
+    "vitest": "3.2.4"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
