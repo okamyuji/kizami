@@ -115,9 +115,9 @@ kizami setup
   - SessionEnd hookでセッション終了時に会話を自動保存します
   - UserPromptSubmit hookでプロンプト送信時に関連記憶を自動注入します
 
-### v0.1.x からのアップグレード
+### v0.1.1 / v0.1.2 からのアップグレード
 
-JSONL正本化のため、既存ユーザーは初回起動時に以下のコマンドでマイグレーションを実行してください。
+JSONL正本化のため、v0.1.1 または v0.1.2 から v0.2.0 に上げる既存ユーザーは初回起動時に以下のコマンドでマイグレーションを実行してください。
 
 ```bash
 kizami migrate-to-jsonl
@@ -218,7 +218,7 @@ kizami rebuild --from-month 2026-05  # 特定月のみ
 
 embedding が JSONL にインライン保存されている場合、モデルロード不要で復元されます (1000チャンクで実測 約55ms)。
 
-### SQLite→JSONLマイグレーション (v0.1.x→v0.2.0)
+### SQLite→JSONLマイグレーション (v0.1.1/v0.1.2 → v0.2.0)
 
 ```bash
 kizami migrate-to-jsonl
