@@ -131,13 +131,7 @@ hybridモードを有効にする場合は以下を実行します。
 kizami setup --hybrid
 ```
 
-hybridモードでは追加パッケージ(sqlite-vec, @huggingface/transformers)が必要です。事前にインストールしてください。
-
-```bash
-pnpm add sqlite-vec @huggingface/transformers
-pnpm build
-npm link
-```
+hybridモードに必要な追加パッケージ (`sqlite-vec`, `@huggingface/transformers`) は v0.2.0 以降は `dependencies` に含まれているため、上記インストール手順 (`pnpm install --frozen-lockfile && pnpm build && npm link`) を実行済みであれば**追加の install は不要**です。`pnpm add sqlite-vec @huggingface/transformers` を実行しても `Already up to date` となります。
 
 初回のsave時にRuri v3 embeddingモデル(約37MB, int8)が自動でダウンロードされます。
 
@@ -982,19 +976,15 @@ maintenanceセクションは自動メンテナンスの設定です。embedding
 
 ## 依存パッケージ
 
-coreモードのランタイム依存は1個のみです。hybridモードでは追加で2個の依存が必要です。CLIには`node:util.parseArgs`、パスには`node:path`、ファイルIOには`node:fs/readline`を使用しています。
+v0.2.0 から `sqlite-vec` と `@huggingface/transformers` も `dependencies` に含まれるようになりました。**`pnpm install --frozen-lockfile` 一度で core/hybrid 両モードの依存がすべて揃います**。hybrid 用パッケージはモードを切り替えるまでロードされないため、core 利用時には実質的なコストはありません。CLI には `node:util.parseArgs`、パスには `node:path`、ファイル IO には `node:fs/readline` を使用しています。
 
-| パッケージ                             | サイズ               | 用途                                           |
-| -------------------------------------- | -------------------- | ---------------------------------------------- |
-| better-sqlite3                         | 約2MB (native)       | SQLiteバインディングです。FTS5を内蔵しています |
-| sqlite-vec (hybridのみ)                | 約500KB (native)     | ベクトル検索拡張です                           |
-| @huggingface/transformers (hybridのみ) | 約5MB + モデル約37MB | Ruri v3 embedding生成に使用します              |
+| パッケージ                | サイズ               | 用途                                           | ロードタイミング                       |
+| ------------------------- | -------------------- | ---------------------------------------------- | -------------------------------------- |
+| better-sqlite3            | 約2MB (native)       | SQLiteバインディングです。FTS5を内蔵しています | core/hybrid 共通で常時                 |
+| sqlite-vec                | 約500KB (native)     | ベクトル検索拡張です                           | hybrid モード初期化時に `require`      |
+| @huggingface/transformers | 約5MB + モデル約37MB | Ruri v3 embedding 生成に使用します             | hybrid モードの最初の save 時に import |
 
-hybridモードの追加パッケージは以下のコマンドでインストールします。
-
-```bash
-pnpm add sqlite-vec @huggingface/transformers
-```
+`pnpm add sqlite-vec @huggingface/transformers` のような明示的な追加 install は不要です（実行しても `Already up to date` となります）。
 
 ## ディレクトリ構成
 
