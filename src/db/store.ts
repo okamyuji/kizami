@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 
 export interface Chunk {
   id?: number;
+  externalId?: string;
   sessionId: string;
   projectPath: string;
   chunkIndex: number;
@@ -50,8 +51,8 @@ export class Store {
 
     const deleteBySession = this.db.prepare('DELETE FROM chunks WHERE session_id = ?');
     const insert = this.db.prepare(`
-      INSERT INTO chunks (session_id, project_path, chunk_index, content, role, metadata, token_count)
-      VALUES (@sessionId, @projectPath, @chunkIndex, @content, @role, @metadata, @tokenCount)
+      INSERT INTO chunks (external_id, session_id, project_path, chunk_index, content, role, metadata, token_count, created_at)
+      VALUES (@externalId, @sessionId, @projectPath, @chunkIndex, @content, @role, @metadata, @tokenCount, COALESCE(@createdAt, datetime('now')))
     `);
 
     // SessionEnd hook は同じ session_id で再実行されうる (compact 後、recover 経由 等)。
@@ -64,6 +65,7 @@ export class Store {
       }
       for (const chunk of items) {
         insert.run({
+          externalId: chunk.externalId ?? null,
           sessionId: chunk.sessionId,
           projectPath: chunk.projectPath,
           chunkIndex: chunk.chunkIndex,
@@ -71,6 +73,7 @@ export class Store {
           role: chunk.role,
           metadata: JSON.stringify(chunk.metadata),
           tokenCount: chunk.tokenCount,
+          createdAt: chunk.createdAt ?? null,
         });
       }
     });
@@ -361,6 +364,79 @@ export class Store {
       )
       .run();
     return result.changes;
+  }
+
+  /**
+   * self-healing/rebuild 用: 既存セッションを削除せずに append のみで挿入する。
+   * - external_id の UNIQUE 制約により重複は無視される (INSERT OR IGNORE)
+   * - (session_id, chunk_index) も UNIQUE なので、同じインデックスでの衝突も同様に無視
+   * これにより insertChunks の "同一セッションを総入れ替え" 副作用を回避する。
+   */
+  appendChunksWithoutReplace(chunks: Chunk[]): number {
+    if (chunks.length === 0) return 0;
+    const insert = this.db.prepare(`
+      INSERT OR IGNORE INTO chunks (external_id, session_id, project_path, chunk_index, content, role, metadata, token_count, created_at)
+      VALUES (@externalId, @sessionId, @projectPath, @chunkIndex, @content, @role, @metadata, @tokenCount, COALESCE(@createdAt, datetime('now')))
+    `);
+    let inserted = 0;
+    const tx = this.db.transaction((items: Chunk[]) => {
+      for (const chunk of items) {
+        const result = insert.run({
+          externalId: chunk.externalId ?? null,
+          sessionId: chunk.sessionId,
+          projectPath: chunk.projectPath,
+          chunkIndex: chunk.chunkIndex,
+          content: chunk.content,
+          role: chunk.role,
+          metadata: JSON.stringify(chunk.metadata),
+          tokenCount: chunk.tokenCount,
+          createdAt: chunk.createdAt ?? null,
+        });
+        if (result.changes > 0) inserted++;
+      }
+    });
+    tx(chunks);
+    return inserted;
+  }
+
+  /**
+   * self-healing用: 指定された externalId のうち、SQLite に存在しないものを返す。
+   */
+  findMissingExternalIds(externalIds: string[]): string[] {
+    if (externalIds.length === 0) return [];
+    const placeholders = externalIds.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(`SELECT external_id FROM chunks WHERE external_id IN (${placeholders})`)
+      .all(...externalIds) as { external_id: string }[];
+    const present = new Set(rows.map((r) => r.external_id));
+    return externalIds.filter((id) => !present.has(id));
+  }
+
+  getChunkIdByExternalId(externalId: string): number | undefined {
+    const row = this.db
+      .prepare('SELECT id FROM chunks WHERE external_id = ? LIMIT 1')
+      .get(externalId) as { id: number } | undefined;
+    return row?.id;
+  }
+
+  /**
+   * rebuild 前にキャッシュ層を空にする。
+   * - chunks/sessions は WHERE 1=1 DELETE で全行除去
+   * - chunks_vec / chunks_vec_map は存在時のみ DELETE
+   */
+  truncateAll(): void {
+    const hasVecRow = this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks_vec'")
+      .get();
+    const tx = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM chunks WHERE 1=1').run();
+      this.db.prepare('DELETE FROM sessions WHERE 1=1').run();
+      if (hasVecRow) {
+        this.db.prepare('DELETE FROM chunks_vec WHERE 1=1').run();
+        this.db.prepare('DELETE FROM chunks_vec_map WHERE 1=1').run();
+      }
+    });
+    tx();
   }
 
   private rowToChunk(row: Record<string, unknown>): Chunk {

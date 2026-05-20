@@ -4,8 +4,14 @@ import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
-import { getDefaultDbPath, getConfigFilePath, getDefaultConfig } from '@/config';
+import {
+  getDefaultDbPath,
+  getDefaultJsonlDir,
+  getConfigFilePath,
+  getDefaultConfig,
+} from '@/config';
 import { Store } from '@/db/store';
+import { ensureJsonlDir } from '@/jsonl/path';
 
 interface HookEntry {
   type: string;
@@ -131,18 +137,58 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     ],
   };
 
+  // SessionStart hook (v0.2.0+): セッション開始時にプロジェクト直近Q&Aを冒頭注入する。
+  // Claude Code v2.1.0+ で SessionStart hook がサポートされている（実証根拠: 設計書 §3.6）。
+  const injectHook: HookMatcher = {
+    hooks: [
+      {
+        type: 'command',
+        command: 'kizami inject --stdin',
+      },
+    ],
+  };
+
   if (!settings.hooks) {
     settings.hooks = {};
   }
 
   settings.hooks['SessionEnd'] = mergeHooks(settings.hooks['SessionEnd'], saveHook);
   settings.hooks['UserPromptSubmit'] = mergeHooks(settings.hooks['UserPromptSubmit'], recallHook);
+  settings.hooks['SessionStart'] = mergeHooks(settings.hooks['SessionStart'], injectHook);
 
   writeSettings(settingsPath, settings);
 
   // Initialize database
   const dbPath = options?.dbPath ?? getDefaultDbPath();
   const db = getDatabase(dbPath);
+
+  // JSONL正本ディレクトリを準備（v0.2.0〜）
+  const jsonlDir = getDefaultJsonlDir();
+  ensureJsonlDir(jsonlDir);
+
+  // 既存ユーザー向けマイグレーション案内
+  try {
+    const store = new Store(db);
+    initializeSchema(db);
+    const hasLegacyChunks = store.getStats().totalChunks > 0;
+    if (hasLegacyChunks) {
+      // jsonlDir が空ならまだ移行されていない
+      const files = fs.readdirSync(jsonlDir).filter((f) => f.endsWith('.jsonl'));
+      if (files.length === 0) {
+        console.log('');
+        console.log('[kizami] v0.2.0からはJSONLが正本になりました。');
+        console.log('[kizami] 既存のSQLiteデータをJSONLに移行するには:');
+        console.log('[kizami]   $ kizami migrate-to-jsonl');
+        console.log(
+          '[kizami] 未移行のまま使用してもデータロスはありませんが、自動復旧/Git同期が無効化されます。'
+        );
+        console.log('');
+      }
+    }
+  } catch {
+    // 案内表示の失敗は無視
+  }
+
   try {
     initializeSchema(db);
 
@@ -177,5 +223,6 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
   console.log('kizami hooks installed successfully.');
   console.log(`  Settings: ${settingsPath}`);
   console.log(`  Database: ${dbPath}`);
+  console.log(`  JSONL dir: ${jsonlDir}`);
   console.log(`  Error log: ${errorLogPath}`);
 }

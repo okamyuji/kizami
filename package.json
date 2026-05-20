@@ -16,7 +16,22 @@
     "format": "prettier --check src/ tests/",
     "format:fix": "prettier --write src/ tests/",
     "test": "vitest run",
-    "check": "pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm format && pnpm build && pnpm test"
+    "bench": "tsx tests/perf/bench.ts",
+    "secretlint": "secretlint --secretlintrc .secretlintrc.json '**/*.{ts,js,md,json,yml,yaml}' --maskSecrets",
+    "prepare": "husky",
+    "check": "pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm format && pnpm secretlint && pnpm build && pnpm test"
+  },
+  "lint-staged": {
+    "src/**/*.{ts,js}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "tests/**/*.{ts,js}": [
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
   },
   "dependencies": {
     "@huggingface/transformers": "3.8.1",
@@ -27,6 +42,7 @@
     "@commitlint/cli": "20.5.3",
     "@commitlint/config-conventional": "20.5.3",
     "@eslint/js": "9.39.4",
+    "@secretlint/secretlint-rule-preset-recommend": "^13.0.0",
     "@semantic-release/changelog": "6.0.3",
     "@semantic-release/exec": "7.1.0",
     "@semantic-release/git": "10.0.1",
@@ -37,7 +53,10 @@
     "conventional-changelog-conventionalcommits": "9.3.1",
     "eslint": "9.39.4",
     "eslint-config-prettier": "10.1.8",
+    "husky": "9.1.7",
+    "lint-staged": "15.5.2",
     "prettier": "3.8.1",
+    "secretlint": "^13.0.0",
     "semantic-release": "25.0.3",
     "tsx": "4.21.0",
     "typescript": "5.9.3",
