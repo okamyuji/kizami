@@ -1,0 +1,33 @@
+#!/usr/bin/env sh
+# kizami pre-commit gates (v0.2.0):
+#   1. secretlint: クロスプラットフォーム Node-native スキャナ (pnpm dev依存, 必ず実行)
+#   2. gitleaks:   インストール済みなら追加実行 (より広範なルール)
+#   3. lint-staged: 差分ファイルのみ ESLint --fix + Prettier --write
+#
+# 重い処理 (typecheck/test/build) は意図的に外している。
+# それらは CI ジョブ (pnpm check) で必ず走るので、ローカルでは差分にだけ介入する。
+#
+# 安全性: secretlint は pnpm devDep に含まれるため、開発者環境では常に動作する。
+# gitleaks は補完的なバイナリスキャナで、インストール済みのみ実行。
+# CI 側でも gitleaks-action + pnpm check が走り、二重防衛。
+
+set -e
+
+# 1. secretlint: ステージされたファイルのみシークレットスキャン
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+if [ -n "$STAGED" ]; then
+  echo "[pre-commit] secretlint scanning staged files..."
+  echo "$STAGED" | xargs pnpm exec secretlint --maskSecrets --no-color
+fi
+
+# 2. gitleaks: インストール済みなら追加スキャン (補完)
+if command -v gitleaks >/dev/null 2>&1; then
+  echo "[pre-commit] gitleaks scanning staged changes..."
+  gitleaks protect --staged --no-banner --redact
+else
+  echo "[pre-commit] gitleaks (optional) not installed; secretlint covers basic patterns."
+  echo "[pre-commit]   Install for extended rules: brew install gitleaks"
+fi
+
+# 3. lint-staged: 変更ファイルのみ eslint --fix + prettier --write
+pnpm exec lint-staged
