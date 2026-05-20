@@ -11,7 +11,10 @@ import type { ScoredResult } from '@/search/hybrid';
 import { formatResults } from '@/search/formatter';
 import { runSave } from '@/hooks/save';
 import { runRecall } from '@/hooks/recall';
+import { runInject } from '@/hooks/inject';
 import { setupHooks } from '@/hooks/setup';
+import { rebuildFromJsonl } from '@/jsonl/rebuild';
+import { migrateSqliteToJsonl } from '@/jsonl/migrate';
 import { importClaudeMem } from '@/import/claude-mem';
 import type { ImportResult } from '@/import/claude-mem';
 import { mergeChunks } from '@/maintenance/merge';
@@ -76,6 +79,54 @@ export async function cmdRecall(
     return;
   }
   await runRecall(configPath, projectPath);
+}
+
+export async function cmdInject(
+  stdin: boolean,
+  configPath?: string,
+  projectPath?: string
+): Promise<void> {
+  if (!stdin) {
+    console.log('Usage: kizami inject --stdin');
+    console.log('  Reads JSON from stdin (SessionStart hook).');
+    console.log('  Injects recent project Q&A into session context.');
+    return;
+  }
+  await runInject(configPath, projectPath);
+}
+
+export async function cmdRebuild(options: {
+  config?: string;
+  dryRun?: boolean;
+  fromMonth?: string;
+}): Promise<void> {
+  const config = loadConfig(options.config);
+  console.log(`[kizami rebuild] JSONL dir: ${config.storage.jsonlDir}`);
+  if (options.dryRun) {
+    console.log('[kizami rebuild] dry-run mode (no SQLite writes)');
+  }
+  const result = await rebuildFromJsonl(config, {
+    dryRun: options.dryRun,
+    fromMonth: options.fromMonth,
+  });
+  console.log(`  Files processed:     ${result.filesProcessed}`);
+  console.log(`  Chunks inserted:     ${result.chunksInserted}`);
+  console.log(`  Embeddings restored: ${result.embeddingsRestored}`);
+  console.log(`  Duration:            ${result.durationMs} ms`);
+  if (result.dryRun) {
+    console.log('  (dry-run: SQLite was not modified)');
+  }
+}
+
+export function cmdMigrateToJsonl(options: { config?: string }): void {
+  const config = loadConfig(options.config);
+  console.log(`[kizami migrate-to-jsonl] SQLite: ${config.database.path}`);
+  console.log(`[kizami migrate-to-jsonl] JSONL : ${config.storage.jsonlDir}`);
+  const result = migrateSqliteToJsonl(config);
+  console.log(`  Total chunks in SQLite: ${result.totalChunks}`);
+  console.log(`  Exported to JSONL:      ${result.exported}`);
+  console.log(`  Already had external_id: ${result.alreadyMigrated}`);
+  console.log('Migration complete. Run `kizami rebuild` to verify integrity.');
 }
 
 export function cmdSearch(
@@ -388,12 +439,17 @@ Commands:
   embed             Generate embeddings for hybrid mode (--backfill)
   recover           Recover unsaved transcripts from ~/.claude/projects/
   import-claude-mem Import from claude-mem database
+  inject            SessionStart hook: inject recent project Q&A
+  rebuild           Rebuild SQLite cache from JSONL canonical store
+  migrate-to-jsonl  v0.1.x→v0.2.0 migration: SQLite → JSONL canonical
 
 Options:
   --project <path>    Project path
   --all-projects      Search across all projects
   --config <path>     Config file path
   --stdin             Read input from stdin (for hooks)
+  --dry-run           rebuild: do not write SQLite
+  --from-month <YYYY-MM>  rebuild: limit to a single month
   -v, --version       Print version and exit`);
 }
 
@@ -417,6 +473,7 @@ async function main(): Promise<void> {
       threshold: { type: 'string' },
       hybrid: { type: 'boolean', default: false },
       backfill: { type: 'boolean', default: false },
+      'from-month': { type: 'string' },
       version: { type: 'boolean', short: 'v', default: false },
     },
   });
@@ -546,6 +603,22 @@ async function main(): Promise<void> {
       });
       break;
 
+    case 'inject':
+      await cmdInject(!!values['stdin'], sharedOpts.config, sharedOpts.project);
+      break;
+
+    case 'rebuild':
+      await cmdRebuild({
+        config: sharedOpts.config,
+        dryRun: values['dry-run'] as boolean | undefined,
+        fromMonth: values['from-month'] as string | undefined,
+      });
+      break;
+
+    case 'migrate-to-jsonl':
+      cmdMigrateToJsonl({ config: sharedOpts.config });
+      break;
+
     default:
       console.error(`Unknown command: ${command}`);
       process.exitCode = 1;
@@ -556,7 +629,7 @@ async function main(): Promise<void> {
 // 主防御は setup.ts が生成する hook command の background 化 + 親 fd 切り離し
 // （Claude Code が hook を await し切らず "Hook cancelled" 表示する問題への対策）
 // だが、ESM の import 解決後・main() 前にもシグナルハンドラを二重登録して保険にする。
-if (process.argv[2] === 'save' || process.argv[2] === 'recall') {
+if (process.argv[2] === 'save' || process.argv[2] === 'recall' || process.argv[2] === 'inject') {
   process.on('SIGINT', () => {});
   process.on('SIGTERM', () => {});
 }

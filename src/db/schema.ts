@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { createRequire } from 'node:module';
 
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS chunks (
@@ -69,6 +69,17 @@ CREATE TABLE IF NOT EXISTS maintenance_log (
 );
 `;
 
+// v0.2.0: JSONL正本化のため、chunks に external_id を追加。
+// JSONL の各レコード id (crypto.randomUUID) を SQLite 側にも保持することで、
+// self-healing 時の存在チェック・rebuild 時の冪等性を担保する。
+// SQLite では NULL同士は distinct 扱いになるので、UNIQUEインデックスでも
+// 既存の NULL 行と新規 NULL 行は共存できる。
+const SCHEMA_V3 = `
+ALTER TABLE chunks ADD COLUMN external_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_external_id ON chunks(external_id)
+  WHERE external_id IS NOT NULL;
+`;
+
 function getSchemaVersion(db: Database.Database): number {
   try {
     const row = db.prepare('SELECT MAX(version) as version FROM schema_version').get() as
@@ -115,6 +126,9 @@ export function initializeSchema(db: Database.Database): void {
     }
     if (currentVersion < 2) {
       db.exec(SCHEMA_V2);
+    }
+    if (currentVersion < 3) {
+      db.exec(SCHEMA_V3);
     }
     db.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)').run(
       CURRENT_SCHEMA_VERSION

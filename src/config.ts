@@ -4,6 +4,10 @@ import * as os from 'node:os';
 
 export interface EngramConfig {
   database: { path: string };
+  storage: {
+    jsonlDir: string;
+    selfHealTailLines: number;
+  };
   search: {
     mode: 'core' | 'hybrid';
     timeDecayHalfLifeDays: number;
@@ -20,6 +24,7 @@ export interface EngramConfig {
     autoRecall: boolean;
     recallLimit: number;
     minRelevanceScore: number;
+    injectRecentCount: number;
   };
   maintenance: {
     enabled: boolean;
@@ -51,6 +56,10 @@ export function getDefaultDbPath(): string {
   return path.join(getXdgDataHome(), 'kizami', 'memory.db');
 }
 
+export function getDefaultJsonlDir(): string {
+  return path.join(getXdgDataHome(), 'kizami', 'jsonl');
+}
+
 export function getConfigFilePath(): string {
   return path.join(getXdgConfigHome(), 'kizami', 'config.json');
 }
@@ -59,6 +68,10 @@ export function getDefaultConfig(): EngramConfig {
   return {
     database: {
       path: getDefaultDbPath(),
+    },
+    storage: {
+      jsonlDir: getDefaultJsonlDir(),
+      selfHealTailLines: 100,
     },
     search: {
       mode: 'core',
@@ -76,6 +89,7 @@ export function getDefaultConfig(): EngramConfig {
       autoRecall: true,
       recallLimit: 3,
       minRelevanceScore: 0,
+      injectRecentCount: 3,
     },
     maintenance: {
       enabled: true,
@@ -138,6 +152,7 @@ export function loadConfig(configPath?: string): EngramConfig {
   const defaults = getDefaultConfig();
   const filePath = configPath || getConfigFilePath();
 
+  let resolved: EngramConfig;
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
     const userConfig = JSON.parse(raw) as Record<string, unknown>;
@@ -145,8 +160,15 @@ export function loadConfig(configPath?: string): EngramConfig {
       defaults as unknown as Record<string, unknown>,
       userConfig
     ) as unknown as EngramConfig;
-    return validateConfig(merged);
+    resolved = validateConfig(merged);
   } catch {
-    return defaults;
+    resolved = defaults;
   }
+
+  // 環境変数による override（テスト・コンテナ運用向け）
+  const envJsonlDir = process.env['KIZAMI_JSONL_DIR'];
+  if (envJsonlDir && envJsonlDir.length > 0) {
+    resolved = { ...resolved, storage: { ...resolved.storage, jsonlDir: envJsonlDir } };
+  }
+  return resolved;
 }
