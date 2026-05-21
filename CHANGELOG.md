@@ -1,3 +1,9 @@
+## [0.2.1](https://github.com/okamyuji/kizami/compare/v0.2.0...v0.2.1) (2026-05-21)
+
+### Bug Fixes
+
+- **jsonl:** load sqlite-vec before truncateAll to avoid "no such module: vec0" ([9589925](https://github.com/okamyuji/kizami/commit/9589925c5d7a087d5d0a5da11409cd07fd1bd0ac))
+
 ## [0.2.0](https://github.com/okamyuji/kizami/compare/v0.1.2...v0.2.0) (2026-05-20)
 
 ### Features
