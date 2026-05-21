@@ -423,6 +423,11 @@ export class Store {
    * rebuild 前にキャッシュ層を空にする。
    * - chunks/sessions は WHERE 1=1 DELETE で全行除去
    * - chunks_vec / chunks_vec_map は存在時のみ DELETE
+   *
+   * 注意: chunks_vec は sqlite-vec の vec0 仮想テーブルで、DELETE 操作には
+   * モジュールのロードが必要。呼び出し側 (例: rebuild.ts) で
+   * initializeHybridSchema を事前に呼ぶことが望ましいが、ここでも防御として
+   * DROP TABLE への fallback を持つ。
    */
   truncateAll(): void {
     const hasVecRow = this.db
@@ -432,8 +437,23 @@ export class Store {
       this.db.prepare('DELETE FROM chunks WHERE 1=1').run();
       this.db.prepare('DELETE FROM sessions WHERE 1=1').run();
       if (hasVecRow) {
-        this.db.prepare('DELETE FROM chunks_vec WHERE 1=1').run();
-        this.db.prepare('DELETE FROM chunks_vec_map WHERE 1=1').run();
+        try {
+          this.db.prepare('DELETE FROM chunks_vec WHERE 1=1').run();
+          this.db.prepare('DELETE FROM chunks_vec_map WHERE 1=1').run();
+        } catch {
+          // sqlite-vec が未ロードの場合は DROP TABLE で関係をリセットする。
+          // 後段の initializeHybridSchema が再作成するので、データロスは起きない。
+          try {
+            this.db.prepare('DROP TABLE chunks_vec').run();
+          } catch {
+            /* virtual table の DROP が失敗しても続行 */
+          }
+          try {
+            this.db.prepare('DELETE FROM chunks_vec_map WHERE 1=1').run();
+          } catch {
+            /* ignore */
+          }
+        }
       }
     });
     tx();
