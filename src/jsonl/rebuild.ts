@@ -49,19 +49,25 @@ export async function rebuildFromJsonl(
       ? allFiles.filter((f) => f.includes(options.fromMonth!))
       : allFiles;
 
-    if (!options.dryRun) {
-      store.truncateAll();
-    }
-
-    // hybrid モードかつ embedding が JSONL に含まれていれば仮想テーブルを準備
+    // sqlite-vec を先にロードする必要がある:
+    // - hybrid モード: 後段で chunks_vec への INSERT が必要
+    // - 旧 hybrid → core 切り替え後の DB: chunks_vec が残存しており、
+    //   truncateAll の DELETE FROM chunks_vec が "no such module: vec0" で失敗する
+    // のいずれのケースでも、chunks_vec が存在するなら sqlite-vec をロードしておく方が安全。
     let hybridReady = false;
-    if (config.search.mode === 'hybrid' && !options.dryRun) {
+    if (!options.dryRun) {
       try {
         initializeHybridSchema(db, config.embedding.dimensions);
-        hybridReady = true;
+        hybridReady = config.search.mode === 'hybrid';
       } catch {
+        // sqlite-vec が install されていない / chunks_vec が無い 環境では失敗してよい。
+        // truncateAll 側で防御的に DROP に fallback する。
         hybridReady = false;
       }
+    }
+
+    if (!options.dryRun) {
+      store.truncateAll();
     }
 
     // sessions を chunks から後で再構築するための集計
