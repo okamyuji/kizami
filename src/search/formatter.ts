@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import type { ScoredResult } from '@/search/hybrid';
 
-const MAX_CONTENT_LENGTH = 500;
+const MAX_CONTENT_LENGTH = 360;
 const DEFAULT_LIMIT = 10;
 
 function truncate(text: string, maxLength: number): string {
@@ -29,17 +29,18 @@ export function formatResults(results: ScoredResult[], limit?: number): string {
 
   const capped = results.slice(0, limit ?? DEFAULT_LIMIT);
 
-  const header = '[Past Memory] 関連する過去の会話:\n';
   const entries = capped.map((r) => {
     const sessionShort = r.sessionId.slice(0, 6);
     const date = formatDate(r.createdAt);
     const score = r.score.toFixed(2);
     const content = truncate(r.content, MAX_CONTENT_LENGTH);
     const projectTag =
-      r.isLocalProject === false ? ` [from: ${extractProjectName(r.projectPath)}]` : '';
+      r.isLocalProject === false && r.projectPath
+        ? ` from=${extractProjectName(r.projectPath)}`
+        : '';
 
-    return `---\n[${date} ${sessionShort}]${projectTag} (relevance: ${score})\n${content}\n---`;
+    return `[${date} ${sessionShort}${projectTag} s=${score}]\n${content}`;
   });
 
-  return header + '\n' + entries.join('\n\n') + '\n';
+  return '[Mem]\n' + entries.join('\n---\n') + '\n';
 }

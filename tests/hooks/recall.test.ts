@@ -69,7 +69,7 @@ describe('handleRecall', () => {
     );
 
     expect(result).toContain('React');
-    expect(result).toContain('[Past Memory]');
+    expect(result).toContain('[Mem]');
   });
 
   it('should return empty string when no matches found', async () => {
@@ -167,12 +167,12 @@ describe('handleRecall', () => {
       tieredConfigPath
     );
 
-    expect(result).toContain('[Past Memory]');
+    expect(result).toContain('[Mem]');
     // Both local and remote results should appear
     expect(result).toContain('local project');
     expect(result).toContain('remote project');
-    // Remote result should have [from: ] tag
-    expect(result).toContain('[from: project]');
+    // Remote result should have a compact source tag
+    expect(result).toContain('from=project');
   });
 
   it('should use projectOverride when cwd is not provided', async () => {
