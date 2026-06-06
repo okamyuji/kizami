@@ -92,7 +92,18 @@ export async function runInject(
     }
     const result = await handleInject(input, configPath, projectOverride, runtime);
     if (result) {
-      process.stdout.write(result);
+      if (runtime === 'codex') {
+        process.stdout.write(
+          JSON.stringify({
+            hookSpecificOutput: {
+              hookEventName: 'SessionStart',
+              additionalContext: result,
+            },
+          })
+        );
+      } else {
+        process.stdout.write(result);
+      }
     }
   } catch (err) {
     process.stderr.write(`kizami inject error: ${String(err)}\n`);
