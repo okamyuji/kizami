@@ -1,3 +1,9 @@
+## [0.4.0](https://github.com/okamyuji/kizami/compare/v0.3.1...v0.4.0) (2026-06-06)
+
+### Features
+
+- 'SessionStart'イベント時の出力形式をJSONに変更 ([c5aa615](https://github.com/okamyuji/kizami/commit/c5aa6155a53fdedf65b023d384eb192776b96cf0))
+
 ## [0.3.1](https://github.com/okamyuji/kizami/compare/v0.3.0...v0.3.1) (2026-06-06)
 
 ### Bug Fixes
