@@ -1,3 +1,13 @@
+## [0.3.0](https://github.com/okamyuji/kizami/compare/v0.2.2...v0.3.0) (2026-06-06)
+
+### Features
+
+- codex対応 ([c94afa1](https://github.com/okamyuji/kizami/commit/c94afa1051a7fa341e2b7d00b68f303f28297152))
+
+### Bug Fixes
+
+- CodeRabbit指摘の安全性・堅牢性改善 ([04e9853](https://github.com/okamyuji/kizami/commit/04e9853b894efbf647f3884d97d9806a4fdbc5ab))
+
 ## [0.2.2](https://github.com/okamyuji/kizami/compare/v0.2.1...v0.2.2) (2026-06-01)
 
 ### Performance Improvements
