@@ -87,8 +87,13 @@ function isEngramHook(hook: HookEntry): boolean {
 
 function mergeHooks(existing: HookMatcher[] | undefined, newMatcher: HookMatcher): HookMatcher[] {
   if (!existing) return [newMatcher];
-  const filtered = existing.filter((matcher) => !matcher.hooks.some((h) => isEngramHook(h)));
-  return [...filtered, newMatcher];
+  const cleaned = existing
+    .map((matcher) => ({
+      ...matcher,
+      hooks: matcher.hooks.filter((h) => !isEngramHook(h)),
+    }))
+    .filter((matcher) => matcher.hooks.length > 0);
+  return [...cleaned, newMatcher];
 }
 
 function writeEngramConfig(mode: 'core' | 'hybrid', configPath?: string): void {
@@ -173,6 +178,7 @@ function setupClaudeHooks(options?: SetupOptions): void {
     'kizami',
     'error.log'
   );
+  const escapedErrorLogPath = errorLogPath.replace(/'/g, "'\\''");
 
   // SessionEnd hook は /quit 時に Claude Code 本体が hook の完了を待たず
   // "Hook cancelled" と表示することがある (Claude Code 2.x で確認)。
@@ -182,7 +188,7 @@ function setupClaudeHooks(options?: SetupOptions): void {
     hooks: [
       {
         type: 'command',
-        command: `bash -c 'INPUT=$(cat); (printf "%s" "$INPUT" | ${kizamiCommand} save --stdin --runtime claude >/dev/null 2>> "${errorLogPath}" &); exit 0' # kizami-managed`,
+        command: `bash -c 'INPUT=$(cat); (printf "%s" "$INPUT" | ${kizamiCommand} save --stdin --runtime claude >/dev/null 2>> "${escapedErrorLogPath}" &); exit 0' # kizami-managed`,
       },
     ],
   };
@@ -414,15 +420,16 @@ export function getSetupStatus(options?: SetupOptions): SetupStatus[] {
 
 function removeKizamiHooks(settings: ClaudeSettings): ClaudeSettings {
   if (!settings.hooks) return settings;
+  const cleaned: Record<string, HookMatcher[]> = {};
   for (const event of Object.keys(settings.hooks)) {
-    settings.hooks[event] = settings.hooks[event]
+    cleaned[event] = settings.hooks[event]
       .map((matcher) => ({
         ...matcher,
         hooks: matcher.hooks.filter((h) => !isEngramHook(h)),
       }))
       .filter((matcher) => matcher.hooks.length > 0);
   }
-  return settings;
+  return { ...settings, hooks: cleaned };
 }
 
 export function uninstallHooks(options?: SetupOptions): SetupStatus[] {
@@ -431,9 +438,15 @@ export function uninstallHooks(options?: SetupOptions): SetupStatus[] {
 
   if (target === 'claude' || target === 'all') {
     const settingsPath = options?.settingsPath ?? getDefaultSettingsPath();
-    const settings = removeKizamiHooks(readSettings(settingsPath));
-    writeSettings(settingsPath, settings);
-    removedPaths.add(settingsPath);
+    if (fs.existsSync(settingsPath)) {
+      const before = readSettings(settingsPath);
+      const beforeCount = countKizamiHooks(before);
+      if (beforeCount > 0) {
+        const after = removeKizamiHooks(before);
+        writeSettings(settingsPath, after);
+        removedPaths.add(settingsPath);
+      }
+    }
   }
   if (target === 'codex' || target === 'all') {
     const scope = options?.scope;
@@ -444,9 +457,14 @@ export function uninstallHooks(options?: SetupOptions): SetupStatus[] {
           ...(scope == null || scope === 'project' ? [getDefaultCodexHooksPath('project')] : []),
         ];
     for (const hooksPath of paths) {
-      const settings = removeKizamiHooks(readSettings(hooksPath));
-      writeSettings(hooksPath, settings);
-      removedPaths.add(hooksPath);
+      if (!fs.existsSync(hooksPath)) continue;
+      const before = readSettings(hooksPath);
+      const beforeCount = countKizamiHooks(before);
+      if (beforeCount > 0) {
+        const after = removeKizamiHooks(before);
+        writeSettings(hooksPath, after);
+        removedPaths.add(hooksPath);
+      }
     }
   }
 

@@ -3,8 +3,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { loadConfig } from '@/config';
 import { getDatabase } from '@/db/connection';
-import { initializeSchema } from '@/db/schema';
-import { initializeHybridSchema } from '@/db/schema';
+import { initializeSchema, initializeHybridSchema } from '@/db/schema';
 import { Store } from '@/db/store';
 import type { Chunk } from '@/db/store';
 import type { EngramConfig } from '@/config';
@@ -166,6 +165,7 @@ export async function handleCodexStop(input: CodexStopInput, configPath?: string
   try {
     pending = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as PendingCodexTurn;
   } catch {
+    fs.rmSync(filePath, { force: true });
     return;
   }
 
@@ -199,34 +199,46 @@ export async function handleCodexStop(input: CodexStopInput, configPath?: string
       turnId: input.turn_id ?? pending.turnId ?? null,
       model: input.model ?? pending.model ?? null,
     };
-    const chunk: Chunk = {
-      externalId,
-      sessionId: input.session_id,
-      projectPath,
-      chunkIndex: getNextChunkIndex(store, input.session_id),
-      content,
-      role: 'mixed',
-      metadata,
-      tokenCount: estimateTokens(content),
-      createdAt,
-    };
-
     const embeddings = new Map<number, { vec: Float32Array; model: string }>();
     if (config.search.mode === 'hybrid') {
       try {
         initializeHybridSchema(db, config.embedding.dimensions);
         const { getEmbedding } = await import('../search/embedding');
-        const vec = await getEmbedding('検索文書: ' + chunk.content.slice(0, 512), config);
+        const vec = await getEmbedding('検索文書: ' + content.slice(0, 512), config);
         embeddings.set(0, { vec, model: config.embedding.model });
       } catch (err) {
         process.stderr.write(`kizami codex hybrid embedding error (skipped): ${String(err)}\n`);
       }
     }
 
+    let chunk: Chunk | undefined;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const candidate: Chunk = {
+        externalId,
+        sessionId: input.session_id,
+        projectPath,
+        chunkIndex: getNextChunkIndex(store, input.session_id),
+        content,
+        role: 'mixed',
+        metadata,
+        tokenCount: estimateTokens(content),
+        createdAt,
+      };
+      const inserted = store.appendChunksWithoutReplace([candidate]);
+      if (inserted > 0) {
+        chunk = candidate;
+        break;
+      }
+      if (store.getChunkIdByExternalId(externalId) !== undefined) break;
+    }
+    if (!chunk) {
+      fs.rmSync(filePath, { force: true });
+      return;
+    }
+
     const writer = new JsonlWriter(config.storage.jsonlDir);
     writer.appendRecords(chunksToJsonlRecords([chunk], embeddings));
-    const inserted = store.appendChunksWithoutReplace([chunk]);
-    if (inserted > 0 && embeddings.size > 0) {
+    if (embeddings.size > 0) {
       const chunkId = store.getChunkIdByExternalId(externalId);
       const embedding = embeddings.get(0);
       if (chunkId !== undefined && embedding) {

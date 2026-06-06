@@ -634,13 +634,18 @@ async function main(): Promise<void> {
         cmdSetupStatus({ target, scope });
       } else if (positionals[1] === 'uninstall') {
         cmdSetupUninstall({ target, scope });
-      } else {
+      } else if (positionals[1] == null || positionals[1] === 'install') {
         await cmdSetup({
           hybrid: !!values['hybrid'],
           target,
           scope,
           configPath: sharedOpts.config,
         });
+      } else {
+        console.error(
+          'Usage: kizami setup [install|status|uninstall] [--target claude|codex|all] [--scope user|project]'
+        );
+        process.exitCode = 1;
       }
       break;
 

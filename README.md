@@ -777,7 +777,7 @@ SessionEnd hook(自動保存)の設定は以下のとおりです。
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'INPUT=$(cat); (printf \"%s\" \"$INPUT\" | kizami save --stdin --runtime claude >/dev/null 2>> \"~/.local/share/kizami/error.log\" &); exit 0' # kizami-managed"
+            "command": "bash -c 'INPUT=$(cat); (printf \"%s\" \"$INPUT\" | kizami save --stdin --runtime claude >/dev/null 2>> \"$HOME/.local/share/kizami/error.log\" &); exit 0' # kizami-managed"
           }
         ]
       }
@@ -1040,7 +1040,7 @@ maintenanceセクションは自動メンテナンスの設定です。embedding
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'INPUT=$(cat); (printf \"%s\" \"$INPUT\" | kizami save --stdin --runtime claude >/dev/null 2>> \"~/.local/share/kizami/error.log\" &); exit 0' # kizami-managed"
+            "command": "bash -c 'INPUT=$(cat); (printf \"%s\" \"$INPUT\" | kizami save --stdin --runtime claude >/dev/null 2>> \"$HOME/.local/share/kizami/error.log\" &); exit 0' # kizami-managed"
           }
         ]
       }
