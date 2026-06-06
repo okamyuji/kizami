@@ -12,6 +12,10 @@ export interface Chunk {
     filePaths: string[];
     toolNames: string[];
     errorMessages: string[];
+    sourceRuntime?: string;
+    captureMethod?: string;
+    turnId?: string | null;
+    model?: string | null;
   };
   createdAt?: string;
   tokenCount: number;
@@ -112,6 +116,19 @@ export class Store {
 
     if (!row) return undefined;
     return this.rowToChunk(row);
+  }
+
+  getSession(sessionId: string): Session | undefined {
+    const row = this.db
+      .prepare(
+        `
+      SELECT session_id, project_path, started_at, ended_at, chunk_count, first_message, last_message
+      FROM sessions WHERE session_id = ?
+    `
+      )
+      .get(sessionId) as Record<string, unknown> | undefined;
+
+    return row ? this.rowToSession(row) : undefined;
   }
 
   updateChunkContent(id: number, content: string): void {
@@ -245,6 +262,20 @@ export class Store {
       totalSessions: sessionsRow.count,
       dbSizeBytes: sizeRow?.size ?? 0,
     };
+  }
+
+  getMaxChunkIndex(sessionId: string): number {
+    const row = this.db
+      .prepare('SELECT MAX(chunk_index) AS maxIndex FROM chunks WHERE session_id = ?')
+      .get(sessionId) as { maxIndex: number | null } | undefined;
+    return row?.maxIndex ?? -1;
+  }
+
+  countChunksForSession(sessionId: string): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS count FROM chunks WHERE session_id = ?')
+      .get(sessionId) as { count: number } | undefined;
+    return row?.count ?? 0;
   }
 
   insertEmbedding(chunkId: number, embedding: Float32Array): void {

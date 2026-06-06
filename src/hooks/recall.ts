@@ -8,6 +8,9 @@ import { searchFts } from '@/search/fts';
 import { rankResults, applyProjectPenalty, reciprocalRankFusion } from '@/search/hybrid';
 import { formatResults } from '@/search/formatter';
 import { recoverTranscripts } from '@/hooks/recover';
+import { savePendingCodexPrompt } from '@/hooks/codex';
+
+export type HookRuntime = 'claude' | 'codex';
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -34,7 +37,12 @@ export async function handleRecall(
     const store = new Store(db);
 
     const rawPath = projectOverride || input.cwd || process.cwd();
-    const projectPath = fs.realpathSync(rawPath);
+    let projectPath: string;
+    try {
+      projectPath = fs.realpathSync(rawPath);
+    } catch {
+      projectPath = rawPath;
+    }
     const isTiered = config.search.projectScope === 'tiered';
     const allProjects = config.search.projectScope === false;
     const scopedOnly = config.search.projectScope === true;
@@ -115,17 +123,27 @@ export async function handleRecall(
   }
 }
 
-export async function runRecall(configPath?: string, projectOverride?: string): Promise<void> {
+export async function runRecall(
+  configPath?: string,
+  projectOverride?: string,
+  runtime: HookRuntime = 'claude'
+): Promise<void> {
   try {
     const raw = await readStdin();
     const input = JSON.parse(raw) as {
       prompt: string;
       session_id: string;
+      turn_id?: string;
       cwd?: string;
+      model?: string;
     };
 
-    // 非同期でリカバリを実行（結果を待たず、失敗しても無視）
-    recoverTranscripts(configPath).catch(() => {});
+    if (runtime === 'codex') {
+      savePendingCodexPrompt(input, configPath);
+    } else {
+      // 非同期でリカバリを実行（結果を待たず、失敗しても無視）
+      recoverTranscripts(configPath).catch(() => {});
+    }
 
     const result = await handleRecall(input, configPath, projectOverride);
     if (result) {

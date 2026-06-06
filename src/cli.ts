@@ -12,7 +12,8 @@ import { formatResults } from '@/search/formatter';
 import { runSave } from '@/hooks/save';
 import { runRecall } from '@/hooks/recall';
 import { runInject } from '@/hooks/inject';
-import { setupHooks } from '@/hooks/setup';
+import { setupHooks, getSetupStatus, uninstallHooks } from '@/hooks/setup';
+import type { SetupTarget, SetupScope } from '@/hooks/setup';
 import { rebuildFromJsonl } from '@/jsonl/rebuild';
 import { migrateSqliteToJsonl } from '@/jsonl/migrate';
 import { importClaudeMem } from '@/import/claude-mem';
@@ -59,32 +60,38 @@ function parseDuration(value: string): number {
 
 // ── Command Handlers ─────────────────────────────────────────────────
 
-export async function cmdSave(stdin: boolean, configPath?: string): Promise<void> {
+export async function cmdSave(
+  stdin: boolean,
+  configPath?: string,
+  runtime: 'claude' | 'codex' = 'claude'
+): Promise<void> {
   if (!stdin) {
     console.log('Usage: kizami save --stdin');
     console.log('  Reads JSON from stdin (SessionEnd hook).');
     return;
   }
-  await runSave(configPath);
+  await runSave(configPath, runtime);
 }
 
 export async function cmdRecall(
   stdin: boolean,
   configPath?: string,
-  projectPath?: string
+  projectPath?: string,
+  runtime: 'claude' | 'codex' = 'claude'
 ): Promise<void> {
   if (!stdin) {
     console.log('Usage: kizami recall --stdin');
     console.log('  Reads JSON from stdin (UserPromptSubmit hook).');
     return;
   }
-  await runRecall(configPath, projectPath);
+  await runRecall(configPath, projectPath, runtime);
 }
 
 export async function cmdInject(
   stdin: boolean,
   configPath?: string,
-  projectPath?: string
+  projectPath?: string,
+  runtime: 'claude' | 'codex' = 'claude'
 ): Promise<void> {
   if (!stdin) {
     console.log('Usage: kizami inject --stdin');
@@ -92,7 +99,7 @@ export async function cmdInject(
     console.log('  Injects recent project Q&A into session context.');
     return;
   }
-  await runInject(configPath, projectPath);
+  await runInject(configPath, projectPath, runtime);
 }
 
 export async function cmdRebuild(options: {
@@ -261,8 +268,31 @@ export function cmdStats(options: { config?: string }): StoreStats {
   }
 }
 
-export async function cmdSetup(hybrid: boolean): Promise<void> {
-  await setupHooks({ hybrid });
+export async function cmdSetup(options: {
+  hybrid: boolean;
+  target?: SetupTarget;
+  scope?: SetupScope;
+  configPath?: string;
+}): Promise<void> {
+  await setupHooks({ ...options, configPath: options.configPath });
+}
+
+export function cmdSetupStatus(options: { target?: SetupTarget; scope?: SetupScope }): void {
+  const statuses = getSetupStatus(options);
+  for (const s of statuses) {
+    console.log(
+      `${s.target.padEnd(6)} ${s.installed ? 'installed' : 'missing'} hooks=${s.hookCount} ${s.writable ? 'managed' : 'read-only'} path=${s.path}`
+    );
+  }
+}
+
+export function cmdSetupUninstall(options: { target?: SetupTarget; scope?: SetupScope }): void {
+  const statuses = uninstallHooks(options);
+  for (const s of statuses) {
+    console.log(
+      `${s.target.padEnd(6)} ${s.removed ? 'removed' : 'not-removed'} ${s.writable ? 'managed' : 'read-only'} path=${s.path}`
+    );
+  }
 }
 
 export function cmdPrune(olderThan: string, options: { config?: string }): number {
@@ -433,6 +463,8 @@ Commands:
   list              List sessions
   stats             Show statistics
   setup             Auto-configure Claude Code hooks
+                    --target claude|codex|all (default: claude)
+                    setup status|uninstall for diagnostics/removal
   prune             Bulk delete old memories
   export            Export as JSON/Markdown
   merge             Merge similar chunks
@@ -447,6 +479,9 @@ Options:
   --project <path>    Project path
   --all-projects      Search across all projects
   --config <path>     Config file path
+  --runtime <name>    Hook runtime: claude|codex
+  --target <name>     setup target: claude|codex|all
+  --scope <name>      setup scope for Codex: user|project
   --stdin             Read input from stdin (for hooks)
   --dry-run           rebuild: do not write SQLite
   --from-month <YYYY-MM>  rebuild: limit to a single month
@@ -472,6 +507,9 @@ async function main(): Promise<void> {
       'dry-run': { type: 'boolean', default: false },
       threshold: { type: 'string' },
       hybrid: { type: 'boolean', default: false },
+      runtime: { type: 'string' },
+      target: { type: 'string' },
+      scope: { type: 'string' },
       backfill: { type: 'boolean', default: false },
       'from-month': { type: 'string' },
       version: { type: 'boolean', short: 'v', default: false },
@@ -495,14 +533,54 @@ async function main(): Promise<void> {
     allProjects: values['all-projects'] as boolean | undefined,
     config: values['config'] as string | undefined,
   };
+  if (
+    values['runtime'] !== undefined &&
+    values['runtime'] !== 'codex' &&
+    values['runtime'] !== 'claude'
+  ) {
+    console.error('Invalid --runtime. Use claude or codex.');
+    process.exitCode = 1;
+    return;
+  }
+  if (
+    values['target'] !== undefined &&
+    values['target'] !== 'codex' &&
+    values['target'] !== 'claude' &&
+    values['target'] !== 'all'
+  ) {
+    console.error('Invalid --target. Use claude, codex, or all.');
+    process.exitCode = 1;
+    return;
+  }
+  if (
+    values['scope'] !== undefined &&
+    values['scope'] !== 'project' &&
+    values['scope'] !== 'user'
+  ) {
+    console.error('Invalid --scope. Use user or project.');
+    process.exitCode = 1;
+    return;
+  }
+  const runtime =
+    values['runtime'] === 'codex' || values['runtime'] === 'claude'
+      ? (values['runtime'] as 'claude' | 'codex')
+      : 'claude';
+  const target =
+    values['target'] === 'codex' || values['target'] === 'claude' || values['target'] === 'all'
+      ? (values['target'] as SetupTarget)
+      : undefined;
+  const scope =
+    values['scope'] === 'project' || values['scope'] === 'user'
+      ? (values['scope'] as SetupScope)
+      : undefined;
 
   switch (command) {
     case 'save':
-      await cmdSave(!!values['stdin'], sharedOpts.config);
+      await cmdSave(!!values['stdin'], sharedOpts.config, runtime);
       break;
 
     case 'recall':
-      await cmdRecall(!!values['stdin'], sharedOpts.config, sharedOpts.project);
+      await cmdRecall(!!values['stdin'], sharedOpts.config, sharedOpts.project, runtime);
       break;
 
     case 'search': {
@@ -552,7 +630,18 @@ async function main(): Promise<void> {
       break;
 
     case 'setup':
-      await cmdSetup(!!values['hybrid']);
+      if (positionals[1] === 'status') {
+        cmdSetupStatus({ target, scope });
+      } else if (positionals[1] === 'uninstall') {
+        cmdSetupUninstall({ target, scope });
+      } else {
+        await cmdSetup({
+          hybrid: !!values['hybrid'],
+          target,
+          scope,
+          configPath: sharedOpts.config,
+        });
+      }
       break;
 
     case 'prune': {
@@ -604,7 +693,7 @@ async function main(): Promise<void> {
       break;
 
     case 'inject':
-      await cmdInject(!!values['stdin'], sharedOpts.config, sharedOpts.project);
+      await cmdInject(!!values['stdin'], sharedOpts.config, sharedOpts.project, runtime);
       break;
 
     case 'rebuild':

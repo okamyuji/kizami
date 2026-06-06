@@ -4,18 +4,15 @@ import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
-import {
-  getDefaultDbPath,
-  getDefaultJsonlDir,
-  getConfigFilePath,
-  getDefaultConfig,
-} from '@/config';
+import { getConfigFilePath, getDefaultConfig } from '@/config';
+import { loadConfig } from '@/config';
 import { Store } from '@/db/store';
 import { ensureJsonlDir } from '@/jsonl/path';
 
 interface HookEntry {
   type: string;
   command: string;
+  timeout?: number;
 }
 
 interface HookMatcher {
@@ -31,10 +28,42 @@ export interface SetupOptions {
   settingsPath?: string;
   dbPath?: string;
   hybrid?: boolean;
+  target?: SetupTarget;
+  scope?: SetupScope;
+  codexHooksPath?: string;
+  configPath?: string;
+  jsonlDir?: string;
+  binPath?: string;
+}
+
+export type SetupTarget = 'claude' | 'codex' | 'all';
+export type SetupScope = 'user' | 'project';
+
+export interface SetupStatus {
+  target: 'claude' | 'codex';
+  path: string;
+  installed: boolean;
+  hookCount: number;
+  writable: boolean;
+  removed?: boolean;
 }
 
 function getDefaultSettingsPath(): string {
   return path.join(os.homedir(), '.claude', 'settings.json');
+}
+
+function getDefaultCodexHooksPath(scope: SetupScope): string {
+  if (scope === 'project') {
+    return path.join(process.cwd(), '.codex', 'hooks.json');
+  }
+  return path.join(os.homedir(), '.codex', 'hooks.json');
+}
+
+function getDefaultCodexConfigPath(scope: SetupScope): string {
+  if (scope === 'project') {
+    return path.join(process.cwd(), '.codex', 'config.toml');
+  }
+  return path.join(os.homedir(), '.codex', 'config.toml');
 }
 
 function readSettings(settingsPath: string): ClaudeSettings {
@@ -53,7 +82,7 @@ function writeSettings(settingsPath: string, settings: ClaudeSettings): void {
 }
 
 function isEngramHook(hook: HookEntry): boolean {
-  return hook.command.includes('kizami ');
+  return hook.command.includes('# kizami-managed');
 }
 
 function mergeHooks(existing: HookMatcher[] | undefined, newMatcher: HookMatcher): HookMatcher[] {
@@ -62,18 +91,18 @@ function mergeHooks(existing: HookMatcher[] | undefined, newMatcher: HookMatcher
   return [...filtered, newMatcher];
 }
 
-function writeEngramConfig(mode: 'core' | 'hybrid'): void {
-  const configPath = getConfigFilePath();
+function writeEngramConfig(mode: 'core' | 'hybrid', configPath?: string): void {
+  const filePath = configPath ?? getConfigFilePath();
   const defaults = getDefaultConfig();
   defaults.search.mode = mode;
 
-  const configDir = path.dirname(configPath);
+  const configDir = path.dirname(filePath);
   fs.mkdirSync(configDir, { recursive: true });
 
   // 既存設定があればmodeだけ更新
   let config: Record<string, unknown> = {};
   try {
-    const raw = fs.readFileSync(configPath, 'utf-8');
+    const raw = fs.readFileSync(filePath, 'utf-8');
     config = JSON.parse(raw) as Record<string, unknown>;
   } catch {
     // 新規作成
@@ -84,8 +113,8 @@ function writeEngramConfig(mode: 'core' | 'hybrid'): void {
   }
   (config['search'] as Record<string, unknown>)['mode'] = mode;
 
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
-  console.log(`  Config: ${configPath} (mode: ${mode})`);
+  fs.writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  console.log(`  Config: ${filePath} (mode: ${mode})`);
 }
 
 function checkHybridDependencies(): { available: boolean; missing: string[] } {
@@ -104,10 +133,40 @@ function checkHybridDependencies(): { available: boolean; missing: string[] } {
   return { available: missing.length === 0, missing };
 }
 
-export async function setupHooks(options?: SetupOptions): Promise<void> {
+function createHook(command: string, timeout?: number): HookMatcher {
+  return {
+    hooks: [
+      {
+        type: 'command',
+        command,
+        ...(timeout ? { timeout } : {}),
+      } as HookEntry,
+    ],
+  };
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_.-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function getKizamiCommand(options?: SetupOptions): string {
+  if (options?.binPath) {
+    return shellQuote(options.binPath);
+  }
+  const entrypoint = process.argv[1];
+  if (entrypoint && path.basename(entrypoint) === 'cli.js' && fs.existsSync(entrypoint)) {
+    return `${shellQuote(process.execPath)} ${shellQuote(entrypoint)}`;
+  }
+  return 'kizami';
+}
+
+function setupClaudeHooks(options?: SetupOptions): void {
   const settingsPath = options?.settingsPath ?? getDefaultSettingsPath();
   const settings = readSettings(settingsPath);
-  const hybrid = options?.hybrid ?? false;
+  const kizamiCommand = getKizamiCommand(options);
 
   const errorLogPath = path.join(
     process.env['XDG_DATA_HOME'] || path.join(os.homedir(), '.local', 'share'),
@@ -123,7 +182,7 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     hooks: [
       {
         type: 'command',
-        command: `bash -c 'INPUT=$(cat); (printf "%s" "$INPUT" | kizami save --stdin >/dev/null 2>> "${errorLogPath}" &); exit 0'`,
+        command: `bash -c 'INPUT=$(cat); (printf "%s" "$INPUT" | ${kizamiCommand} save --stdin --runtime claude >/dev/null 2>> "${errorLogPath}" &); exit 0' # kizami-managed`,
       },
     ],
   };
@@ -132,7 +191,7 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     hooks: [
       {
         type: 'command',
-        command: 'kizami recall --stdin',
+        command: `${kizamiCommand} recall --stdin --runtime claude # kizami-managed`,
       },
     ],
   };
@@ -143,7 +202,7 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     hooks: [
       {
         type: 'command',
-        command: 'kizami inject --stdin',
+        command: `${kizamiCommand} inject --stdin --runtime claude # kizami-managed`,
       },
     ],
   };
@@ -157,13 +216,56 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
   settings.hooks['SessionStart'] = mergeHooks(settings.hooks['SessionStart'], injectHook);
 
   writeSettings(settingsPath, settings);
+}
+
+function setupCodexHooks(options?: SetupOptions): void {
+  const scope = options?.scope ?? 'user';
+  const hooksPath = options?.codexHooksPath ?? getDefaultCodexHooksPath(scope);
+  const settings = readSettings(hooksPath);
+  const kizamiCommand = getKizamiCommand(options);
+
+  if (!settings.hooks) {
+    settings.hooks = {};
+  }
+
+  settings.hooks['SessionStart'] = mergeHooks(
+    settings.hooks['SessionStart'],
+    createHook(`${kizamiCommand} inject --stdin --runtime codex # kizami-managed`, 5)
+  );
+  settings.hooks['UserPromptSubmit'] = mergeHooks(
+    settings.hooks['UserPromptSubmit'],
+    createHook(`${kizamiCommand} recall --stdin --runtime codex # kizami-managed`, 5)
+  );
+  settings.hooks['Stop'] = mergeHooks(
+    settings.hooks['Stop'],
+    createHook(`${kizamiCommand} save --stdin --runtime codex # kizami-managed`, 5)
+  );
+
+  writeSettings(hooksPath, settings);
+}
+
+function initializeKizamiStorage(options?: SetupOptions): void {
+  const hybrid = options?.hybrid ?? false;
+  writeEngramConfig(hybrid ? 'hybrid' : 'core', options?.configPath);
+  let config = loadConfig(options?.configPath);
+  if (options?.dbPath) {
+    config = { ...config, database: { path: options.dbPath } };
+  }
+  if (options?.jsonlDir) {
+    config = { ...config, storage: { ...config.storage, jsonlDir: options.jsonlDir } };
+  }
+  const errorLogPath = path.join(
+    process.env['XDG_DATA_HOME'] || path.join(os.homedir(), '.local', 'share'),
+    'kizami',
+    'error.log'
+  );
 
   // Initialize database
-  const dbPath = options?.dbPath ?? getDefaultDbPath();
+  const dbPath = config.database.path;
   const db = getDatabase(dbPath);
 
   // JSONL正本ディレクトリを準備（v0.2.0〜）
-  const jsonlDir = getDefaultJsonlDir();
+  const jsonlDir = config.storage.jsonlDir;
   ensureJsonlDir(jsonlDir);
 
   // 既存ユーザー向けマイグレーション案内
@@ -192,9 +294,6 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
   try {
     initializeSchema(db);
 
-    // Write kizami config
-    writeEngramConfig(hybrid ? 'hybrid' : 'core');
-
     // Hybrid mode dependency check
     if (hybrid) {
       const deps = checkHybridDependencies();
@@ -221,8 +320,138 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
   }
 
   console.log('kizami hooks installed successfully.');
-  console.log(`  Settings: ${settingsPath}`);
   console.log(`  Database: ${dbPath}`);
   console.log(`  JSONL dir: ${jsonlDir}`);
   console.log(`  Error log: ${errorLogPath}`);
+}
+
+export async function setupHooks(options?: SetupOptions): Promise<void> {
+  const target = options?.target ?? 'claude';
+
+  if (target === 'claude' || target === 'all') {
+    setupClaudeHooks(options);
+    console.log(`  Claude settings: ${options?.settingsPath ?? getDefaultSettingsPath()}`);
+  }
+  if (target === 'codex' || target === 'all') {
+    setupCodexHooks(options);
+    const codexPath = options?.codexHooksPath ?? getDefaultCodexHooksPath(options?.scope ?? 'user');
+    console.log(`  Codex hooks: ${codexPath}`);
+    console.log('  Codex note: run /hooks in Codex to review and trust the new hook definitions.');
+  }
+
+  initializeKizamiStorage(options);
+}
+
+function countKizamiHooks(settings: ClaudeSettings): number {
+  let count = 0;
+  for (const matchers of Object.values(settings.hooks ?? {})) {
+    for (const matcher of matchers) {
+      count += matcher.hooks.filter((h) => isEngramHook(h)).length;
+    }
+  }
+  return count;
+}
+
+function countManagedMarkersInFile(filePath: string): number {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    return (raw.match(/# kizami-managed/g) ?? []).length;
+  } catch {
+    return 0;
+  }
+}
+
+function isWritableHooksJson(filePath: string): boolean {
+  return path.basename(filePath) === 'hooks.json';
+}
+
+export function getSetupStatus(options?: SetupOptions): SetupStatus[] {
+  const target = options?.target ?? 'all';
+  const results: SetupStatus[] = [];
+
+  if (target === 'claude' || target === 'all') {
+    const settingsPath = options?.settingsPath ?? getDefaultSettingsPath();
+    const settings = readSettings(settingsPath);
+    const hookCount = countKizamiHooks(settings);
+    results.push({
+      target: 'claude',
+      path: settingsPath,
+      installed: hookCount > 0,
+      hookCount,
+      writable: true,
+      removed: false,
+    });
+  }
+  if (target === 'codex' || target === 'all') {
+    const scope = options?.scope;
+    const paths = options?.codexHooksPath
+      ? [options.codexHooksPath]
+      : [
+          ...(scope == null || scope === 'user'
+            ? [getDefaultCodexHooksPath('user'), getDefaultCodexConfigPath('user')]
+            : []),
+          ...(scope == null || scope === 'project'
+            ? [getDefaultCodexHooksPath('project'), getDefaultCodexConfigPath('project')]
+            : []),
+        ];
+    for (const codexPath of paths) {
+      const hookCount = isWritableHooksJson(codexPath)
+        ? countKizamiHooks(readSettings(codexPath))
+        : countManagedMarkersInFile(codexPath);
+      results.push({
+        target: 'codex',
+        path: codexPath,
+        installed: hookCount > 0,
+        hookCount,
+        writable: isWritableHooksJson(codexPath),
+        removed: false,
+      });
+    }
+  }
+
+  return results;
+}
+
+function removeKizamiHooks(settings: ClaudeSettings): ClaudeSettings {
+  if (!settings.hooks) return settings;
+  for (const event of Object.keys(settings.hooks)) {
+    settings.hooks[event] = settings.hooks[event]
+      .map((matcher) => ({
+        ...matcher,
+        hooks: matcher.hooks.filter((h) => !isEngramHook(h)),
+      }))
+      .filter((matcher) => matcher.hooks.length > 0);
+  }
+  return settings;
+}
+
+export function uninstallHooks(options?: SetupOptions): SetupStatus[] {
+  const target = options?.target ?? 'all';
+  const removedPaths = new Set<string>();
+
+  if (target === 'claude' || target === 'all') {
+    const settingsPath = options?.settingsPath ?? getDefaultSettingsPath();
+    const settings = removeKizamiHooks(readSettings(settingsPath));
+    writeSettings(settingsPath, settings);
+    removedPaths.add(settingsPath);
+  }
+  if (target === 'codex' || target === 'all') {
+    const scope = options?.scope;
+    const paths = options?.codexHooksPath
+      ? [options.codexHooksPath]
+      : [
+          ...(scope == null || scope === 'user' ? [getDefaultCodexHooksPath('user')] : []),
+          ...(scope == null || scope === 'project' ? [getDefaultCodexHooksPath('project')] : []),
+        ];
+    for (const hooksPath of paths) {
+      const settings = removeKizamiHooks(readSettings(hooksPath));
+      writeSettings(hooksPath, settings);
+      removedPaths.add(hooksPath);
+    }
+  }
+
+  return getSetupStatus(options).map((status) => ({
+    ...status,
+    removed: removedPaths.has(status.path),
+  }));
 }

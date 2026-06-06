@@ -10,6 +10,8 @@ import { runAutoMaintenance } from '@/maintenance/auto';
 import { JsonlWriter } from '@/jsonl/writer';
 import { chunksToJsonlRecords } from '@/jsonl/converter';
 import { selfHealFromJsonl } from '@/jsonl/self_heal';
+import { handleCodexStop } from '@/hooks/codex';
+import type { HookRuntime } from '@/hooks/recall';
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -41,7 +43,12 @@ export async function handleSave(
     const messages = await parseTranscript(input.transcript_path);
     if (messages.length === 0) return;
 
-    const projectPath = fs.realpathSync(input.cwd);
+    let projectPath: string;
+    try {
+      projectPath = fs.realpathSync(input.cwd);
+    } catch {
+      projectPath = input.cwd || process.cwd();
+    }
     const chunks = buildChunks(messages, input.session_id, projectPath);
 
     if (chunks.length === 0) return;
@@ -116,13 +123,25 @@ export async function handleSave(
   }
 }
 
-export async function runSave(configPath?: string): Promise<void> {
+export async function runSave(configPath?: string, runtime: HookRuntime = 'claude'): Promise<void> {
   // SIGINTハンドラはcli.tsのトップレベルで早期登録済み（ここは念のため二重登録）
   process.on('SIGINT', () => {});
   process.on('SIGTERM', () => {});
 
   try {
     const raw = await readStdin();
+    if (runtime === 'codex') {
+      const input = JSON.parse(raw) as {
+        session_id: string;
+        turn_id?: string;
+        cwd?: string;
+        transcript_path?: string | null;
+        last_assistant_message?: string | null;
+        model?: string;
+      };
+      await handleCodexStop(input, configPath);
+      return;
+    }
     const input = JSON.parse(raw) as {
       session_id: string;
       transcript_path: string;
