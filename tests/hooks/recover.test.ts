@@ -20,14 +20,20 @@ describe('projectDirToPath', () => {
 describe('recoverTranscripts', () => {
   let tmpDir: string;
   let dbPath: string;
+  let jsonlDir: string;
   let configPath: string;
   let fakeProjectsDir: string;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-recover-'));
     dbPath = path.join(tmpDir, 'test.db');
+    jsonlDir = path.join(tmpDir, 'jsonl');
     configPath = path.join(tmpDir, 'config.json');
-    fs.writeFileSync(configPath, JSON.stringify({ database: { path: dbPath } }), 'utf-8');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ database: { path: dbPath }, storage: { jsonlDir } }),
+      'utf-8'
+    );
 
     // ~/.claude/projects/ の代わりとなるフェイクディレクトリ
     fakeProjectsDir = path.join(tmpDir, 'projects');
@@ -63,6 +69,8 @@ describe('recoverTranscripts', () => {
     expect(sessions.length).toBe(1);
     expect(sessions[0].sessionId).toBe('unsaved-session-1');
     expect(sessions[0].chunkCount).toBeGreaterThan(0);
+    const jsonlFiles = fs.readdirSync(jsonlDir).filter((f) => f.endsWith('.jsonl'));
+    expect(jsonlFiles.length).toBe(1);
 
     db.close();
   });

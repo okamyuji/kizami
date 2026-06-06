@@ -7,6 +7,8 @@ import { initializeSchema } from '@/db/schema';
 import { Store } from '@/db/store';
 import { parseTranscript } from '@/parser/transcript';
 import { buildChunks } from '@/parser/chunker';
+import { JsonlWriter } from '@/jsonl/writer';
+import { chunksToJsonlRecords } from '@/jsonl/converter';
 
 export interface RecoverResult {
   recovered: number;
@@ -95,6 +97,8 @@ export async function recoverTranscripts(
             continue;
           }
 
+          const writer = new JsonlWriter(config.storage.jsonlDir);
+          writer.appendRecords(chunksToJsonlRecords(chunks));
           store.insertChunks(chunks);
 
           const firstHuman = messages.find((m) => m.kind === 'user');

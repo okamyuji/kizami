@@ -5,6 +5,7 @@ import { initializeSchema } from '@/db/schema';
 import { Store } from '@/db/store';
 import { formatResults } from '@/search/formatter';
 import type { SearchResult } from '@/db/store';
+import type { HookRuntime } from '@/hooks/recall';
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -29,8 +30,10 @@ async function readStdin(): Promise<string> {
 export async function handleInject(
   input: { hook_event_name?: string; session_id?: string; cwd?: string },
   configPath?: string,
-  projectOverride?: string
+  projectOverride?: string,
+  runtime: HookRuntime = 'claude'
 ): Promise<string> {
+  void runtime;
   const config = loadConfig(configPath);
   const db = getDatabase(config.database.path);
 
@@ -72,7 +75,11 @@ export async function handleInject(
   }
 }
 
-export async function runInject(configPath?: string, projectOverride?: string): Promise<void> {
+export async function runInject(
+  configPath?: string,
+  projectOverride?: string,
+  runtime: HookRuntime = 'claude'
+): Promise<void> {
   try {
     const raw = await readStdin();
     let input: { hook_event_name?: string; session_id?: string; cwd?: string } = {};
@@ -83,7 +90,7 @@ export async function runInject(configPath?: string, projectOverride?: string): 
         input = {};
       }
     }
-    const result = await handleInject(input, configPath, projectOverride);
+    const result = await handleInject(input, configPath, projectOverride, runtime);
     if (result) {
       process.stdout.write(result);
     }
