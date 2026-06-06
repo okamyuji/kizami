@@ -1,3 +1,9 @@
+## [0.3.1](https://github.com/okamyuji/kizami/compare/v0.3.0...v0.3.1) (2026-06-06)
+
+### Bug Fixes
+
+- **deps:** vitest 3.2.4→4.1.7でCritical脆弱性(GHSA-5xrq-8626-4rwp)を修正 ([3a0d685](https://github.com/okamyuji/kizami/commit/3a0d6852ee622ea0ac4b790669676b2e8b686506)), closes [#14](https://github.com/okamyuji/kizami/issues/14)
+
 ## [0.3.0](https://github.com/okamyuji/kizami/compare/v0.2.2...v0.3.0) (2026-06-06)
 
 ### Features
