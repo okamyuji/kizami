@@ -9,8 +9,9 @@ import { rankResults, applyProjectPenalty, reciprocalRankFusion } from '@/search
 import { formatResults } from '@/search/formatter';
 import { recoverTranscripts } from '@/hooks/recover';
 import { savePendingCodexPrompt } from '@/hooks/codex';
+import { parseKimiPromptInput } from '@/hooks/kimi';
 
-export type HookRuntime = 'claude' | 'codex';
+export type HookRuntime = 'claude' | 'codex' | 'kimi';
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -130,6 +131,18 @@ export async function runRecall(
 ): Promise<void> {
   try {
     const raw = await readStdin();
+
+    if (runtime === 'kimi') {
+      const kimiInput = parseKimiPromptInput(raw);
+      if (!kimiInput) return;
+      const prompt = kimiInput.prompt;
+      if (!prompt) return;
+      const input = { prompt, session_id: kimiInput.session_id, cwd: kimiInput.cwd };
+      const result = await handleRecall(input, configPath, projectOverride);
+      if (result) process.stdout.write(result);
+      return;
+    }
+
     const input = JSON.parse(raw) as {
       prompt: string;
       session_id: string;
@@ -140,8 +153,7 @@ export async function runRecall(
 
     if (runtime === 'codex') {
       savePendingCodexPrompt(input, configPath);
-    } else {
-      // 非同期でリカバリを実行（結果を待たず、失敗しても無視）
+    } else if (runtime === 'claude') {
       recoverTranscripts(configPath).catch(() => {});
     }
 

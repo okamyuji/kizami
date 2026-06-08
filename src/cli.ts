@@ -63,7 +63,7 @@ function parseDuration(value: string): number {
 export async function cmdSave(
   stdin: boolean,
   configPath?: string,
-  runtime: 'claude' | 'codex' = 'claude'
+  runtime: 'claude' | 'codex' | 'kimi' = 'claude'
 ): Promise<void> {
   if (!stdin) {
     console.log('Usage: kizami save --stdin');
@@ -77,7 +77,7 @@ export async function cmdRecall(
   stdin: boolean,
   configPath?: string,
   projectPath?: string,
-  runtime: 'claude' | 'codex' = 'claude'
+  runtime: 'claude' | 'codex' | 'kimi' = 'claude'
 ): Promise<void> {
   if (!stdin) {
     console.log('Usage: kizami recall --stdin');
@@ -91,7 +91,7 @@ export async function cmdInject(
   stdin: boolean,
   configPath?: string,
   projectPath?: string,
-  runtime: 'claude' | 'codex' = 'claude'
+  runtime: 'claude' | 'codex' | 'kimi' = 'claude'
 ): Promise<void> {
   if (!stdin) {
     console.log('Usage: kizami inject --stdin');
@@ -463,7 +463,7 @@ Commands:
   list              List sessions
   stats             Show statistics
   setup             Auto-configure Claude Code hooks
-                    --target claude|codex|all (default: claude)
+                    --target claude|codex|kimi|all (default: claude)
                     setup status|uninstall for diagnostics/removal
   prune             Bulk delete old memories
   export            Export as JSON/Markdown
@@ -479,8 +479,8 @@ Options:
   --project <path>    Project path
   --all-projects      Search across all projects
   --config <path>     Config file path
-  --runtime <name>    Hook runtime: claude|codex
-  --target <name>     setup target: claude|codex|all
+  --runtime <name>    Hook runtime: claude|codex|kimi
+  --target <name>     setup target: claude|codex|kimi|all
   --scope <name>      setup scope for Codex: user|project
   --stdin             Read input from stdin (for hooks)
   --dry-run           rebuild: do not write SQLite
@@ -536,9 +536,10 @@ async function main(): Promise<void> {
   if (
     values['runtime'] !== undefined &&
     values['runtime'] !== 'codex' &&
-    values['runtime'] !== 'claude'
+    values['runtime'] !== 'claude' &&
+    values['runtime'] !== 'kimi'
   ) {
-    console.error('Invalid --runtime. Use claude or codex.');
+    console.error('Invalid --runtime. Use claude, codex, or kimi.');
     process.exitCode = 1;
     return;
   }
@@ -546,9 +547,10 @@ async function main(): Promise<void> {
     values['target'] !== undefined &&
     values['target'] !== 'codex' &&
     values['target'] !== 'claude' &&
+    values['target'] !== 'kimi' &&
     values['target'] !== 'all'
   ) {
-    console.error('Invalid --target. Use claude, codex, or all.');
+    console.error('Invalid --target. Use claude, codex, kimi, or all.');
     process.exitCode = 1;
     return;
   }
@@ -562,11 +564,14 @@ async function main(): Promise<void> {
     return;
   }
   const runtime =
-    values['runtime'] === 'codex' || values['runtime'] === 'claude'
-      ? (values['runtime'] as 'claude' | 'codex')
+    values['runtime'] === 'codex' || values['runtime'] === 'claude' || values['runtime'] === 'kimi'
+      ? (values['runtime'] as 'claude' | 'codex' | 'kimi')
       : 'claude';
   const target =
-    values['target'] === 'codex' || values['target'] === 'claude' || values['target'] === 'all'
+    values['target'] === 'codex' ||
+    values['target'] === 'claude' ||
+    values['target'] === 'kimi' ||
+    values['target'] === 'all'
       ? (values['target'] as SetupTarget)
       : undefined;
   const scope =
@@ -643,7 +648,7 @@ async function main(): Promise<void> {
         });
       } else {
         console.error(
-          'Usage: kizami setup [install|status|uninstall] [--target claude|codex|all] [--scope user|project]'
+          'Usage: kizami setup [install|status|uninstall] [--target claude|codex|kimi|all] [--scope user|project]'
         );
         process.exitCode = 1;
       }

@@ -8,6 +8,13 @@ import { getConfigFilePath, getDefaultConfig } from '@/config';
 import { loadConfig } from '@/config';
 import { Store } from '@/db/store';
 import { ensureJsonlDir } from '@/jsonl/path';
+import {
+  writeKizamiTomlHooks,
+  removeKizamiTomlHooksFromFile,
+  countKizamiTomlHooks,
+  hasKizamiTomlBlock,
+} from '@/hooks/toml';
+import type { TomlHook } from '@/hooks/toml';
 
 interface HookEntry {
   type: string;
@@ -31,16 +38,17 @@ export interface SetupOptions {
   target?: SetupTarget;
   scope?: SetupScope;
   codexHooksPath?: string;
+  kimiConfigPath?: string;
   configPath?: string;
   jsonlDir?: string;
   binPath?: string;
 }
 
-export type SetupTarget = 'claude' | 'codex' | 'all';
+export type SetupTarget = 'claude' | 'codex' | 'kimi' | 'all';
 export type SetupScope = 'user' | 'project';
 
 export interface SetupStatus {
-  target: 'claude' | 'codex';
+  target: 'claude' | 'codex' | 'kimi';
   path: string;
   installed: boolean;
   hookCount: number;
@@ -250,6 +258,35 @@ function setupCodexHooks(options?: SetupOptions): void {
   writeSettings(hooksPath, settings);
 }
 
+function getDefaultKimiConfigPath(scope: SetupScope): string {
+  if (scope === 'project') {
+    return path.join(process.cwd(), '.kimi-code', 'config.toml');
+  }
+  const kimiHome = process.env['KIMI_CODE_HOME'] || path.join(os.homedir(), '.kimi-code');
+  return path.join(kimiHome, 'config.toml');
+}
+
+function setupKimiHooks(options?: SetupOptions): void {
+  const scope = options?.scope ?? 'user';
+  const kimiConfigPath = options?.kimiConfigPath ?? getDefaultKimiConfigPath(scope);
+  const kizamiCommand = getKizamiCommand(options);
+
+  const hooks: TomlHook[] = [
+    {
+      event: 'SessionStart',
+      command: `${kizamiCommand} inject --stdin --runtime kimi`,
+      timeout: 5,
+    },
+    {
+      event: 'UserPromptSubmit',
+      command: `${kizamiCommand} recall --stdin --runtime kimi`,
+      timeout: 5,
+    },
+  ];
+
+  writeKizamiTomlHooks(kimiConfigPath, hooks);
+}
+
 function initializeKizamiStorage(options?: SetupOptions): void {
   const hybrid = options?.hybrid ?? false;
   writeEngramConfig(hybrid ? 'hybrid' : 'core', options?.configPath);
@@ -344,6 +381,11 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     console.log(`  Codex hooks: ${codexPath}`);
     console.log('  Codex note: run /hooks in Codex to review and trust the new hook definitions.');
   }
+  if (target === 'kimi' || target === 'all') {
+    setupKimiHooks(options);
+    const kimiPath = options?.kimiConfigPath ?? getDefaultKimiConfigPath(options?.scope ?? 'user');
+    console.log(`  Kimi config: ${kimiPath}`);
+  }
 
   initializeKizamiStorage(options);
 }
@@ -415,6 +457,25 @@ export function getSetupStatus(options?: SetupOptions): SetupStatus[] {
     }
   }
 
+  if (target === 'kimi' || target === 'all') {
+    const scope = options?.scope;
+    const kimiPath = options?.kimiConfigPath ?? getDefaultKimiConfigPath(scope ?? 'user');
+    let hookCount = 0;
+    try {
+      const content = fs.readFileSync(kimiPath, 'utf-8');
+      hookCount = countKizamiTomlHooks(content);
+    } catch {
+      /* file does not exist */
+    }
+    results.push({
+      target: 'kimi',
+      path: kimiPath,
+      installed: hookCount > 0,
+      hookCount,
+      writable: true,
+    });
+  }
+
   return results;
 }
 
@@ -465,6 +526,20 @@ export function uninstallHooks(options?: SetupOptions): SetupStatus[] {
         writeSettings(hooksPath, after);
         removedPaths.add(hooksPath);
       }
+    }
+  }
+
+  if (target === 'kimi' || target === 'all') {
+    const scope = options?.scope;
+    const kimiPath = options?.kimiConfigPath ?? getDefaultKimiConfigPath(scope ?? 'user');
+    try {
+      const content = fs.readFileSync(kimiPath, 'utf-8');
+      if (hasKizamiTomlBlock(content)) {
+        removeKizamiTomlHooksFromFile(kimiPath);
+        removedPaths.add(kimiPath);
+      }
+    } catch {
+      /* file does not exist */
     }
   }
 

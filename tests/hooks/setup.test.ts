@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
-import { setupHooks, uninstallHooks } from '../../src/hooks/setup';
+import { setupHooks, uninstallHooks, getSetupStatus } from '../../src/hooks/setup';
 
 describe('setupHooks', () => {
   let tmpDir: string;
@@ -172,6 +172,74 @@ describe('setupHooks', () => {
     expect(settings.hooks.UserPromptSubmit[0].hooks[0].command).toBe('kizami search project-notes');
     expect(settings.hooks.UserPromptSubmit[1].hooks[0].command).toBe('kizami recall --stdin');
     expect(settings.hooks.UserPromptSubmit[2].hooks[0].command).toContain('# kizami-managed');
+  });
+
+  it('should write kimi hooks to config.toml with BEGIN/END markers', async () => {
+    const kimiConfigPath = path.join(tmpDir, '.kimi-code', 'config.toml');
+    await setupHooks({ ...setupOptions(), target: 'kimi', kimiConfigPath });
+
+    expect(fs.existsSync(kimiConfigPath)).toBe(true);
+    const content = fs.readFileSync(kimiConfigPath, 'utf-8');
+    expect(content).toContain('# BEGIN kizami-managed');
+    expect(content).toContain('# END kizami-managed');
+    expect(content).toContain('event = "SessionStart"');
+    expect(content).toContain('event = "UserPromptSubmit"');
+    expect(content).toContain('--runtime kimi');
+  });
+
+  it('should replace kimi hooks on re-run without duplication', async () => {
+    const kimiConfigPath = path.join(tmpDir, '.kimi-code', 'config.toml');
+    await setupHooks({ ...setupOptions(), target: 'kimi', kimiConfigPath });
+    await setupHooks({ ...setupOptions(), target: 'kimi', kimiConfigPath });
+
+    const content = fs.readFileSync(kimiConfigPath, 'utf-8');
+    const beginCount = content.split('# BEGIN kizami-managed').length - 1;
+    expect(beginCount).toBe(1);
+  });
+
+  it('should preserve existing non-kizami content in config.toml', async () => {
+    const kimiConfigPath = path.join(tmpDir, '.kimi-code', 'config.toml');
+    fs.mkdirSync(path.dirname(kimiConfigPath), { recursive: true });
+    fs.writeFileSync(kimiConfigPath, '[[hooks]]\nevent = "PreToolUse"\ncommand = "user-hook"\n');
+
+    await setupHooks({ ...setupOptions(), target: 'kimi', kimiConfigPath });
+
+    const content = fs.readFileSync(kimiConfigPath, 'utf-8');
+    expect(content).toContain('command = "user-hook"');
+    expect(content).toContain('# BEGIN kizami-managed');
+  });
+
+  it('should report kimi status with correct hookCount', async () => {
+    const kimiConfigPath = path.join(tmpDir, '.kimi-code', 'config.toml');
+    await setupHooks({ ...setupOptions(), target: 'kimi', kimiConfigPath });
+
+    const status = getSetupStatus({ target: 'kimi', kimiConfigPath });
+    expect(status).toHaveLength(1);
+    expect(status[0].target).toBe('kimi');
+    expect(status[0].hookCount).toBe(2);
+    expect(status[0].installed).toBe(true);
+  });
+
+  it('should uninstall kimi hooks from config.toml', async () => {
+    const kimiConfigPath = path.join(tmpDir, '.kimi-code', 'config.toml');
+    await setupHooks({ ...setupOptions(), target: 'kimi', kimiConfigPath });
+    const result = uninstallHooks({ target: 'kimi', kimiConfigPath });
+
+    const kimiStatus = result.find((s) => s.target === 'kimi');
+    expect(kimiStatus?.removed).toBe(true);
+    expect(kimiStatus?.hookCount).toBe(0);
+
+    const content = fs.readFileSync(kimiConfigPath, 'utf-8');
+    expect(content).not.toContain('# BEGIN kizami-managed');
+  });
+
+  it('should setup all targets including kimi', async () => {
+    const kimiConfigPath = path.join(tmpDir, '.kimi-code', 'config.toml');
+    await setupHooks({ ...setupOptions(), target: 'all', codexHooksPath, kimiConfigPath });
+
+    expect(fs.existsSync(settingsPath)).toBe(true);
+    expect(fs.existsSync(codexHooksPath)).toBe(true);
+    expect(fs.existsSync(kimiConfigPath)).toBe(true);
   });
 
   it('should report read-only Codex config sources as not removed on uninstall', () => {
