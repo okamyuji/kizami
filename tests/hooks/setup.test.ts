@@ -184,6 +184,7 @@ describe('setupHooks', () => {
     expect(content).toContain('# END kizami-managed');
     expect(content).toContain('event = "SessionStart"');
     expect(content).toContain('event = "UserPromptSubmit"');
+    expect(content).toContain('event = "SessionEnd"');
     expect(content).toContain('--runtime kimi');
   });
 
@@ -216,7 +217,7 @@ describe('setupHooks', () => {
     const status = getSetupStatus({ target: 'kimi', kimiConfigPath });
     expect(status).toHaveLength(1);
     expect(status[0].target).toBe('kimi');
-    expect(status[0].hookCount).toBe(2);
+    expect(status[0].hookCount).toBe(3);
     expect(status[0].installed).toBe(true);
   });
 

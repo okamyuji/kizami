@@ -271,6 +271,14 @@ function setupKimiHooks(options?: SetupOptions): void {
   const kimiConfigPath = options?.kimiConfigPath ?? getDefaultKimiConfigPath(scope);
   const kizamiCommand = getKizamiCommand(options);
 
+  const errorLogPath = path.join(
+    process.env['XDG_DATA_HOME'] || path.join(os.homedir(), '.local', 'share'),
+    'kizami',
+    'error.log'
+  );
+  const escapedErrorLogPath = errorLogPath.replace(/'/g, "'\\''");
+  const escapedKizamiCommand = kizamiCommand.replace(/'/g, "'\\''");
+
   const hooks: TomlHook[] = [
     {
       event: 'SessionStart',
@@ -281,6 +289,10 @@ function setupKimiHooks(options?: SetupOptions): void {
       event: 'UserPromptSubmit',
       command: `${kizamiCommand} recall --stdin --runtime kimi`,
       timeout: 5,
+    },
+    {
+      event: 'SessionEnd',
+      command: `bash -c 'INPUT=$(cat); (printf "%s" "$INPUT" | ${escapedKizamiCommand} save --stdin --runtime kimi >/dev/null 2>> "${escapedErrorLogPath}" &); exit 0'`,
     },
   ];
 

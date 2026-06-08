@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { loadConfig } from '@/config';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
@@ -9,7 +10,7 @@ import { rankResults, applyProjectPenalty, reciprocalRankFusion } from '@/search
 import { formatResults } from '@/search/formatter';
 import { recoverTranscripts } from '@/hooks/recover';
 import { savePendingCodexPrompt } from '@/hooks/codex';
-import { parseKimiPromptInput } from '@/hooks/kimi';
+import { parseKimiPromptInput, savePendingKimiPrompt } from '@/hooks/kimi';
 
 export type HookRuntime = 'claude' | 'codex' | 'kimi';
 
@@ -137,6 +138,9 @@ export async function runRecall(
       if (!kimiInput) return;
       const prompt = kimiInput.prompt;
       if (!prompt) return;
+      const config = loadConfig(configPath);
+      const pendingDir = path.join(path.dirname(config.database.path), 'pending', 'kimi');
+      savePendingKimiPrompt(kimiInput, pendingDir);
       const input = { prompt, session_id: kimiInput.session_id, cwd: kimiInput.cwd };
       const result = await handleRecall(input, configPath, projectOverride);
       if (result) process.stdout.write(result);

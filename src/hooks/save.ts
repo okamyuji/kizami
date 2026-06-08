@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from '@/config';
 import { getDatabase } from '@/db/connection';
@@ -11,6 +12,14 @@ import { JsonlWriter } from '@/jsonl/writer';
 import { chunksToJsonlRecords } from '@/jsonl/converter';
 import { selfHealFromJsonl } from '@/jsonl/self_heal';
 import { handleCodexStop } from '@/hooks/codex';
+import {
+  parseKimiSessionEndInput,
+  collectPendingKimiTurns,
+  findWireJsonlPath,
+  extractAssistantFromWireJsonl,
+} from '@/hooks/kimi';
+import { extractMetadata } from '@/parser/metadata';
+import type { Chunk } from '@/db/store';
 import type { HookRuntime } from '@/hooks/recall';
 
 async function readStdin(): Promise<string> {
@@ -131,7 +140,7 @@ export async function runSave(configPath?: string, runtime: HookRuntime = 'claud
   try {
     const raw = await readStdin();
     if (runtime === 'kimi') {
-      process.stderr.write('kizami save: kimi runtime is not yet supported (Phase 2)\n');
+      await handleKimiSessionEnd(raw, configPath);
       return;
     }
     if (runtime === 'codex') {
@@ -155,5 +164,99 @@ export async function runSave(configPath?: string, runtime: HookRuntime = 'claud
   } catch (err) {
     process.stderr.write(`kizami save error: ${String(err)}\n`);
     process.exit(0);
+  }
+}
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function resolveProjectPath(rawPath: string): string {
+  try {
+    return fs.realpathSync(rawPath);
+  } catch {
+    return rawPath;
+  }
+}
+
+async function handleKimiSessionEnd(raw: string, configPath?: string): Promise<void> {
+  const parsed = parseKimiSessionEndInput(raw);
+  if (!parsed) return;
+
+  const config = loadConfig(configPath);
+  const pendingDir = path.join(path.dirname(config.database.path), 'pending', 'kimi');
+  const turns = collectPendingKimiTurns(parsed.session_id, pendingDir, false);
+  if (turns.length === 0) return;
+
+  const wirePath = findWireJsonlPath(parsed.session_id);
+  const assistantText = wirePath ? extractAssistantFromWireJsonl(wirePath) : '';
+
+  const projectPath = resolveProjectPath(parsed.cwd ?? turns[0].cwd);
+  const allPrompts = turns.map((t) => t.prompt).join('\n\n');
+  const content = assistantText
+    ? `[User]\n${allPrompts}\n\n[Assistant]\n${assistantText}`
+    : `[User]\n${allPrompts}`;
+
+  if (!assistantText) return;
+
+  const db = getDatabase(config.database.path);
+  try {
+    initializeSchema(db);
+    const store = new Store(db);
+    try {
+      selfHealFromJsonl(store, config.storage.jsonlDir, config.storage.selfHealTailLines);
+    } catch {
+      /* non-blocking */
+    }
+
+    const createdAt = new Date().toISOString();
+    const { createHash } = await import('node:crypto');
+    const externalId = `kimi-${createHash('sha256').update(parsed.session_id).update('\0').update(allPrompts).update('\0').update(assistantText).digest('hex').slice(0, 32)}`;
+
+    if (store.getChunkIdByExternalId(externalId) !== undefined) return;
+
+    const metadata = {
+      ...extractMetadata(content),
+      sourceRuntime: 'kimi',
+      captureMethod: 'hooks',
+    };
+
+    const embeddings = new Map<number, { vec: Float32Array; model: string }>();
+    if (config.search.mode === 'hybrid') {
+      try {
+        initializeHybridSchema(db, config.embedding.dimensions);
+        const { getEmbedding } = await import('../search/embedding');
+        const vec = await getEmbedding('検索文書: ' + content.slice(0, 512), config);
+        embeddings.set(0, { vec, model: config.embedding.model });
+      } catch (err) {
+        process.stderr.write(`kizami kimi hybrid embedding error (skipped): ${String(err)}\n`);
+      }
+    }
+
+    const chunk: Chunk = {
+      externalId,
+      sessionId: parsed.session_id,
+      projectPath,
+      chunkIndex: store.getMaxChunkIndex(parsed.session_id) + 1,
+      content,
+      role: 'mixed',
+      metadata,
+      tokenCount: estimateTokens(content),
+      createdAt,
+    };
+
+    const writer = new JsonlWriter(config.storage.jsonlDir);
+    writer.appendRecords(chunksToJsonlRecords([chunk], embeddings));
+
+    const inserted = store.appendChunksWithoutReplace([chunk]);
+    if (inserted === 0) {
+      collectPendingKimiTurns(parsed.session_id, pendingDir, true);
+      return;
+    }
+
+    collectPendingKimiTurns(parsed.session_id, pendingDir, true);
+    runAutoMaintenance(store, config);
+  } finally {
+    db.close();
   }
 }
