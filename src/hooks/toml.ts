@@ -19,7 +19,11 @@ export function formatKizamiTomlBlock(hooks: TomlHook[]): string {
     if (hook.matcher != null) {
       lines.push(`matcher = "${hook.matcher}"`);
     }
-    lines.push(`command = "${hook.command}"`);
+    if (hook.command.includes('"')) {
+      lines.push(`command = '''${hook.command}'''`);
+    } else {
+      lines.push(`command = "${hook.command}"`);
+    }
     if (hook.timeout != null) {
       lines.push(`timeout = ${hook.timeout}`);
     }

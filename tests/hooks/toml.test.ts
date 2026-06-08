@@ -37,6 +37,15 @@ describe('formatKizamiTomlBlock', () => {
     expect(result).not.toContain('timeout');
   });
 
+  it('should use TOML literal string when command contains double quotes', () => {
+    const hooks: TomlHook[] = [
+      { event: 'SessionEnd', command: 'bash -c \'printf "%s" "$INPUT"\'' },
+    ];
+    const result = formatKizamiTomlBlock(hooks);
+    expect(result).toContain("command = '''");
+    expect(result).not.toMatch(/command = "[^']/);
+  });
+
   it('should include matcher when provided', () => {
     const hooks: TomlHook[] = [
       { event: 'PreToolUse', matcher: 'Shell', command: 'echo test', timeout: 3 },
