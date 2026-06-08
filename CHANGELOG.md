@@ -1,3 +1,10 @@
+## [0.4.2](https://github.com/okamyuji/kizami/compare/v0.4.1...v0.4.2) (2026-06-08)
+
+### Bug Fixes
+
+- CodeRabbit指摘4件を修正 ([0333b8e](https://github.com/okamyuji/kizami/commit/0333b8e1e5d2a79fa0b6b99b32a350fffa7b493c))
+- kimi-code save機能を実装(pending file + wire.jsonl抽出) ([97638ce](https://github.com/okamyuji/kizami/commit/97638ce5d852c137b5fb2aad85590e08f48d44c8))
+
 ## [0.4.1](https://github.com/okamyuji/kizami/compare/v0.4.0...v0.4.1) (2026-06-08)
 
 ### Bug Fixes
