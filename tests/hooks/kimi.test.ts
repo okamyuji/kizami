@@ -61,6 +61,31 @@ describe('parseKimiPromptInput', () => {
     expect(result!.prompt).toBe('How do I test this?');
   });
 
+  it('should parse prompt from array format (kimi-code v0.11+)', () => {
+    const raw = JSON.stringify({
+      session_id: 'sess_abc',
+      cwd: '/project',
+      prompt: [{ type: 'text', text: 'How do I test this?' }],
+    });
+    const result = parseKimiPromptInput(raw);
+    expect(result).not.toBeNull();
+    expect(result!.prompt).toBe('How do I test this?');
+  });
+
+  it('should join multiple text parts from array prompt', () => {
+    const raw = JSON.stringify({
+      session_id: 'sess_abc',
+      prompt: [
+        { type: 'text', text: 'Part 1' },
+        { type: 'image', url: 'http://example.com/img.png' },
+        { type: 'text', text: 'Part 2' },
+      ],
+    });
+    const result = parseKimiPromptInput(raw);
+    expect(result).not.toBeNull();
+    expect(result!.prompt).toBe('Part 1\nPart 2');
+  });
+
   it('should return result with undefined prompt when prompt field is missing', () => {
     const raw = JSON.stringify({
       hook_event_name: 'UserPromptSubmit',

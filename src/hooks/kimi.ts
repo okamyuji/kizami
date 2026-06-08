@@ -45,7 +45,15 @@ export function parseKimiPromptInput(raw: string): KimiPromptInput | null {
   try {
     const data = JSON.parse(raw) as Record<string, unknown>;
     if (typeof data.session_id !== 'string' || !data.session_id) return null;
-    const rawPrompt = typeof data.prompt === 'string' ? data.prompt : undefined;
+    let rawPrompt: string | undefined;
+    if (typeof data.prompt === 'string') {
+      rawPrompt = data.prompt;
+    } else if (Array.isArray(data.prompt)) {
+      rawPrompt = (data.prompt as { type?: string; text?: string }[])
+        .filter((p) => p.type === 'text' && typeof p.text === 'string')
+        .map((p) => p.text)
+        .join('\n');
+    }
     return {
       hook_event_name: typeof data.hook_event_name === 'string' ? data.hook_event_name : undefined,
       session_id: data.session_id,
