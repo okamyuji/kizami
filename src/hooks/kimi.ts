@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
@@ -104,7 +105,7 @@ export function savePendingKimiPrompt(
   };
 
   fs.mkdirSync(pendingDir, { recursive: true });
-  const key = `${safeFilePart(input.session_id)}-${hashText(prompt)}`;
+  const key = `${safeFilePart(input.session_id)}-${hashText(`${pending.createdAt}\0${prompt}`)}`;
   fs.writeFileSync(path.join(pendingDir, `${key}.json`), JSON.stringify(pending), {
     encoding: 'utf-8',
     mode: 0o600,
@@ -181,7 +182,8 @@ export function extractAssistantFromWireJsonl(wirePath: string): string {
 }
 
 export function findWireJsonlPath(sessionId: string, kimiHomeDir?: string): string | undefined {
-  const home = kimiHomeDir ?? path.join(process.env['HOME'] ?? '', '.kimi-code');
+  const home =
+    kimiHomeDir ?? process.env['KIMI_CODE_HOME'] ?? path.join(os.homedir(), '.kimi-code');
   const sessionsDir = path.join(home, 'sessions');
   if (!fs.existsSync(sessionsDir)) return undefined;
 

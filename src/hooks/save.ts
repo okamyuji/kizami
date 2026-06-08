@@ -185,7 +185,7 @@ async function handleKimiSessionEnd(raw: string, configPath?: string): Promise<v
 
   const config = loadConfig(configPath);
   const pendingDir = path.join(path.dirname(config.database.path), 'pending', 'kimi');
-  const turns = collectPendingKimiTurns(parsed.session_id, pendingDir, true);
+  const turns = collectPendingKimiTurns(parsed.session_id, pendingDir, false);
   if (turns.length === 0) return;
 
   const wirePath = findWireJsonlPath(parsed.session_id);
@@ -245,12 +245,16 @@ async function handleKimiSessionEnd(raw: string, configPath?: string): Promise<v
       createdAt,
     };
 
-    const inserted = store.appendChunksWithoutReplace([chunk]);
-    if (inserted === 0) return;
-
     const writer = new JsonlWriter(config.storage.jsonlDir);
     writer.appendRecords(chunksToJsonlRecords([chunk], embeddings));
 
+    const inserted = store.appendChunksWithoutReplace([chunk]);
+    if (inserted === 0) {
+      collectPendingKimiTurns(parsed.session_id, pendingDir, true);
+      return;
+    }
+
+    collectPendingKimiTurns(parsed.session_id, pendingDir, true);
     runAutoMaintenance(store, config);
   } finally {
     db.close();
