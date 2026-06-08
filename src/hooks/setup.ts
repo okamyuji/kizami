@@ -459,21 +459,28 @@ export function getSetupStatus(options?: SetupOptions): SetupStatus[] {
 
   if (target === 'kimi' || target === 'all') {
     const scope = options?.scope;
-    const kimiPath = options?.kimiConfigPath ?? getDefaultKimiConfigPath(scope ?? 'user');
-    let hookCount = 0;
-    try {
-      const content = fs.readFileSync(kimiPath, 'utf-8');
-      hookCount = countKizamiTomlHooks(content);
-    } catch {
-      /* file does not exist */
+    const kimiPaths = options?.kimiConfigPath
+      ? [options.kimiConfigPath]
+      : [
+          ...(scope == null || scope === 'user' ? [getDefaultKimiConfigPath('user')] : []),
+          ...(scope == null || scope === 'project' ? [getDefaultKimiConfigPath('project')] : []),
+        ];
+    for (const kimiPath of kimiPaths) {
+      let hookCount = 0;
+      try {
+        const content = fs.readFileSync(kimiPath, 'utf-8');
+        hookCount = countKizamiTomlHooks(content);
+      } catch {
+        /* file does not exist */
+      }
+      results.push({
+        target: 'kimi',
+        path: kimiPath,
+        installed: hookCount > 0,
+        hookCount,
+        writable: true,
+      });
     }
-    results.push({
-      target: 'kimi',
-      path: kimiPath,
-      installed: hookCount > 0,
-      hookCount,
-      writable: true,
-    });
   }
 
   return results;
@@ -531,15 +538,22 @@ export function uninstallHooks(options?: SetupOptions): SetupStatus[] {
 
   if (target === 'kimi' || target === 'all') {
     const scope = options?.scope;
-    const kimiPath = options?.kimiConfigPath ?? getDefaultKimiConfigPath(scope ?? 'user');
-    try {
-      const content = fs.readFileSync(kimiPath, 'utf-8');
-      if (hasKizamiTomlBlock(content)) {
-        removeKizamiTomlHooksFromFile(kimiPath);
-        removedPaths.add(kimiPath);
+    const kimiPaths = options?.kimiConfigPath
+      ? [options.kimiConfigPath]
+      : [
+          ...(scope == null || scope === 'user' ? [getDefaultKimiConfigPath('user')] : []),
+          ...(scope == null || scope === 'project' ? [getDefaultKimiConfigPath('project')] : []),
+        ];
+    for (const kimiPath of kimiPaths) {
+      try {
+        const content = fs.readFileSync(kimiPath, 'utf-8');
+        if (hasKizamiTomlBlock(content)) {
+          removeKizamiTomlHooksFromFile(kimiPath);
+          removedPaths.add(kimiPath);
+        }
+      } catch {
+        /* file does not exist */
       }
-    } catch {
-      /* file does not exist */
     }
   }
 
