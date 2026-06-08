@@ -1,5 +1,15 @@
-import { describe, it, expect } from 'vitest';
-import { parseKimiSessionStartInput, parseKimiPromptInput } from '../../src/hooks/kimi';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import * as fs from 'node:fs';
+import {
+  parseKimiSessionStartInput,
+  parseKimiPromptInput,
+  parseKimiSessionEndInput,
+  savePendingKimiPrompt,
+  collectPendingKimiTurns,
+  extractAssistantFromWireJsonl,
+} from '../../src/hooks/kimi';
 
 describe('parseKimiSessionStartInput', () => {
   it('should parse valid SessionStart JSON', () => {
@@ -84,5 +94,144 @@ describe('parseKimiPromptInput', () => {
 
   it('should return null for invalid JSON', () => {
     expect(parseKimiPromptInput('{bad')).toBeNull();
+  });
+});
+
+describe('parseKimiSessionEndInput', () => {
+  it('should parse valid SessionEnd JSON', () => {
+    const raw = JSON.stringify({
+      hook_event_name: 'SessionEnd',
+      session_id: 'sess_abc',
+      cwd: '/project',
+      reason: 'exit',
+    });
+    const result = parseKimiSessionEndInput(raw);
+    expect(result).not.toBeNull();
+    expect(result!.session_id).toBe('sess_abc');
+    expect(result!.reason).toBe('exit');
+  });
+
+  it('should return null when session_id is missing', () => {
+    expect(parseKimiSessionEndInput(JSON.stringify({ reason: 'exit' }))).toBeNull();
+  });
+});
+
+describe('pending file operations', () => {
+  let tmpDir: string;
+  let pendingDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-kimi-'));
+    pendingDir = path.join(tmpDir, 'pending', 'kimi');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should save and collect pending prompts for a session', () => {
+    savePendingKimiPrompt(
+      { session_id: 'sess_1', cwd: '/project', prompt: 'What is this?' },
+      pendingDir
+    );
+    savePendingKimiPrompt(
+      { session_id: 'sess_1', cwd: '/project', prompt: 'How to fix?' },
+      pendingDir
+    );
+    const turns = collectPendingKimiTurns('sess_1', pendingDir);
+    expect(turns).toHaveLength(2);
+  });
+
+  it('should not collect turns from other sessions', () => {
+    savePendingKimiPrompt({ session_id: 'sess_1', cwd: '/project', prompt: 'Q1' }, pendingDir);
+    savePendingKimiPrompt({ session_id: 'sess_2', cwd: '/project', prompt: 'Q2' }, pendingDir);
+    expect(collectPendingKimiTurns('sess_1', pendingDir)).toHaveLength(1);
+  });
+
+  it('should skip pending files older than 24 hours', () => {
+    savePendingKimiPrompt({ session_id: 'sess_1', cwd: '/project', prompt: 'old' }, pendingDir);
+    const files = fs.readdirSync(pendingDir);
+    const filePath = path.join(pendingDir, files[0]);
+    const pending = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    pending.createdAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    fs.writeFileSync(filePath, JSON.stringify(pending));
+    expect(collectPendingKimiTurns('sess_1', pendingDir)).toHaveLength(0);
+  });
+
+  it('should not save when prompt is empty', () => {
+    savePendingKimiPrompt({ session_id: 'sess_1', cwd: '/project', prompt: '' }, pendingDir);
+    expect(fs.existsSync(pendingDir)).toBe(false);
+  });
+
+  it('should clean up collected pending files', () => {
+    savePendingKimiPrompt({ session_id: 'sess_1', cwd: '/project', prompt: 'Q1' }, pendingDir);
+    collectPendingKimiTurns('sess_1', pendingDir, true);
+    const remaining = fs.readdirSync(pendingDir).filter((f) => f.includes('sess_1'));
+    expect(remaining).toHaveLength(0);
+  });
+});
+
+describe('extractAssistantFromWireJsonl', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-wire-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeWire(entries: object[]): string {
+    const wirePath = path.join(tmpDir, 'wire.jsonl');
+    fs.writeFileSync(wirePath, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+    return wirePath;
+  }
+
+  it('should extract last assistant text from content.part events', () => {
+    const wp = writeWire([
+      {
+        type: 'context.append_loop_event',
+        event: { type: 'content.part', part: { type: 'text', text: 'Hello, ' } },
+      },
+      {
+        type: 'context.append_loop_event',
+        event: { type: 'content.part', part: { type: 'text', text: 'world!' } },
+      },
+    ]);
+    expect(extractAssistantFromWireJsonl(wp)).toBe('Hello, world!');
+  });
+
+  it('should extract only the last turn after step.begin', () => {
+    const wp = writeWire([
+      {
+        type: 'context.append_loop_event',
+        event: { type: 'content.part', part: { type: 'text', text: 'first' } },
+      },
+      { type: 'context.append_loop_event', event: { type: 'step.end' } },
+      { type: 'context.append_loop_event', event: { type: 'step.begin' } },
+      {
+        type: 'context.append_loop_event',
+        event: { type: 'content.part', part: { type: 'text', text: 'second' } },
+      },
+    ]);
+    expect(extractAssistantFromWireJsonl(wp)).toBe('second');
+  });
+
+  it('should skip think parts', () => {
+    const wp = writeWire([
+      {
+        type: 'context.append_loop_event',
+        event: { type: 'content.part', part: { type: 'think', think: 'hmm' } },
+      },
+      {
+        type: 'context.append_loop_event',
+        event: { type: 'content.part', part: { type: 'text', text: 'answer' } },
+      },
+    ]);
+    expect(extractAssistantFromWireJsonl(wp)).toBe('answer');
+  });
+
+  it('should return empty string for nonexistent file', () => {
+    expect(extractAssistantFromWireJsonl('/nonexistent')).toBe('');
   });
 });
