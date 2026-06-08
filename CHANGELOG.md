@@ -1,3 +1,9 @@
+## [0.4.3](https://github.com/okamyuji/kizami/compare/v0.4.2...v0.4.3) (2026-06-08)
+
+### Bug Fixes
+
+- TOML command文字列にダブルクォートが含まれる場合にリテラル文字列を使用 ([ae37b4c](https://github.com/okamyuji/kizami/commit/ae37b4cae86cca67c6ff1b8403eb5e2b1c879330))
+
 ## [0.4.2](https://github.com/okamyuji/kizami/compare/v0.4.1...v0.4.2) (2026-06-08)
 
 ### Bug Fixes
