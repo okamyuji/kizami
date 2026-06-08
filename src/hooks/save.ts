@@ -130,6 +130,10 @@ export async function runSave(configPath?: string, runtime: HookRuntime = 'claud
 
   try {
     const raw = await readStdin();
+    if (runtime === 'kimi') {
+      process.stderr.write('kizami save: kimi runtime is not yet supported (Phase 2)\n');
+      return;
+    }
     if (runtime === 'codex') {
       const input = JSON.parse(raw) as {
         session_id: string;

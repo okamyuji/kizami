@@ -6,6 +6,7 @@ import { Store } from '@/db/store';
 import { formatResults } from '@/search/formatter';
 import type { SearchResult } from '@/db/store';
 import type { HookRuntime } from '@/hooks/recall';
+import { parseKimiSessionStartInput } from '@/hooks/kimi';
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -90,6 +91,17 @@ export async function runInject(
         input = {};
       }
     }
+    if (runtime === 'kimi') {
+      const kimiInput = parseKimiSessionStartInput(raw);
+      if (kimiInput) {
+        input = {
+          hook_event_name: kimiInput.hook_event_name,
+          session_id: kimiInput.session_id,
+          cwd: kimiInput.cwd,
+        };
+      }
+    }
+
     const result = await handleInject(input, configPath, projectOverride, runtime);
     if (result) {
       if (runtime === 'codex') {
