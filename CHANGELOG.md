@@ -1,3 +1,10 @@
+## [0.4.1](https://github.com/okamyuji/kizami/compare/v0.4.0...v0.4.1) (2026-06-08)
+
+### Bug Fixes
+
+- kimi-code (Moonshot AI) ランタイム対応 Phase 1 ([66da63a](https://github.com/okamyuji/kizami/commit/66da63a3791a4e3f2115f485c1331e0b4731fc2a))
+- kimiランタイムのstatus/uninstallで--scope省略時に両スコープを走査 ([e795678](https://github.com/okamyuji/kizami/commit/e795678b437dcb88a947fa19b855183b70ab1b41))
+
 ## [0.4.0](https://github.com/okamyuji/kizami/compare/v0.3.1...v0.4.0) (2026-06-06)
 
 ### Features
