@@ -1,3 +1,9 @@
+## [0.4.4](https://github.com/okamyuji/kizami/compare/v0.4.3...v0.4.4) (2026-06-08)
+
+### Bug Fixes
+
+- kimi-code UserPromptSubmitのpromptが配列形式に対応 ([6fc60c6](https://github.com/okamyuji/kizami/commit/6fc60c6a447fdce4fbcd683b44342bfdda769e58))
+
 ## [0.4.3](https://github.com/okamyuji/kizami/compare/v0.4.2...v0.4.3) (2026-06-08)
 
 ### Bug Fixes
