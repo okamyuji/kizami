@@ -1,3 +1,9 @@
+## [0.4.5](https://github.com/okamyuji/kizami/compare/v0.4.4...v0.4.5) (2026-06-15)
+
+### Bug Fixes
+
+- **deps:** resolve Dependabot security alerts for esbuild ([51b8877](https://github.com/okamyuji/kizami/commit/51b8877a771657fa47ddf2de39e27e4ca22e3165))
+
 ## [0.4.4](https://github.com/okamyuji/kizami/compare/v0.4.3...v0.4.4) (2026-06-08)
 
 ### Bug Fixes
