@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "codex-sess-no-turn-id",
+  "cwd": "/opt/kizami-fixtures/project-beta",
+  "last_assistant_message": "Fallback identity uses the pending prompt anchor.",
+  "model": "gpt-5.5"
+}

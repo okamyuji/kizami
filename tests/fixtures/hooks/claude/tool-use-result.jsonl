@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Create a synthetic server file."}]},"sessionId":"claude-sess-tool","timestamp":"2026-06-21T00:00:00Z","uuid":"record-uuid-0001"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I will create the file for you."},{"type":"tool_use","id":"tool-1","name":"Write","input":{"command":"src/server.ts"}}]},"sessionId":"claude-sess-tool","timestamp":"2026-06-21T00:00:05Z","uuid":"record-uuid-0002"}
+{"type":"user","toolUseResult":{"type":"tool_result","tool_use_id":"tool-1","content":"Synthetic tool result: file written."},"sessionId":"claude-sess-tool","timestamp":"2026-06-21T00:00:06Z","uuid":"record-uuid-0003"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The file has been created successfully."}]},"sessionId":"claude-sess-tool","timestamp":"2026-06-21T00:00:10Z","uuid":"record-uuid-0004"}

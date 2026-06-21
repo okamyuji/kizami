@@ -1,0 +1,5 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Summarize the project."}]},"sessionId":"claude-sess-compact","timestamp":"2026-06-21T00:01:00Z","uuid":"record-uuid-1001"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Here is a summary of the project so far."}]},"sessionId":"claude-sess-compact","timestamp":"2026-06-21T00:01:05Z","uuid":"record-uuid-1002"}
+{"type":"summary","isCompactSummary":true,"summary":"Synthetic compact summary; should be ignored by the parser.","sessionId":"claude-sess-compact","timestamp":"2026-06-21T00:02:00Z","uuid":"record-uuid-1003"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Continue after compaction."}]},"sessionId":"claude-sess-compact","timestamp":"2026-06-21T00:03:00Z","uuid":"record-uuid-1004"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Resuming after the compact boundary."}]},"sessionId":"claude-sess-compact","timestamp":"2026-06-21T00:03:05Z","uuid":"record-uuid-1005"}

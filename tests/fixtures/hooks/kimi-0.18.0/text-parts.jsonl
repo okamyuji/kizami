@@ -1,0 +1,5 @@
+{"type":"context.append_loop_event","event":{"type":"user.submit","id":"ue-0003","prompt":"Concatenate text parts."}}
+{"type":"context.append_loop_event","event":{"type":"step.begin"}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Hello, "}}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"world!"}}}
+{"type":"context.append_loop_event","event":{"type":"step.complete"}}

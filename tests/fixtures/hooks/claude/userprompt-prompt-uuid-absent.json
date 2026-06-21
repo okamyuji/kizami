@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "claude-sess-no-uuid",
+  "cwd": "/opt/kizami-fixtures/project-beta",
+  "transcript_path": "/opt/kizami-fixtures/project-beta/.claude/claude-sess-no-uuid.jsonl",
+  "prompt": "Explain fallback identity.",
+  "model": "claude-sonnet-4"
+}

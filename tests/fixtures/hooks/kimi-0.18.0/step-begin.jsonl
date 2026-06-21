@@ -1,0 +1,4 @@
+{"type":"context.append_loop_event","event":{"type":"user.submit","id":"ue-0002","prompt":"Start a step."}}
+{"type":"context.append_loop_event","event":{"type":"step.begin"}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Output after step begins."}}}
+{"type":"context.append_loop_event","event":{"type":"step.complete"}}

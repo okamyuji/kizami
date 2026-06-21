@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "codex-sess-changed",
+  "turn_id": "turn-1",
+  "cwd": "/opt/kizami-fixtures/project-alpha",
+  "last_assistant_message": "This assistant content has changed since the previous Stop delivery.",
+  "model": "gpt-5.5"
+}

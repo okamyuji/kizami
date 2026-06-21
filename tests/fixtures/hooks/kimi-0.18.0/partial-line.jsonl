@@ -1,0 +1,4 @@
+{"type":"context.append_loop_event","event":{"type":"user.submit","id":"ue-0008","prompt":"Partial line test."}}
+{"type":"context.append_loop_event","event":{"type":"step.begin"}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"This line is complete."}}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"This line is cut

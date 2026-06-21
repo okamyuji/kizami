@@ -1,0 +1,4 @@
+{"type":"context.append_loop_event","event":{"type":"user.submit","id":"ue-0010","prompt":"Unknown completion schema test."}}
+{"type":"context.append_loop_event","event":{"type":"step.begin"}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Output before unrecognized completion."}}}
+{"type":"context.append_loop_event","event":{"type":"step.complete","payload":{"customMarker":"v0"}}}

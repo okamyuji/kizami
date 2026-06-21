@@ -1,0 +1,8 @@
+{"type":"context.append_loop_event","event":{"type":"user.submit","id":"ue-0012","prompt":"Rotation replay test."}}
+{"type":"context.append_loop_event","event":{"type":"step.begin"}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Initial content for cursor fingerprint."}}}
+{"type":"context.append_loop_event","event":{"type":"step.complete"}}
+{"type":"context.append_loop_event","event":{"type":"user.submit","id":"ue-0013","prompt":"Continue after rotation."}}
+{"type":"context.append_loop_event","event":{"type":"step.begin"}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Content after a simulated wire rotation."}}}
+{"type":"context.append_loop_event","event":{"type":"step.complete"}}

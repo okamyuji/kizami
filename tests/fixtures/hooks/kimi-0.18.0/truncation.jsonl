@@ -1,0 +1,4 @@
+{"type":"context.append_loop_event","event":{"type":"user.submit","id":"ue-0011","prompt":"Truncation test."}}
+{"type":"context.append_loop_event","event":{"type":"step.begin"}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Complete record before truncation."}}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Truncated rec
