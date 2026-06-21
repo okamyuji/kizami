@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
+import type { PendingPromptV2 } from '@/checkpoint/types';
 
 export interface KimiBaseInput {
   hook_event_name?: string;
@@ -88,14 +89,27 @@ interface PendingKimiTurn {
   createdAt: string;
 }
 
-const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
-
 function safeFilePart(value: string): string {
   return value.replace(/[^a-zA-Z0-9_.-]/g, '_');
 }
 
 function hashText(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 24);
+}
+
+function normalizeLegacyKimiTurn(pending: PendingKimiTurn, filePath: string): PendingPromptV2 {
+  return {
+    version: 2,
+    runtime: 'kimi',
+    sessionId: pending.sessionId,
+    projectPath: pending.cwd,
+    prompt: pending.prompt,
+    source: { path: filePath },
+    pendingKey: `kimi\0${pending.sessionId}\0legacy\0${pending.createdAt}\0${pending.prompt}`,
+    turnSequence: 0,
+    sourceOrder: '00000000000000000000',
+    createdAt: pending.createdAt,
+  };
 }
 
 export function savePendingKimiPrompt(
@@ -124,12 +138,11 @@ export function collectPendingKimiTurns(
   sessionId: string,
   pendingDir: string,
   cleanup = false
-): PendingKimiTurn[] {
+): PendingPromptV2[] {
   if (!fs.existsSync(pendingDir)) return [];
 
   const prefix = `${safeFilePart(sessionId)}-`;
-  const now = Date.now();
-  const results: PendingKimiTurn[] = [];
+  const results: PendingPromptV2[] = [];
 
   for (const entry of fs.readdirSync(pendingDir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.startsWith(prefix) || !entry.name.endsWith('.json'))
@@ -138,12 +151,7 @@ export function collectPendingKimiTurns(
     const filePath = path.join(pendingDir, entry.name);
     try {
       const pending = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as PendingKimiTurn;
-      const age = now - new Date(pending.createdAt).getTime();
-      if (age > PENDING_TTL_MS) {
-        if (cleanup) fs.rmSync(filePath, { force: true });
-        continue;
-      }
-      results.push(pending);
+      results.push(normalizeLegacyKimiTurn(pending, filePath));
       if (cleanup) fs.rmSync(filePath, { force: true });
     } catch {
       if (cleanup) fs.rmSync(filePath, { force: true });

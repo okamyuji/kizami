@@ -23,3 +23,25 @@ export interface JsonlChunkRecord {
 }
 
 export type JsonlRecord = JsonlChunkRecord;
+
+import type { TurnCheckpointV2 } from '@/checkpoint/types';
+
+export type JsonlV2Record =
+  | { v: 2; type: 'tx_begin'; txId: string; createdAt: string }
+  | {
+      v: 2;
+      type: 'session_reset';
+      txId: string;
+      sessionId: string;
+      historyEpoch: number;
+      reason: 'legacy_mismatch';
+    }
+  | ({ v: 2; type: 'turn_checkpoint'; txId: string } & TurnCheckpointV2)
+  | {
+      v: 2;
+      type: 'tx_commit';
+      txId: string;
+      recordCount: number;
+      payloadDigest: string;
+      createdAt: string;
+    };

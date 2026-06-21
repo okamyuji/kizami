@@ -191,7 +191,7 @@ async function handleKimiSessionEnd(raw: string, configPath?: string): Promise<v
   const wirePath = findWireJsonlPath(parsed.session_id);
   const assistantText = wirePath ? extractAssistantFromWireJsonl(wirePath) : '';
 
-  const projectPath = resolveProjectPath(parsed.cwd ?? turns[0].cwd);
+  const projectPath = resolveProjectPath(parsed.cwd ?? turns[0].projectPath);
   const allPrompts = turns.map((t) => t.prompt).join('\n\n');
   const content = assistantText
     ? `[User]\n${allPrompts}\n\n[Assistant]\n${assistantText}`
