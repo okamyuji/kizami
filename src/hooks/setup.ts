@@ -221,10 +221,21 @@ function setupClaudeHooks(options?: SetupOptions): void {
     ],
   };
 
+  const stopSaveHook: HookMatcher = {
+    hooks: [
+      {
+        type: 'command',
+        command: `${kizamiCommand} save --stdin --runtime claude # kizami-managed`,
+        timeout: 10,
+      } as HookEntry,
+    ],
+  };
+
   if (!settings.hooks) {
     settings.hooks = {};
   }
 
+  settings.hooks['Stop'] = mergeHooks(settings.hooks['Stop'], stopSaveHook);
   settings.hooks['SessionEnd'] = mergeHooks(settings.hooks['SessionEnd'], saveHook);
   settings.hooks['UserPromptSubmit'] = mergeHooks(settings.hooks['UserPromptSubmit'], recallHook);
   settings.hooks['SessionStart'] = mergeHooks(settings.hooks['SessionStart'], injectHook);
