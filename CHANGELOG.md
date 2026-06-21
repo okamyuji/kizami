@@ -1,3 +1,9 @@
+## [0.4.6](https://github.com/okamyuji/kizami/compare/v0.4.5...v0.4.6) (2026-06-21)
+
+### Bug Fixes
+
+- **engines:** widen node constraint from exact pin to range ([c7e0c31](https://github.com/okamyuji/kizami/commit/c7e0c31c2ffdec15bf41b4346354f1a009670db2))
+
 ## [0.4.5](https://github.com/okamyuji/kizami/compare/v0.4.4...v0.4.5) (2026-06-15)
 
 ### Bug Fixes
