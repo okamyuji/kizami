@@ -1,4 +1,7 @@
 import type Database from 'better-sqlite3';
+import type { TurnCheckpointV2, ObservationBoundaryV2 } from '@/checkpoint/types';
+import type { CanonicalHistory } from '@/jsonl/fold';
+import { compareObservationBoundary } from '@/checkpoint/identity';
 
 export interface Chunk {
   id?: number;
@@ -19,7 +22,27 @@ export interface Chunk {
   };
   createdAt?: string;
   tokenCount: number;
+  turnKey?: string;
+  sourceOrder?: string;
+  partIndex?: number;
+  revision?: number;
+  contentHash?: string;
+  observedThrough?: string;
+  historyEpoch?: number;
 }
+
+export interface StoredTurnState {
+  revision: number;
+  contentHash: string;
+  observedThrough: ObservationBoundaryV2;
+  historyEpoch: number;
+}
+
+export type ApplyCheckpointResult =
+  | { status: 'inserted'; revision: number }
+  | { status: 'already_current'; revision: number }
+  | { status: 'stale'; revision: number }
+  | { status: 'conflict'; revision: number };
 
 export interface Session {
   sessionId: string;
@@ -521,5 +544,266 @@ export class Store {
       firstMessage: row['first_message'] as string | undefined,
       lastMessage: row['last_message'] as string | undefined,
     };
+  }
+
+  // --- v2 checkpoint methods ---
+
+  getStoredTurnState(sessionId: string, turnKey: string): StoredTurnState | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT revision, content_hash, observed_through, history_epoch FROM chunks WHERE session_id = ? AND turn_key = ? LIMIT 1'
+      )
+      .get(sessionId, turnKey) as
+      | { revision: number; content_hash: string; observed_through: string; history_epoch: number }
+      | undefined;
+    if (!row || row.revision == null) return undefined;
+    return {
+      revision: row.revision,
+      contentHash: row.content_hash,
+      observedThrough: JSON.parse(row.observed_through) as ObservationBoundaryV2,
+      historyEpoch: row.history_epoch,
+    };
+  }
+
+  applyTurnCheckpoint(checkpoint: TurnCheckpointV2): ApplyCheckpointResult {
+    return this.db.transaction(() => {
+      const existing = this.getStoredTurnState(checkpoint.sessionId, checkpoint.turnKey);
+
+      if (existing) {
+        if (existing.historyEpoch > checkpoint.historyEpoch) {
+          return { status: 'stale' as const, revision: existing.revision };
+        }
+
+        const cmp = compareObservationBoundary(
+          checkpoint.observedThrough,
+          existing.observedThrough
+        );
+        if (cmp === 'older') {
+          return { status: 'stale' as const, revision: existing.revision };
+        }
+
+        if (checkpoint.revision < existing.revision) {
+          return { status: 'stale' as const, revision: existing.revision };
+        }
+
+        if (checkpoint.revision === existing.revision) {
+          if (checkpoint.contentHash === existing.contentHash) {
+            return { status: 'already_current' as const, revision: existing.revision };
+          }
+          return { status: 'conflict' as const, revision: existing.revision };
+        }
+      }
+
+      // Delete prior parts for this turn
+      this.db
+        .prepare('DELETE FROM chunks WHERE session_id = ? AND turn_key = ?')
+        .run(checkpoint.sessionId, checkpoint.turnKey);
+
+      // Insert new parts
+      const insert = this.db.prepare(`
+        INSERT INTO chunks (external_id, session_id, project_path, chunk_index, content, role, metadata, token_count, created_at, turn_key, source_order, part_index, revision, content_hash, observed_through, history_epoch)
+        VALUES (@externalId, @sessionId, @projectPath, @chunkIndex, @content, @role, @metadata, @tokenCount, @createdAt, @turnKey, @sourceOrder, @partIndex, @revision, @contentHash, @observedThrough, @historyEpoch)
+      `);
+
+      for (const part of checkpoint.parts) {
+        insert.run({
+          externalId: part.externalId,
+          sessionId: checkpoint.sessionId,
+          projectPath: checkpoint.projectPath,
+          chunkIndex: 0, // placeholder — reindexed below
+          content: part.content,
+          role: part.role,
+          metadata: JSON.stringify(part.metadata),
+          tokenCount: part.tokenCount,
+          createdAt: checkpoint.completedAt,
+          turnKey: checkpoint.turnKey,
+          sourceOrder: checkpoint.sourceOrder,
+          partIndex: part.partIndex,
+          revision: checkpoint.revision,
+          contentHash: checkpoint.contentHash,
+          observedThrough: JSON.stringify(checkpoint.observedThrough),
+          historyEpoch: checkpoint.historyEpoch,
+        });
+      }
+
+      this.reindexSessionChunks(checkpoint.sessionId);
+      this.recomputeSessionMetadata(checkpoint.sessionId);
+
+      return { status: 'inserted' as const, revision: checkpoint.revision };
+    })();
+  }
+
+  replaceSessionWithBaseline(sessionId: string, checkpoints: TurnCheckpointV2[]): void {
+    this.db.transaction(() => {
+      // Delete all existing rows (v1 + v2 lower epoch)
+      this.db.prepare('DELETE FROM chunks WHERE session_id = ?').run(sessionId);
+
+      const insert = this.db.prepare(`
+        INSERT INTO chunks (external_id, session_id, project_path, chunk_index, content, role, metadata, token_count, created_at, turn_key, source_order, part_index, revision, content_hash, observed_through, history_epoch)
+        VALUES (@externalId, @sessionId, @projectPath, @chunkIndex, @content, @role, @metadata, @tokenCount, @createdAt, @turnKey, @sourceOrder, @partIndex, @revision, @contentHash, @observedThrough, @historyEpoch)
+      `);
+
+      for (const cp of checkpoints) {
+        for (const part of cp.parts) {
+          insert.run({
+            externalId: part.externalId,
+            sessionId: cp.sessionId,
+            projectPath: cp.projectPath,
+            chunkIndex: 0,
+            content: part.content,
+            role: part.role,
+            metadata: JSON.stringify(part.metadata),
+            tokenCount: part.tokenCount,
+            createdAt: cp.completedAt,
+            turnKey: cp.turnKey,
+            sourceOrder: cp.sourceOrder,
+            partIndex: part.partIndex,
+            revision: cp.revision,
+            contentHash: cp.contentHash,
+            observedThrough: JSON.stringify(cp.observedThrough),
+            historyEpoch: cp.historyEpoch,
+          });
+        }
+      }
+
+      this.reindexSessionChunks(sessionId);
+      this.recomputeSessionMetadata(sessionId);
+    })();
+  }
+
+  reindexSessionChunks(sessionId: string): void {
+    const rows = this.db
+      .prepare(
+        `SELECT id, turn_key, source_order, part_index, chunk_index
+         FROM chunks WHERE session_id = ?
+         ORDER BY
+           CASE WHEN turn_key IS NULL THEN 0 ELSE 1 END,
+           CASE WHEN turn_key IS NULL THEN chunk_index ELSE NULL END,
+           source_order, turn_key, part_index`
+      )
+      .all(sessionId) as { id: number; turn_key: string | null; chunk_index: number }[];
+
+    const update = this.db.prepare('UPDATE chunks SET chunk_index = ? WHERE id = ?');
+    for (let i = 0; i < rows.length; i++) {
+      update.run(i, rows[i].id);
+    }
+  }
+
+  recomputeSessionMetadata(sessionId: string): void {
+    const stats = this.db
+      .prepare(
+        `SELECT COUNT(*) as count, MIN(created_at) as started, MAX(created_at) as ended,
+                MIN(content) as first_msg, MAX(content) as last_msg, MAX(project_path) as project
+         FROM chunks WHERE session_id = ?`
+      )
+      .get(sessionId) as {
+      count: number;
+      started: string | null;
+      ended: string | null;
+      first_msg: string | null;
+      last_msg: string | null;
+      project: string | null;
+    };
+
+    if (!stats || stats.count === 0) {
+      this.db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId);
+      return;
+    }
+
+    // Get actual first and last content by order
+    const first = this.db
+      .prepare('SELECT content FROM chunks WHERE session_id = ? ORDER BY chunk_index ASC LIMIT 1')
+      .get(sessionId) as { content: string } | undefined;
+    const last = this.db
+      .prepare('SELECT content FROM chunks WHERE session_id = ? ORDER BY chunk_index DESC LIMIT 1')
+      .get(sessionId) as { content: string } | undefined;
+
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO sessions (session_id, project_path, started_at, ended_at, chunk_count, first_message, last_message)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        sessionId,
+        stats.project ?? '',
+        stats.started,
+        stats.ended,
+        stats.count,
+        first?.content?.substring(0, 200) ?? null,
+        last?.content?.substring(0, 200) ?? null
+      );
+  }
+
+  materializeCanonicalHistory(history: CanonicalHistory): {
+    chunksInserted: number;
+    sessionsInserted: number;
+  } {
+    return this.db.transaction(() => {
+      this.truncateAll();
+
+      let chunksInserted = 0;
+      const sessionIds = new Set<string>();
+
+      // Insert legacy chunks
+      for (const record of history.legacyChunks) {
+        this.db
+          .prepare(
+            `INSERT INTO chunks (external_id, session_id, project_path, chunk_index, content, role, metadata, token_count, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            record.id,
+            record.sessionId,
+            record.projectPath,
+            record.chunkIndex,
+            record.content,
+            record.role,
+            record.metadata,
+            record.tokenCount,
+            record.createdAt
+          );
+        chunksInserted++;
+        sessionIds.add(record.sessionId);
+      }
+
+      // Insert v2 turn checkpoints
+      for (const checkpoint of history.turns.values()) {
+        for (const part of checkpoint.parts) {
+          this.db
+            .prepare(
+              `INSERT INTO chunks (external_id, session_id, project_path, chunk_index, content, role, metadata, token_count, created_at, turn_key, source_order, part_index, revision, content_hash, observed_through, history_epoch)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .run(
+              part.externalId,
+              checkpoint.sessionId,
+              checkpoint.projectPath,
+              0,
+              part.content,
+              part.role,
+              JSON.stringify(part.metadata),
+              part.tokenCount,
+              checkpoint.completedAt,
+              checkpoint.turnKey,
+              checkpoint.sourceOrder,
+              part.partIndex,
+              checkpoint.revision,
+              checkpoint.contentHash,
+              JSON.stringify(checkpoint.observedThrough),
+              checkpoint.historyEpoch
+            );
+          chunksInserted++;
+        }
+        sessionIds.add(checkpoint.sessionId);
+      }
+
+      // Reindex and rebuild session metadata
+      for (const sid of sessionIds) {
+        this.reindexSessionChunks(sid);
+        this.recomputeSessionMetadata(sid);
+      }
+
+      return { chunksInserted, sessionsInserted: sessionIds.size };
+    })();
   }
 }
