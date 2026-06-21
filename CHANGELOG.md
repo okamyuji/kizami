@@ -1,3 +1,25 @@
+## [0.5.0](https://github.com/okamyuji/kizami/compare/v0.4.6...v0.5.0) (2026-06-21)
+
+### Features
+
+- add checkpoint identity and part builder ([73e77d2](https://github.com/okamyuji/kizami/commit/73e77d2eb19f769eebb1f6e6bcdff6ae23ca66da))
+- add Claude, Codex, and Kimi runtime adapters ([cf5392d](https://github.com/okamyuji/kizami/commit/cf5392d333b89b7008834ef74f0553b5e3057378))
+- add lifecycle hook ownership classifier ([55abe19](https://github.com/okamyuji/kizami/commit/55abe19cd9caffff1347e111023c7637a5383275))
+- append JSONL transactions crash safely ([6c070be](https://github.com/okamyuji/kizami/commit/6c070beee0b8d7e9499522673aa63f05c341f21d))
+- coordinate resumable turn checkpoints ([79a3424](https://github.com/okamyuji/kizami/commit/79a342420eb6ad1923603e385adbc771f3f62fb2))
+- define JSONL v2 transactions ([b7e4de5](https://github.com/okamyuji/kizami/commit/b7e4de58a1112988d55dc803d00553e42a46018a))
+- fold canonical checkpoint history ([3b514e2](https://github.com/okamyuji/kizami/commit/3b514e2dcf47cf86604b894865a44e79ac7e2245))
+- materialize checkpoint revisions ([e147c00](https://github.com/okamyuji/kizami/commit/e147c00d2e64df7cc941a1a8aeb22f3f72606106))
+- migrate checkpoint cache to schema v4 ([33b44f8](https://github.com/okamyuji/kizami/commit/33b44f89e7d9556ae73a54c83dd271f53c0dbd6e))
+- persist checkpoint state atomically ([8bffa6e](https://github.com/okamyuji/kizami/commit/8bffa6ed2205a665bc3184f5cdf2994b6dc78438))
+- wire service dispatch, fix lint, update dependencies ([210a351](https://github.com/okamyuji/kizami/commit/210a3518d318bcbc62c7fdbe1449005e2e934ee8))
+
+### Bug Fixes
+
+- address all CodeRabbit review findings ([a838a62](https://github.com/okamyuji/kizami/commit/a838a6290daca2777b81700ffbb8796b2c3bf682))
+- address remaining nitpick findings from CodeRabbit review ([d8dd6a3](https://github.com/okamyuji/kizami/commit/d8dd6a3650a9b9098e6c8360ebac3af853060034))
+- resolve lint errors and flaky SIGINT test timing ([65ce41d](https://github.com/okamyuji/kizami/commit/65ce41dd98717591568c7f7a2937931bdff0124a))
+
 ## [0.4.6](https://github.com/okamyuji/kizami/compare/v0.4.5...v0.4.6) (2026-06-21)
 
 ### Bug Fixes
