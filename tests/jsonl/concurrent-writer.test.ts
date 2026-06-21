@@ -146,9 +146,9 @@ try {
             stdio: 'pipe',
           }
         );
-      } catch (e) {
-        // child process failures are test failures
-        throw e;
+      } catch (e: unknown) {
+        if (e instanceof Error) throw e;
+        throw new Error(String(e));
       }
 
       let txCount = 0;

@@ -3,7 +3,6 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { JsonlTransactionWriter } from '@/jsonl/writer';
-import type { LockedJsonlWriter } from '@/jsonl/writer';
 import { serializeV2Transaction } from '@/jsonl/transaction';
 import { readCanonicalTransactions } from '@/jsonl/reader';
 import type { JsonlV2Payload } from '@/jsonl/types';

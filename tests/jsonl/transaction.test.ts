@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import { serializeV2Transaction, validateCommittedTransaction } from '@/jsonl/transaction';
 import type { JsonlV2Payload } from '@/jsonl/types';
 import type { TurnCheckpointV2 } from '@/checkpoint/types';
-import { hashFields } from '@/checkpoint/identity';
 
 function makeCheckpoint(overrides: Partial<TurnCheckpointV2> = {}): TurnCheckpointV2 {
   return {

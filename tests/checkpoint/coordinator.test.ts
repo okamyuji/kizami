@@ -2,7 +2,6 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import Database from 'better-sqlite3';
 import { commitCheckpointBatch } from '@/checkpoint/coordinator';
 import type { CheckpointBatch } from '@/checkpoint/coordinator';
 import type { TurnCheckpointCandidate } from '@/checkpoint/types';
