@@ -63,7 +63,7 @@ describe('recoverPreparedCheckpoints', () => {
     expect(result).toEqual({ finalized: 0, superseded: 0, failed: 0 });
   });
 
-  it('recovers a committed-but-not-finalized receipt', async () => {
+  it('is a no-op when receipts are already finalized', async () => {
     const dir = makeTmpDir();
     const config = makeConfig(dir);
 
@@ -82,8 +82,7 @@ describe('recoverPreparedCheckpoints', () => {
     expect(store.getStoredTurnState('sess-1', 'tk-1')).toBeDefined();
     db.close();
 
-    // Recovery should handle already-finalized cleanly
     const result = await recoverPreparedCheckpoints(config, 'claude');
-    expect(result.failed).toBe(0);
+    expect(result).toEqual({ finalized: 0, superseded: 0, failed: 0 });
   });
 });

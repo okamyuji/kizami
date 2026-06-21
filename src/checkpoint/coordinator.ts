@@ -109,13 +109,11 @@ export async function commitCheckpointBatch(
       }
 
       for (const candidate of batch.candidates) {
-        // Reuse existing sourceOrder from head if available
         const head = lockedWriter.getTurnHead(candidate.sessionId, candidate.turnKey);
-        if (head) {
-          candidate.sourceOrder = head.sourceOrder;
-        }
+        const effectiveSourceOrder = head ? head.sourceOrder : candidate.sourceOrder;
 
-        const parts = buildCheckpointParts(candidate);
+        const effectiveCandidate = { ...candidate, sourceOrder: effectiveSourceOrder };
+        const parts = buildCheckpointParts(effectiveCandidate);
         const toolResults = candidateToolResults(candidate);
         const contentHash = createContentHash(
           candidate.prompt,
@@ -160,7 +158,7 @@ export async function commitCheckpointBatch(
           sessionId: candidate.sessionId,
           runtime: candidate.runtime,
           turnKey: candidate.turnKey,
-          sourceOrder: candidate.sourceOrder,
+          sourceOrder: effectiveSourceOrder,
           observedThrough: candidate.observedThrough,
           historyEpoch,
           revision,
