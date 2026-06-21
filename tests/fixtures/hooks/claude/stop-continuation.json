@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "claude-sess-continuation",
+  "cwd": "/opt/kizami-fixtures/project-alpha",
+  "transcript_path": "/opt/kizami-fixtures/project-alpha/.claude/claude-sess-continuation.jsonl",
+  "stop_hook_active": true,
+  "last_assistant_message": "Continuing the explanation from a resumed Stop hook."
+}

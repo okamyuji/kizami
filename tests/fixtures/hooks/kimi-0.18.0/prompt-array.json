@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "kimi-sess-array-prompt",
+  "cwd": "/opt/kizami-fixtures/project-beta",
+  "prompt": [
+    { "type": "text", "text": "Part one of the prompt." },
+    { "type": "image", "url": "https://fixtures.example.com/synthetic.png" },
+    { "type": "text", "text": "Part two of the prompt." }
+  ]
+}

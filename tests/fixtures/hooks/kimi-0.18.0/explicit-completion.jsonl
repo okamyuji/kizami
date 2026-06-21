@@ -1,0 +1,4 @@
+{"type":"context.append_loop_event","event":{"type":"user.submit","id":"ue-0005","prompt":"Show explicit completion."}}
+{"type":"context.append_loop_event","event":{"type":"step.begin"}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"This step has a clear completion boundary."}}}
+{"type":"context.append_loop_event","event":{"type":"step.complete"}}

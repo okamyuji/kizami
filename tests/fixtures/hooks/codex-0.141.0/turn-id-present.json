@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "codex-sess-turn-id",
+  "turn_id": "turn-1",
+  "cwd": "/opt/kizami-fixtures/project-alpha",
+  "last_assistant_message": "Use Stop for saving and UserPromptSubmit for recall.",
+  "model": "gpt-5.5"
+}

@@ -1,0 +1,5 @@
+{"type":"context.append_loop_event","event":{"type":"user.submit","id":"ue-0004","prompt":"Run a tool."}}
+{"type":"context.append_loop_event","event":{"type":"step.begin"}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"I will run the tool."}}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"tool_result","content":"Synthetic tool output."}}}
+{"type":"context.append_loop_event","event":{"type":"step.complete"}}

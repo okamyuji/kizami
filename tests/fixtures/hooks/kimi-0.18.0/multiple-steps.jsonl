@@ -1,0 +1,8 @@
+{"type":"context.append_loop_event","event":{"type":"user.submit","id":"ue-0006","prompt":"First step."}}
+{"type":"context.append_loop_event","event":{"type":"step.begin"}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"First step answer."}}}
+{"type":"context.append_loop_event","event":{"type":"step.complete"}}
+{"type":"context.append_loop_event","event":{"type":"user.submit","id":"ue-0007","prompt":"Second step."}}
+{"type":"context.append_loop_event","event":{"type":"step.begin"}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Second step answer."}}}
+{"type":"context.append_loop_event","event":{"type":"step.complete"}}

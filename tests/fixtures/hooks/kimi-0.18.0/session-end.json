@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "SessionEnd",
+  "session_id": "kimi-sess-end",
+  "cwd": "/opt/kizami-fixtures/project-alpha",
+  "reason": "exit"
+}

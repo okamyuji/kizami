@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "SessionEnd",
+  "session_id": "claude-sess-end",
+  "cwd": "/opt/kizami-fixtures/project-alpha",
+  "transcript_path": "/opt/kizami-fixtures/project-alpha/.claude/claude-sess-end.jsonl",
+  "last_assistant_message": "Session is ending; committing the final revision."
+}

@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "claude-sess-prompt-uuid",
+  "cwd": "/opt/kizami-fixtures/project-alpha",
+  "transcript_path": "/opt/kizami-fixtures/project-alpha/.claude/claude-sess-prompt-uuid.jsonl",
+  "prompt": "Explain the runtime contract test.",
+  "model": "claude-sonnet-4",
+  "prompt_uuid": "prompt-uuid-1111-2222-3333-444444444444"
+}

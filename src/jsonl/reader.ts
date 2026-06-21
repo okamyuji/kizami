@@ -1,6 +1,13 @@
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
-import type { JsonlChunkRecord, JsonlRecord } from '@/jsonl/types';
+import type {
+  JsonlChunkRecord,
+  JsonlLineResult,
+  JsonlRecord,
+  CanonicalTransactionResult,
+  CommittedTransaction,
+} from '@/jsonl/types';
+import { validateCommittedTransaction } from '@/jsonl/transaction';
 
 /**
  * JSONLを行単位でstreaming読み込みする。
@@ -61,4 +68,127 @@ export function readTailRecords(filePath: string, n: number): JsonlChunkRecord[]
     }
   }
   return out;
+}
+
+export async function* readJsonlLines(filePath: string): AsyncGenerator<JsonlLineResult> {
+  if (!fs.existsSync(filePath)) return;
+
+  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let offset = 0;
+
+  for await (const line of rl) {
+    const lineBytes = Buffer.byteLength(line, 'utf-8');
+    const endOffset = offset + lineBytes + 1;
+    if (!line.trim()) {
+      offset = endOffset;
+      continue;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      yield { kind: 'diagnostic', offset, endOffset, line, message: 'invalid JSON' };
+      offset = endOffset;
+      continue;
+    }
+
+    if (!parsed || typeof parsed !== 'object') {
+      yield { kind: 'diagnostic', offset, endOffset, line, message: 'not an object' };
+      offset = endOffset;
+      continue;
+    }
+
+    const record = parsed as Record<string, unknown>;
+    if (record.v === 1 && isJsonlChunkRecord(parsed)) {
+      yield { kind: 'record', offset, endOffset, line, record: parsed };
+    } else if (record.v === 2 && typeof record.type === 'string') {
+      yield { kind: 'record', offset, endOffset, line, record: parsed as JsonlRecord };
+    } else {
+      yield { kind: 'diagnostic', offset, endOffset, line, message: 'unknown record version/type' };
+    }
+    offset = endOffset;
+  }
+}
+
+export async function* readCanonicalTransactions(
+  filePath: string
+): AsyncGenerator<CanonicalTransactionResult> {
+  let activeBegin: { offset: number; line: string; txId: string } | undefined;
+  let activePayloadLines: string[] = [];
+
+  for await (const result of readJsonlLines(filePath)) {
+    if (result.kind === 'diagnostic') continue;
+
+    const { record, offset, line } = result;
+    if (!('v' in record) || record.v !== 2) continue;
+
+    if (record.type === 'tx_begin') {
+      if (activeBegin) {
+        yield {
+          kind: 'diagnostic',
+          filePath,
+          offset: activeBegin.offset,
+          txId: activeBegin.txId,
+          message: 'abandoned frame: new tx_begin before commit',
+        };
+      }
+      activeBegin = { offset, line, txId: record.txId };
+      activePayloadLines = [];
+      continue;
+    }
+
+    if (record.type === 'tx_commit') {
+      if (!activeBegin) {
+        yield {
+          kind: 'diagnostic',
+          filePath,
+          offset,
+          txId: record.txId,
+          message: 'orphan tx_commit without tx_begin',
+        };
+        continue;
+      }
+
+      const frame = validateCommittedTransaction(activeBegin.line, activePayloadLines, line);
+      if (frame) {
+        const tx: CommittedTransaction = {
+          txId: frame.txId,
+          createdAt: frame.createdAt,
+          filePath,
+          beginOffset: activeBegin.offset,
+          endOffset: result.endOffset,
+          payloadDigest: frame.payloadDigest,
+          payloads: frame.payloads,
+        };
+        yield { kind: 'transaction', transaction: tx };
+      } else {
+        yield {
+          kind: 'diagnostic',
+          filePath,
+          offset: activeBegin.offset,
+          txId: activeBegin.txId,
+          message: 'invalid transaction frame',
+        };
+      }
+      activeBegin = undefined;
+      activePayloadLines = [];
+      continue;
+    }
+
+    if (activeBegin) {
+      activePayloadLines.push(line);
+    }
+  }
+
+  if (activeBegin) {
+    yield {
+      kind: 'diagnostic',
+      filePath,
+      offset: activeBegin.offset,
+      txId: activeBegin.txId,
+      message: 'incomplete transaction at EOF',
+    };
+  }
 }

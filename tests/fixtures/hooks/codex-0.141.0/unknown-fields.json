@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "codex-sess-unknown",
+  "turn_id": "turn-1",
+  "cwd": "/opt/kizami-fixtures/project-alpha",
+  "last_assistant_message": "Payload contains extra fields that the parser should ignore.",
+  "model": "gpt-5.5",
+  "extraField1": "ignored-value",
+  "unknownFlag": true,
+  "nestedUnknown": { "foo": "bar" }
+}

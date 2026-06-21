@@ -1,0 +1,3 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"First part of a continued turn."}]},"sessionId":"claude-sess-continuation","timestamp":"2026-06-21T00:05:00Z","uuid":"record-uuid-3001"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"First assistant response before Stop."}]},"sessionId":"claude-sess-continuation","timestamp":"2026-06-21T00:05:05Z","uuid":"record-uuid-3002"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Second assistant response after continuation."}]},"sessionId":"claude-sess-continuation","timestamp":"2026-06-21T00:05:10Z","uuid":"record-uuid-3003"}

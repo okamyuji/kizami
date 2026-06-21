@@ -217,9 +217,9 @@ describe('runSave signal handling', () => {
       child.stdin.end();
       // node プロセス起動 (spawn イベント) を待ってから SIGINT を送る。
       // cli.ts トップレベルの SIGINT ハンドラ登録が走るまで猶予が要るため、
-      // CPU 負荷時の取りこぼし防止に十分なディレイ (300ms) を入れる。
+      // CPU 負荷時の取りこぼし防止に十分なディレイ (500ms) を入れる。
       child.once('spawn', () => {
-        setTimeout(() => child.kill('SIGINT'), 300);
+        setTimeout(() => child.kill('SIGINT'), 500);
       });
       child.on('exit', (code) => resolve(code));
     });

@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "codex-sess-missing-assistant",
+  "turn_id": "turn-1",
+  "cwd": "/opt/kizami-fixtures/project-beta",
+  "last_assistant_message": null,
+  "model": "gpt-5.5"
+}

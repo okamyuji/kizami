@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "kimi-sess-string-prompt",
+  "cwd": "/opt/kizami-fixtures/project-alpha",
+  "prompt": "How do I test this?"
+}

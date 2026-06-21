@@ -173,14 +173,17 @@ describe('pending file operations', () => {
     expect(collectPendingKimiTurns('sess_1', pendingDir)).toHaveLength(1);
   });
 
-  it('should skip pending files older than 24 hours', () => {
+  it('should retain pending files older than 24 hours', () => {
     savePendingKimiPrompt({ session_id: 'sess_1', cwd: '/project', prompt: 'old' }, pendingDir);
     const files = fs.readdirSync(pendingDir);
     const filePath = path.join(pendingDir, files[0]);
     const pending = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     pending.createdAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
     fs.writeFileSync(filePath, JSON.stringify(pending));
-    expect(collectPendingKimiTurns('sess_1', pendingDir)).toHaveLength(0);
+    const turns = collectPendingKimiTurns('sess_1', pendingDir);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].prompt).toBe('old');
+    expect(fs.existsSync(filePath)).toBe(true);
   });
 
   it('should not save when prompt is empty', () => {
