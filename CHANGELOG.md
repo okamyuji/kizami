@@ -1,3 +1,9 @@
+## [0.5.2](https://github.com/okamyuji/kizami/compare/v0.5.1...v0.5.2) (2026-06-21)
+
+### Bug Fixes
+
+- upgrade undici override to >=7.28.0 for remaining CVEs ([18de0bf](https://github.com/okamyuji/kizami/commit/18de0bf2c959d75368dd5a6e0665eee13d982d30))
+
 ## [0.5.1](https://github.com/okamyuji/kizami/compare/v0.5.0...v0.5.1) (2026-06-21)
 
 ### Bug Fixes
