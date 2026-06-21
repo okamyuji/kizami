@@ -199,6 +199,9 @@ function normalizeLegacyKimiPending(data: unknown): PendingPromptV2 | null {
     return null;
   }
   const pendingKey = `kimi\0${p.sessionId}\0legacy\0${p.createdAt}\0${p.prompt}`;
+  // Derive a sortable sourceOrder from createdAt so legacy prompts preserve chronological order
+  const ts = new Date(p.createdAt).getTime();
+  const sourceOrder = String(isNaN(ts) ? 0 : ts).padStart(20, '0');
   return {
     version: 2,
     runtime: 'kimi',
@@ -208,7 +211,7 @@ function normalizeLegacyKimiPending(data: unknown): PendingPromptV2 | null {
     source: {},
     pendingKey,
     turnSequence: 0,
-    sourceOrder: '00000000000000000000',
+    sourceOrder,
     createdAt: p.createdAt,
   };
 }
@@ -335,7 +338,12 @@ export function quarantineMalformedState(filePath: string, reason: string): stri
   const dir = path.dirname(filePath);
   const base = path.basename(filePath);
   const quarantined = path.join(dir, `.invalid.${base}.${Date.now()}`);
-  fs.renameSync(filePath, quarantined);
+  try {
+    fs.renameSync(filePath, quarantined);
+  } catch {
+    process.stderr.write(`Failed to quarantine: ${filePath} (${reason})\n`);
+    return filePath;
+  }
   try {
     const dirFd = fs.openSync(dir, 'r');
     try {

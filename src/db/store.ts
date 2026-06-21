@@ -581,6 +581,9 @@ export class Store {
         if (cmp === 'older') {
           return { status: 'stale' as const, revision: existing.revision };
         }
+        if (cmp === 'incomparable') {
+          return { status: 'conflict' as const, revision: existing.revision };
+        }
 
         if (checkpoint.revision < existing.revision) {
           return { status: 'stale' as const, revision: existing.revision };

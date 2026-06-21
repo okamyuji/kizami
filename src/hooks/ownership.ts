@@ -45,6 +45,9 @@ export function classifyJsonLifecycleCommand(
 
   if (command.includes(MANAGED_MARKER)) return 'managed';
 
+  // Reject commands with shell operators that indicate chaining/piping
+  if (/[|;&<>]/.test(command)) return 'unrelated';
+
   const parsed = parseArgVector(command);
   if (!parsed) return 'unrelated';
 

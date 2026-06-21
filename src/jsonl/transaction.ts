@@ -13,7 +13,9 @@ export function serializeV2Transaction(
   const { txId, createdAt, targetPath } = options;
 
   const beginRecord: JsonlV2Record = { v: 2, type: 'tx_begin', txId, createdAt };
-  const payloadLines = payloads.map((p) => JSON.stringify(p));
+  // Ensure all payload txIds match the transaction txId
+  const normalizedPayloads = payloads.map((p) => ({ ...p, txId }));
+  const payloadLines = normalizedPayloads.map((p) => JSON.stringify(p));
   const payloadDigest = computePayloadDigest(payloadLines);
 
   const commitRecord: JsonlV2Record = {
@@ -35,7 +37,7 @@ export function serializeV2Transaction(
     payloadLines,
     payloadDigest,
     allLines: [beginLine, ...payloadLines, commitLine],
-    records: [beginRecord, ...payloads, commitRecord],
+    records: [beginRecord, ...normalizedPayloads, commitRecord],
   };
 }
 
@@ -58,16 +60,20 @@ export function validateCommittedTransaction(
   const digest = computePayloadDigest(payloadLines);
   if (commit.payloadDigest !== digest) return undefined;
 
+  if (typeof begin.createdAt !== 'string') return undefined;
+  if (typeof commit.payloadDigest !== 'string') return undefined;
+
   const payloads: JsonlV2Payload[] = [];
   for (const line of payloadLines) {
     const parsed = safeParse(line);
     if (!parsed || !isV2Payload(parsed)) return undefined;
+    if ((parsed as Record<string, unknown>).txId !== begin.txId) return undefined;
     payloads.push(parsed as JsonlV2Payload);
   }
 
   return {
     txId: begin.txId as string,
-    createdAt: typeof begin.createdAt === 'string' ? (begin.createdAt as string) : '',
+    createdAt: begin.createdAt as string,
     payloadDigest: commit.payloadDigest as string,
     payloads,
   };

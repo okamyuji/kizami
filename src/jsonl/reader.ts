@@ -73,12 +73,13 @@ export function readTailRecords(filePath: string, n: number): JsonlChunkRecord[]
 export async function* readJsonlLines(filePath: string): AsyncGenerator<JsonlLineResult> {
   if (!fs.existsSync(filePath)) return;
 
-  const content = fs.readFileSync(filePath, 'utf-8');
+  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   let offset = 0;
 
-  for (const line of content.split('\n')) {
+  for await (const line of rl) {
     const lineBytes = Buffer.byteLength(line, 'utf-8');
-    const endOffset = offset + lineBytes + 1; // +1 for newline
+    const endOffset = offset + lineBytes + 1;
     if (!line.trim()) {
       offset = endOffset;
       continue;

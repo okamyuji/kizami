@@ -248,7 +248,7 @@ export async function commitCheckpointBatch(
 
     // Finalize: remove pending, write cursor, mark finalized
     const allSuccess = results.every(
-      (r) => r.status === 'inserted' || r.status === 'already_current' || r.status === 'stale'
+      (r) => r.status === 'inserted' || r.status === 'already_current'
     );
 
     if (allSuccess) {
@@ -337,17 +337,32 @@ export async function recoverPreparedCheckpoints(
               return;
             }
 
-            // Not committed — check if superseded
-            let isSuperseded = false;
+            // Not committed — check if superseded by comparing head boundaries
+            let allTurnsCovered = receipt.turnKeys.length > 0;
             for (const turnKey of receipt.turnKeys) {
               const head = lockedWriter.getTurnHead(receipt.sessionId, turnKey);
-              if (head) {
-                // Check if head covers this receipt's turns
-                isSuperseded = true;
+              if (!head) {
+                allTurnsCovered = false;
+                break;
+              }
+              // Find the receipt's checkpoint for this turn to compare boundaries
+              const receiptCheckpoint = receipt.records.find(
+                (r) =>
+                  'v' in r && r.v === 2 && r.type === 'turn_checkpoint' && r.turnKey === turnKey
+              );
+              if (receiptCheckpoint && 'observedThrough' in receiptCheckpoint) {
+                const cmp = compareObservationBoundary(
+                  receiptCheckpoint.observedThrough,
+                  head.observedThrough
+                );
+                if (cmp !== 'older' && cmp !== 'equal') {
+                  allTurnsCovered = false;
+                  break;
+                }
               }
             }
 
-            if (isSuperseded) {
+            if (allTurnsCovered) {
               markPreparedSuperseded(filePath, 'canonical head covers turns');
               for (const pendingPath of receipt.finalization.pendingPaths) {
                 removePendingPrompt(pendingPath);

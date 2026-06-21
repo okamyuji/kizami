@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import type { PendingPromptV2, TurnCheckpointCandidate } from '@/checkpoint/types';
 import { createTurnKey } from '@/checkpoint/identity';
 import { writePendingPrompt, readPendingPrompts } from '@/checkpoint/state';
@@ -86,7 +87,7 @@ export const kimiAdapter: RuntimeAdapter<
   ): Promise<PendingPromptV2 | null> {
     if (!payload.prompt || !payload.session_id) return null;
 
-    const pendingKey = `kimi:${payload.session_id}:${Date.now()}`;
+    const pendingKey = `kimi:${payload.session_id}:${randomUUID()}`;
     const turnSequence = env.getOrCreateTurnSequence('kimi', payload.session_id, pendingKey);
     const sourceOrder = String(turnSequence).padStart(20, '0');
 

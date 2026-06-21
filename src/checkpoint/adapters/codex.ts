@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import type { PendingPromptV2, TurnCheckpointCandidate } from '@/checkpoint/types';
 import { createTurnKey } from '@/checkpoint/identity';
 import { writePendingPrompt, readPendingPrompts } from '@/checkpoint/state';
@@ -85,9 +86,10 @@ export const codexAdapter: RuntimeAdapter<CodexPromptPayload, CodexStopPayload, 
     ): Promise<PendingPromptV2 | null> {
       if (!payload.prompt || !payload.session_id) return null;
 
+      const promptHash = createHash('sha256').update(payload.prompt).digest('hex').slice(0, 24);
       const pendingKey = payload.turn_id
         ? `codex:${payload.session_id}:${payload.turn_id}`
-        : `codex:${payload.session_id}:prompt:${payload.prompt.slice(0, 64)}`;
+        : `codex:${payload.session_id}:prompt:${promptHash}`;
 
       const turnSequence = env.getOrCreateTurnSequence('codex', payload.session_id, pendingKey);
       const sourceOrder = String(turnSequence).padStart(20, '0');
