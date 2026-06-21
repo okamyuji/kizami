@@ -1,5 +1,4 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { loadConfig } from '@/config';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
@@ -133,14 +132,23 @@ export async function runRecall(
   try {
     const raw = await readStdin();
 
+    // v2: capture pending prompt before search
+    try {
+      const { capturePendingPrompt } = await import('@/checkpoint/service');
+      await capturePendingPrompt(runtime, raw, configPath);
+    } catch (err) {
+      process.stderr.write(`kizami pending capture error (non-fatal): ${String(err)}\n`);
+    }
+
     if (runtime === 'kimi') {
       const kimiInput = parseKimiPromptInput(raw);
       if (!kimiInput) return;
       const prompt = kimiInput.prompt;
       if (!prompt) return;
-      const config = loadConfig(configPath);
-      const pendingDir = path.join(path.dirname(config.database.path), 'pending', 'kimi');
-      savePendingKimiPrompt(kimiInput, pendingDir);
+      savePendingKimiPrompt(
+        kimiInput,
+        loadConfig(configPath).database.path.replace(/[^/]+$/, 'pending/kimi')
+      );
       const input = { prompt, session_id: kimiInput.session_id, cwd: kimiInput.cwd };
       const result = await handleRecall(input, configPath, projectOverride);
       if (result) process.stdout.write(result);

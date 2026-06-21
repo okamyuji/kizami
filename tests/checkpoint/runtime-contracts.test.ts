@@ -111,7 +111,8 @@ function parseJsonlFile(fixture: FixtureFile): JsonlParseResult {
       parsed = JSON.parse(line);
     } catch (err) {
       throw new Error(
-        `${fixture.relativePath}: line ${i + 1} is not valid JSON: ${line.slice(0, 80)} (${String(err)})`
+        `${fixture.relativePath}: line ${i + 1} is not valid JSON: ${line.slice(0, 80)} (${String(err)})`,
+        { cause: err }
       );
     }
     rows.push({ line, parsed });

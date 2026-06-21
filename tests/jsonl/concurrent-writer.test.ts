@@ -129,27 +129,16 @@ try {
       fs.writeFileSync(scriptPath, workerScript);
 
       // ponytail: sequential child processes — true concurrency needs fork(), but serialization through SQLite lock is the real contract
-      try {
-        execFileSync(
-          process.execPath,
-          ['--import', 'tsx', scriptPath, dir, targetPath, 'child-1', 'tk-c1'],
-          {
-            timeout: 10000,
-            stdio: 'pipe',
-          }
-        );
-        execFileSync(
-          process.execPath,
-          ['--import', 'tsx', scriptPath, dir, targetPath, 'child-2', 'tk-c2'],
-          {
-            timeout: 10000,
-            stdio: 'pipe',
-          }
-        );
-      } catch (e: unknown) {
-        if (e instanceof Error) throw e;
-        throw new Error(String(e));
-      }
+      execFileSync(
+        process.execPath,
+        ['--import', 'tsx', scriptPath, dir, targetPath, 'child-1', 'tk-c1'],
+        { timeout: 10000, stdio: 'pipe' }
+      );
+      execFileSync(
+        process.execPath,
+        ['--import', 'tsx', scriptPath, dir, targetPath, 'child-2', 'tk-c2'],
+        { timeout: 10000, stdio: 'pipe' }
+      );
 
       let txCount = 0;
       for await (const result of readCanonicalTransactions(targetPath)) {

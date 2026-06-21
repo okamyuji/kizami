@@ -11,7 +11,6 @@ import { runAutoMaintenance } from '@/maintenance/auto';
 import { JsonlWriter } from '@/jsonl/writer';
 import { chunksToJsonlRecords } from '@/jsonl/converter';
 import { selfHealFromJsonl } from '@/jsonl/self_heal';
-import { handleCodexStop } from '@/hooks/codex';
 import {
   parseKimiSessionEndInput,
   collectPendingKimiTurns,
@@ -133,34 +132,30 @@ export async function handleSave(
 }
 
 export async function runSave(configPath?: string, runtime: HookRuntime = 'claude'): Promise<void> {
-  // SIGINTハンドラはcli.tsのトップレベルで早期登録済み（ここは念のため二重登録）
   process.on('SIGINT', () => {});
   process.on('SIGTERM', () => {});
 
   try {
     const raw = await readStdin();
-    if (runtime === 'kimi') {
-      await handleKimiSessionEnd(raw, configPath);
-      return;
+
+    // Inspect hook_event_name to determine Stop vs SessionEnd
+    let eventName: string | undefined;
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      eventName = typeof parsed.hook_event_name === 'string' ? parsed.hook_event_name : undefined;
+    } catch {
+      /* malformed input handled below */
     }
-    if (runtime === 'codex') {
-      const input = JSON.parse(raw) as {
-        session_id: string;
-        turn_id?: string;
-        cwd?: string;
-        transcript_path?: string | null;
-        last_assistant_message?: string | null;
-        model?: string;
-      };
-      await handleCodexStop(input, configPath);
-      return;
+
+    const { checkpointStop, checkpointSessionEnd } = await import('@/checkpoint/service');
+
+    if (eventName === 'Stop' || (!eventName && runtime !== 'kimi')) {
+      await checkpointStop(runtime, raw, configPath);
+    } else if (eventName === 'SessionEnd' || runtime === 'kimi') {
+      await checkpointSessionEnd(runtime, raw, configPath);
+    } else {
+      await checkpointStop(runtime, raw, configPath);
     }
-    const input = JSON.parse(raw) as {
-      session_id: string;
-      transcript_path: string;
-      cwd: string;
-    };
-    await handleSave(input, configPath);
   } catch (err) {
     process.stderr.write(`kizami save error: ${String(err)}\n`);
     process.exit(0);
@@ -179,7 +174,7 @@ function resolveProjectPath(rawPath: string): string {
   }
 }
 
-async function handleKimiSessionEnd(raw: string, configPath?: string): Promise<void> {
+export async function handleKimiSessionEnd(raw: string, configPath?: string): Promise<void> {
   const parsed = parseKimiSessionEndInput(raw);
   if (!parsed) return;
 

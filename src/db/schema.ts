@@ -172,7 +172,7 @@ export function initializeHybridSchema(db: Database.Database, dimensions: number
     }
   } catch (err) {
     // sqlite-vecが利用できない場合はスキップ
-    throw new Error(`sqlite-vec initialization failed: ${String(err)}`);
+    throw new Error(`sqlite-vec initialization failed: ${String(err)}`, { cause: err });
   }
 }
 
