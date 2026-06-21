@@ -1,3 +1,15 @@
+## [0.4.6](https://github.com/okamyuji/kizami/compare/v0.4.5...v0.4.6) (2026-06-21)
+
+### Bug Fixes
+
+- **engines:** widen node constraint from exact pin to range ([c7e0c31](https://github.com/okamyuji/kizami/commit/c7e0c31c2ffdec15bf41b4346354f1a009670db2))
+
+## [0.4.5](https://github.com/okamyuji/kizami/compare/v0.4.4...v0.4.5) (2026-06-15)
+
+### Bug Fixes
+
+- **deps:** resolve Dependabot security alerts for esbuild ([51b8877](https://github.com/okamyuji/kizami/commit/51b8877a771657fa47ddf2de39e27e4ca22e3165))
+
 ## [0.4.4](https://github.com/okamyuji/kizami/compare/v0.4.3...v0.4.4) (2026-06-08)
 
 ### Bug Fixes

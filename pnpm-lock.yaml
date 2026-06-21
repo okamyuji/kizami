@@ -8,6 +8,8 @@ overrides:
   protobufjs@<7.5.6: ^7.5.6
   '@protobufjs/utf8@<1.1.1': ^1.1.1
   postcss@<8.5.10: ^8.5.10
+  esbuild@<0.28.1: 0.28.1
+  brace-expansion@>=5.0.0 <5.0.6: ^5.0.6
 
 importers:
   .:
@@ -4840,7 +4842,7 @@ packages:
     peerDependencies:
       '@types/node': ^20.19.0 || >=22.12.0
       '@vitejs/devtools': ^0.1.18
-      esbuild: ^0.27.0 || ^0.28.0
+      esbuild: 0.28.1
       jiti: '>=1.21.0'
       less: ^4.0.0
       sass: ^1.70.0

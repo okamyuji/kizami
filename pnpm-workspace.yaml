@@ -1,13 +1,18 @@
 autoInstallPeers: true
 engineStrict: true
 minimumReleaseAge: 10080
+minimumReleaseAgeExclude:
+  - esbuild
+  - '@esbuild/*'
 allowBuilds:
   better-sqlite3: true
   onnxruntime-node: true
-  esbuild: false
+  esbuild: true
   protobufjs: false
   sharp: false
 overrides:
   protobufjs@<7.5.6: ^7.5.6
   '@protobufjs/utf8@<1.1.1': ^1.1.1
   postcss@<8.5.10: ^8.5.10
+  esbuild@<0.28.1: 0.28.1
+  brace-expansion@>=5.0.0 <5.0.6: ^5.0.6
