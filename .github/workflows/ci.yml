@@ -11,6 +11,7 @@ permissions:
 
 # JavaScript actions (actions/checkout, actions/setup-node, pnpm/action-setup) を
 # Node.js 24 ランタイムで起動させる。Node 20 ランタイムは 2026-09-16 にランナーから削除される。
+# （reusable workflow 側は v6/v7 系アクションのため不要。ローカルジョブ bench/commitlint 用）
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
@@ -19,37 +20,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 単一の "check" ジョブで pnpm check を実行する。
   # pnpm check は内部で secretlint + typecheck + lint + format + build + test を直列実行する。
   # secretlint は Node-native のため未インストール抜けが構造的に起きない。
+  # reusable 側の Lint/Typecheck ステップと一部重複するが、format/secretlint/build の
+  # ゲートを落とさないため test-command で check 全体を実行する。
   check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24.14.1
-          cache: pnpm
-
-      - run: pnpm check
+    uses: okamyuji/reusable-workflows/.github/workflows/node-ci.yml@v1
+    with:
+      node-version: '24.14.1'
+      test-command: 'run check'
 
   # gitleaks は二重防衛のための追加レイヤ (より広範なシークレットルール)。
   # secretlint で既に主要パターンはブロック済みだが、CIでは念のため両方実行する。
   secrets-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    uses: okamyuji/reusable-workflows/.github/workflows/security-scan.yml@v1
 
   bench:
     runs-on: ubuntu-latest
