@@ -1,3 +1,9 @@
+## [0.5.4](https://github.com/okamyuji/kizami/compare/v0.5.3...v0.5.4) (2026-07-31)
+
+### Bug Fixes
+
+- **deps:** bump postcss override to >=8.5.18 ([003fcf9](https://github.com/okamyuji/kizami/commit/003fcf98f797e31d34e360f52857055e791feed2)), closes [#51](https://github.com/okamyuji/kizami/issues/51)
+
 ## [0.5.3](https://github.com/okamyuji/kizami/compare/v0.5.2...v0.5.3) (2026-07-31)
 
 ### Bug Fixes
