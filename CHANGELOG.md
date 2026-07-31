@@ -1,3 +1,9 @@
+## [0.5.3](https://github.com/okamyuji/kizami/compare/v0.5.2...v0.5.3) (2026-07-31)
+
+### Bug Fixes
+
+- **deps:** patch transitive vulnerabilities via pnpm overrides ([4296b87](https://github.com/okamyuji/kizami/commit/4296b87b943ce91696891d7b90b30a0a9a1f19f2))
+
 ## [0.5.2](https://github.com/okamyuji/kizami/compare/v0.5.1...v0.5.2) (2026-06-21)
 
 ### Bug Fixes
