@@ -1,3 +1,9 @@
+## [0.5.5](https://github.com/okamyuji/kizami/compare/v0.5.4...v0.5.5) (2026-08-07)
+
+### Bug Fixes
+
+- **deps:** 脆弱性6件を解消し pnpm を 11.20.0 へ ([6c3a519](https://github.com/okamyuji/kizami/commit/6c3a51907437dbca24cf1806a30e20e4415fb29f))
+
 ## [0.5.4](https://github.com/okamyuji/kizami/compare/v0.5.3...v0.5.4) (2026-07-31)
 
 ### Bug Fixes
