@@ -7,13 +7,15 @@ Claude Codeのセッション会話を自動的に記録し、過去の議論や
 
 - **JSONL正本 + SQLiteキャッシュの二層構成 (v0.2.0〜)**: 月＋ホスト単位の append-only JSONL を正本とし、SQLite は派生キャッシュとして再生成可能です。Git同期・障害復旧・スキーマ実験に強い構成です
 - **SessionStart hook で冒頭注入 (v0.2.0〜)**: セッション開始時に同プロジェクトの直近Q&Aを自動でコンテキスト先頭に注入します
-- **Claude Code / Codex 両対応 (v0.3.0〜)**: Claude Code は既存 transcript 方式、Codex は hook payload 方式で保存・注入します
+- **Claude Code / Codex / Kimi 対応 (Codex: v0.3.0〜, Kimi: v0.4.1〜)**: Claude Code は既存 transcript 方式、Codex / Kimi (kimi-code, Moonshot AI) は hook payload 方式で保存・注入します
+- **JSONL v2トランザクション + turn checkpoint (v0.5.0〜)**: begin/payload/commit のトランザクションframeとpayload digest検証により、クラッシュ途中の書き込みを正本から決定的に除外します。ターン単位のcheckpointは revision と history epoch で改訂・resetを追跡します
+- **検証済みエラー解決記録 (v0.6.0〜)**: 同一プロジェクト・同一セッションで、生コマンドがbyte単位で一致する明示的失敗の後の明示的成功を「検証済み解決」として記録し、`kizami resolutions` で検索できます
 - **HF_HUB_OFFLINEデフォルト化 (v0.2.0〜)**: hybridモードの埋め込み生成時に Hugging Face Hub への暗黙テレメトリ/ping を遮断します
 - セッション終了時にトランスクリプトを自動で保存します
 - プロンプト送信時に関連する過去の記憶を自動で注入します
 - 外部APIやモデルのダウンロードは不要です(coreモード)
 - hybridモードではRuri v3日本語embeddingによるベクトル検索も利用できます
-- DB肥大化を防ぐ自動メンテナンス機能を内蔵しています(90日超の古いチャンク削除、サイズ上限制御)
+- DB肥大化を防ぐ自動メンテナンス機能を内蔵しています(90日超の古いチャンク・実行観測の削除、サイズ上限制御)
 - CLIから記憶の検索、編集、削除ができます
 
 ## 設計原則
@@ -113,7 +115,13 @@ Codex も使う場合は明示的に Codex target を追加します。
 kizami setup --target codex
 ```
 
-Claude Code と Codex の両方を新規に設定する場合は以下を使います。
+Kimi (kimi-code, Moonshot AI) を使う場合も同様に target を指定します (v0.4.1〜)。
+
+```bash
+kizami setup --target kimi
+```
+
+対応 runtime (Claude Code / Codex / Kimi) をまとめて設定する場合は以下を使います。
 
 ```bash
 kizami setup --target all
@@ -176,6 +184,19 @@ kizami embed --backfill
 kizami search "React Hook Form"
 ```
 
+### 検証済みエラー解決記録の検索 (v0.6.0〜)
+
+同一プロジェクト・同一セッションで「失敗したコマンドが後に成功した」記録を検索します。
+コマンドの同一性は保存済みの生コマンドのbyte完全一致で判定します(新しいhash IDは作りません)。
+
+```bash
+kizami resolutions                      # 現プロジェクトの解決記録を一覧
+kizami resolutions "pnpm test"          # コマンド文字列で絞り込み
+kizami resolutions --show-evidence      # コマンドと出力抜粋を表示
+```
+
+証拠(コマンド・失敗/成功出力の抜粋)は既定で非表示です。`--show-evidence` を指定した場合のみ、credential類のbest-effortマスクと端末制御文字の除去を適用した上で表示します。出力抜粋は保存時に先頭20行・末尾5行・UTF-8 64 KiBへ決定的に切り詰められています。
+
 ### セッション一覧の表示
 
 ```bash
@@ -223,6 +244,14 @@ JSON形式またはMarkdown形式でエクスポートできます。
 ```bash
 kizami export --format json > backup.json
 kizami export --format markdown > backup.md
+```
+
+### 未保存トランスクリプトの復旧
+
+hookが動かなかったセッションなど、`~/.claude/projects/` に残っているのに未保存のトランスクリプトを検出して保存します。
+
+```bash
+kizami recover
 ```
 
 ### SQLiteキャッシュの再構築 (v0.2.0〜)
@@ -313,14 +342,15 @@ kizami embed --backfill --dry-run
 
 すべてのコマンドで以下のオプションが使えます。
 
-| オプション         | 説明                                                   |
-| ------------------ | ------------------------------------------------------ |
-| `--project <path>` | プロジェクトパスを指定します                           |
-| `--all-projects`   | 全プロジェクトを横断して検索します                     |
-| `--config <path>`  | 設定ファイルのパスを指定します                         |
-| `--runtime <name>` | hook runtimeを指定します (`claude` / `codex`)          |
-| `--target <name>`  | setup対象を指定します (`claude` / `codex` / `all`)     |
-| `--scope <name>`   | Codex setupのスコープを指定します (`user` / `project`) |
+| オプション         | 説明                                                               |
+| ------------------ | ------------------------------------------------------------------ |
+| `--project <path>` | プロジェクトパスを指定します                                       |
+| `--all-projects`   | 全プロジェクトを横断して検索します                                 |
+| `--config <path>`  | 設定ファイルのパスを指定します                                     |
+| `--runtime <name>` | hook runtimeを指定します (`claude` / `codex` / `kimi`)             |
+| `--target <name>`  | setup対象を指定します (`claude` / `codex` / `kimi` / `all`)        |
+| `--scope <name>`   | Codex setupのスコープを指定します (`user` / `project`)             |
+| `--show-evidence`  | resolutions: best-effortマスク済みのコマンドと出力抜粋を表示します |
 
 ## アーキテクチャ
 
@@ -518,6 +548,45 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(embedding float[256]);
 CREATE TABLE IF NOT EXISTS chunks_vec_map (
   chunk_id INTEGER PRIMARY KEY,
   vec_rowid INTEGER NOT NULL
+);
+
+-- v0.6.0 (schema v5): 実行観測 (Claude tool_use / tool_result.is_error から抽出)
+-- 既存fieldの複合キーで識別し、新しいhash IDは作りません
+CREATE TABLE IF NOT EXISTS execution_observations (
+  runtime TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project_path TEXT NOT NULL,
+  turn_key TEXT NOT NULL,
+  source_order TEXT NOT NULL,
+  history_epoch INTEGER NOT NULL,
+  revision INTEGER NOT NULL,
+  execution_index INTEGER NOT NULL,
+  tool_name TEXT NOT NULL,
+  command TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('failed', 'succeeded', 'unknown')),
+  exit_code INTEGER,
+  output_excerpt TEXT NOT NULL,  -- 先頭20行 + 末尾5行 + 64 KiB 上限で切り詰め済み
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY (runtime, session_id, turn_key, execution_index)
+);
+
+-- v0.6.0 (schema v5): 検証済みエラー解決記録 (観測から決定的に再計算される派生テーブル)
+CREATE TABLE IF NOT EXISTS verified_error_resolutions (
+  runtime TEXT NOT NULL,
+  project_path TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  command TEXT NOT NULL,  -- 生コマンド (byte単位一致で失敗群と成功を対応付け)
+  first_failure_turn_key TEXT NOT NULL,
+  first_failure_execution_index INTEGER NOT NULL,
+  last_failure_turn_key TEXT NOT NULL,
+  last_failure_execution_index INTEGER NOT NULL,
+  failure_count INTEGER NOT NULL,
+  failure_output_excerpt TEXT NOT NULL,
+  success_turn_key TEXT NOT NULL,
+  success_execution_index INTEGER NOT NULL,
+  success_output_excerpt TEXT NOT NULL,
+  verified_at TEXT NOT NULL,
+  PRIMARY KEY (runtime, session_id, success_turn_key, success_execution_index)
 );
 ```
 
@@ -1090,17 +1159,27 @@ kizami/
 │   │   └── store.ts            # データアクセス層
 │   ├── jsonl/                  # v0.2.0: JSONL正本ストア
 │   │   ├── path.ts             # ファイル命名規約 (YYYY-MM-host.jsonl)
-│   │   ├── types.ts            # JsonlChunkRecord 型定義
+│   │   ├── types.ts            # JsonlChunkRecord / v2 record 型定義
 │   │   ├── codec.ts            # Float32Array <-> hex
-│   │   ├── writer.ts           # append-only writer (fsync付き)
+│   │   ├── writer.ts           # append-only writer (fsync付き) + v2 transaction writer
 │   │   ├── reader.ts           # streaming reader + tail reader
+│   │   ├── transaction.ts      # v0.5.0: v2 transaction serialize/validate
+│   │   ├── fold.ts             # v0.5.0: canonical checkpoint history fold
 │   │   ├── converter.ts        # Chunk <-> JsonlChunkRecord
 │   │   ├── migrate.ts          # SQLite → JSONL マイグレーション
 │   │   ├── rebuild.ts          # JSONL → SQLite キャッシュ再構築
 │   │   └── self_heal.ts        # JSONL末尾vs SQLite整合補完
+│   ├── checkpoint/             # v0.5.0: turn checkpoint (identity / builder / coordinator)
+│   │   └── adapters/           # claude / codex / kimi runtime adapter
+│   ├── execution/              # v0.6.0: 実行観測の抽出と検証済み解決の再計算
+│   │   ├── claude.ts           # Claude tool_use / tool_result からの観測抽出
+│   │   ├── resolver.ts         # 失敗→成功の検証済み解決resolver (O(n))
+│   │   └── types.ts
+│   ├── storage/
+│   │   └── permissions.ts      # private directory/file の 0700/0600 補正とsymlink防御
 │   ├── parser/
 │   │   ├── transcript.ts       # JSONLパーサー
-│   │   ├── chunker.ts          # ターンベースチャンク分割
+│   │   ├── chunker.ts          # ターンベースチャンク分割 (ツール出力の20/5行+64KiB切り詰め)
 │   │   └── metadata.ts         # メタデータ抽出
 │   ├── search/
 │   │   ├── fts.ts              # FTS5 trigram + BM25
@@ -1119,8 +1198,14 @@ kizami/
 │       ├── inject.ts           # v0.2.0: SessionStartハンドラ (冒頭注入)
 │       ├── setup.ts            # hook自動設定
 │       └── embed.ts            # embedding一括生成
+├── tools/
+│   └── doclint.mjs             # v0.6.0: docs/ 配下の設計書lint (pnpm doclint)
 └── tests/
     ├── jsonl/                  # v0.2.0: JSONL層のテスト
+    ├── checkpoint/             # v0.5.0: turn checkpointのテスト
+    ├── execution/              # v0.6.0: 実行観測とresolverのテスト
+    ├── storage/
+    ├── e2e/
     ├── perf/
     │   └── bench.ts            # v0.2.0: 絶対値ベンチマーク
     ├── parser/
@@ -1161,6 +1246,30 @@ pnpm lint
 
 ```bash
 pnpm format
+```
+
+### E2Eテスト
+
+ビルド済みCLIを実際に起動して検証します。
+
+```bash
+pnpm e2e
+```
+
+### Mutation testing (v0.6.0〜)
+
+StrykerJSで対象範囲 (stryker.config.mjs の `mutate` に列挙した変更行) のmutantが全killされることを検証します。
+
+```bash
+pnpm test:mutation
+```
+
+### 設計書lint (v0.6.0〜)
+
+docs/ 配下の設計書の必須節・用語・表構造を検査します。
+
+```bash
+pnpm doclint
 ```
 
 ### 性能ベンチマーク (v0.2.0〜)
@@ -1237,6 +1346,8 @@ CIでは `check`, `secrets-scan` (gitleaks), `bench` の3ジョブが並列実�
 - **v0.2.0〜**: 埋め込みパイプライン初期化前に `HF_HUB_OFFLINE=1` および `TRANSFORMERS_OFFLINE=1` をデフォルトでセットします。これにより Hugging Face Hub への暗黙的なテレメトリ/ping を完全に遮断します。明示的に `HF_HUB_OFFLINE=0` を指定したユーザーの設定は尊重されます
 - **v0.2.0〜**: pre-commit と CI で **secretlint (Node-native, pnpm devDep)** によるシークレットスキャンを必ず実行します。`gitleaks` がインストールされていれば追加で実行します。`pnpm check` および CI ジョブの両方で実行されるため、コミットからのシークレット流出を構造的に防ぎます
 - `.env`ファイルの内容やシークレットパターンを検出してマスクします(パターン: `/(?:password|secret|token|api[_-]?key)\s*[=:]\s*\S+/i`)
+- **v0.6.0〜**: `kizami resolutions` の証拠(コマンド・出力抜粋)は既定で非表示です。`--show-evidence` 指定時のみ、credential類のbest-effortマスクと端末制御文字の除去を適用して表示します
+- **v0.6.0〜**: JSONL・SQLite・prepared receipt等の専用永続directoryは0700、永続fileは0600へ補正し、symlink・FIFO・種別不一致を`lstat`と`O_NOFOLLOW` descriptorで拒否します
 - データベースファイルはパーミッション0600で作成されます
 - hybridモードのモデルはHugging Face公式CDNからのみダウンロードされます (初回のみ)
 
