@@ -41,6 +41,13 @@ describe.skipIf(process.platform === 'win32')('private storage permissions', () 
     expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
   });
 
+  it('does nothing for a missing file', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-mode-'));
+    dirs.push(root);
+
+    expect(() => enforcePrivateFile(path.join(root, 'missing.json'))).not.toThrow();
+  });
+
   it('tightens a read file through its opened descriptor', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-mode-'));
     dirs.push(root);

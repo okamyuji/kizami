@@ -219,26 +219,11 @@ describe('built CLI verified error resolution', () => {
       'tx-pass'
     );
 
-    const rebuild = spawnSync(
-      process.execPath,
-      ['dist/cli.js', 'rebuild', '--config', configPath],
-      {
-        encoding: 'utf-8',
-      }
-    );
+    const rebuild = runCli(['rebuild', '--config', configPath], { home: root });
     expect(rebuild.status, rebuild.stderr).toBe(0);
-    const resolutions = spawnSync(
-      process.execPath,
-      [
-        'dist/cli.js',
-        'resolutions',
-        '--show-evidence',
-        '--config',
-        configPath,
-        '--project',
-        '/tmp/proj',
-      ],
-      { encoding: 'utf-8' }
+    const resolutions = runCli(
+      ['resolutions', '--show-evidence', '--config', configPath, '--project', '/tmp/proj'],
+      { home: root }
     );
     expect(resolutions.status, resolutions.stderr).toBe(0);
     expect(resolutions.stdout).toContain('Command: pnpm test');
@@ -255,16 +240,11 @@ describe('built CLI verified error resolution', () => {
       },
       'tx-revise'
     );
-    const rebuiltAfterRevision = spawnSync(
-      process.execPath,
-      ['dist/cli.js', 'rebuild', '--config', configPath],
-      { encoding: 'utf-8' }
-    );
+    const rebuiltAfterRevision = runCli(['rebuild', '--config', configPath], { home: root });
     expect(rebuiltAfterRevision.status, rebuiltAfterRevision.stderr).toBe(0);
-    const afterRevision = spawnSync(
-      process.execPath,
-      ['dist/cli.js', 'resolutions', '--config', configPath, '--project', '/tmp/proj'],
-      { encoding: 'utf-8' }
+    const afterRevision = runCli(
+      ['resolutions', '--config', configPath, '--project', '/tmp/proj'],
+      { home: root }
     );
     expect(afterRevision.stdout).toContain('No verified error resolutions found.');
   });

@@ -126,6 +126,18 @@ describe('jsonl writer + reader', () => {
     ]);
   });
 
+  it('readTailRecords stops at the byte cap and still returns whole records', () => {
+    const dir = makeTmpDir();
+    const filePath = path.join(dir, '2026-05-host.jsonl');
+    const records = Array.from({ length: 10 }, (_, index) =>
+      JSON.stringify(makeRecord(`cap-${index}`))
+    );
+    fs.writeFileSync(filePath, `${'x'.repeat(2 * 1024 * 1024)}\n${records.join('\n')}\n`);
+
+    const tail = readTailRecords(filePath, 10000);
+    expect(tail.map((record) => record.id)).toEqual(records.map((_, i) => `cap-${i}`));
+  });
+
   it('isJsonlChunkRecord rejects invalid shapes', () => {
     expect(isJsonlChunkRecord(null)).toBe(false);
     expect(isJsonlChunkRecord({})).toBe(false);

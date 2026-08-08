@@ -37,16 +37,21 @@ export function truncateToolOutput(output: string): string {
 
 function limitToolOutputLines(output: string): string {
   let newline = -1;
+  // Stryker disable next-line all: headEndはループ内で必ず上書きされ初期値は挙動に影響しない
   let headEnd = -1;
   for (let count = 1; count <= MAX_TOOL_HEAD + MAX_TOOL_TAIL; count++) {
     newline = output.indexOf('\n', newline + 1);
     if (newline === -1) return output;
     if (count === MAX_TOOL_HEAD) headEnd = newline;
   }
+  // 上限行数目の改行が末尾改行なら内容は25行以内なので切り詰めない
+  if (newline === output.length - 1) return output;
 
-  let tailStart = output.length;
+  // 末尾文字が改行ならtail行として数えない。改行以外ならlastIndexOfは同じ改行に到達するため常に-1でよい
+  let tailStart = output.length - 1;
   for (let count = 0; count < MAX_TOOL_TAIL; count++) {
     const previousNewline = output.lastIndexOf('\n', tailStart - 1);
+    // Stryker disable next-line all: 26行以上が確定しており-1は到達不能な防御
     if (previousNewline === -1) return output;
     tailStart = previousNewline;
   }

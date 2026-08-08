@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
 import {
   MAX_JSONL_RECORD_BYTES,
+  computePayloadDigest,
   serializeV2Transaction,
   validateCommittedTransaction,
 } from '@/jsonl/transaction';
@@ -338,7 +339,7 @@ describe('JSONL v2 transaction', () => {
           type: 'tx_commit',
           txId: 'tx-1',
           recordCount: 1,
-          payloadDigest: computeDigest([payloadLine]),
+          payloadDigest: computePayloadDigest([payloadLine]),
           createdAt: '2026-06-21T00:00:00.000Z',
         };
         expect(

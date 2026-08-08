@@ -5,6 +5,7 @@ export interface MaintenanceResult {
   skipped: boolean;
   reason?: string;
   chunksDeleted: number;
+  executionObservationsDeleted: number;
   orphanedSessionsDeleted: number;
   bytesFreed: number;
 }
@@ -25,6 +26,7 @@ export function runAutoMaintenance(store: Store, config: EngramConfig): Maintena
       skipped: true,
       reason: 'disabled',
       chunksDeleted: 0,
+      executionObservationsDeleted: 0,
       orphanedSessionsDeleted: 0,
       bytesFreed: 0,
     };
@@ -35,6 +37,7 @@ export function runAutoMaintenance(store: Store, config: EngramConfig): Maintena
       skipped: true,
       reason: 'interval',
       chunksDeleted: 0,
+      executionObservationsDeleted: 0,
       orphanedSessionsDeleted: 0,
       bytesFreed: 0,
     };
@@ -51,7 +54,7 @@ export function runAutoMaintenance(store: Store, config: EngramConfig): Maintena
     .replace('T', ' ')
     .replace(/\.\d+Z$/, '');
   const ageDeleted = store.deleteChunksBefore(cutoffStr);
-  store.deleteExecutionObservationsBefore(cutoffDate.toISOString());
+  let totalObservationsDeleted = store.deleteExecutionObservationsBefore(cutoffDate.toISOString());
   totalChunksDeleted += ageDeleted;
 
   // 2. DBサイズ上限を超えていたら古い順に追加削除
@@ -59,7 +62,8 @@ export function runAutoMaintenance(store: Store, config: EngramConfig): Maintena
   const statsAfterAge = store.getStats();
   if (statsAfterAge.dbSizeBytes > maxBytes) {
     const sizeDeleted = deleteBySizeLimit(store, maxBytes);
-    totalChunksDeleted += sizeDeleted;
+    totalChunksDeleted += sizeDeleted.chunks;
+    totalObservationsDeleted += sizeDeleted.observations;
   }
 
   // 3. 孤立セッションを削除
@@ -76,13 +80,30 @@ export function runAutoMaintenance(store: Store, config: EngramConfig): Maintena
   return {
     skipped: false,
     chunksDeleted: totalChunksDeleted,
+    executionObservationsDeleted: totalObservationsDeleted,
     orphanedSessionsDeleted: orphaned,
     bytesFreed,
   };
 }
 
-function deleteBySizeLimit(store: Store, maxBytes: number): number {
-  let deleted = 0;
+export interface SizeLimitStore {
+  vacuum(): void;
+  getStats(): {
+    dbSizeBytes: number;
+    totalChunks: number;
+    explicitExecutionObservations: number;
+    unknownExecutionObservations: number;
+  };
+  deleteOldestChunks(count: number): number;
+  deleteOldestExecutionObservations(count: number): number;
+  deleteOrphanedSessions(): number;
+}
+
+export function deleteBySizeLimit(
+  store: SizeLimitStore,
+  maxBytes: number
+): { chunks: number; observations: number } {
+  const deleted = { chunks: 0, observations: 0 };
   for (let i = 0; i < 10; i++) {
     // VACUUMで解放ページを反映してからサイズを測定
     store.vacuum();
@@ -91,15 +112,17 @@ function deleteBySizeLimit(store: Store, maxBytes: number): number {
 
     const totalExecutions =
       stats.explicitExecutionObservations + stats.unknownExecutionObservations;
+    // chunk優先だと観測が大量に残るDBを上限内へ収められないため、多い方から削除する
     let batch: number;
-    if (stats.totalChunks > 0) {
+    if (stats.totalChunks >= totalExecutions && stats.totalChunks > 0) {
       const batchSize = Math.max(1, Math.ceil(stats.totalChunks * 0.1));
       batch = store.deleteOldestChunks(batchSize);
-      deleted += batch;
+      deleted.chunks += batch;
       store.deleteOrphanedSessions();
     } else if (totalExecutions > 0) {
       const batchSize = Math.max(1, Math.ceil(totalExecutions * 0.1));
       batch = store.deleteOldestExecutionObservations(batchSize);
+      deleted.observations += batch;
     } else {
       break;
     }

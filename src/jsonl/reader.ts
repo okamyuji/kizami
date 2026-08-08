@@ -76,6 +76,29 @@ export function isJsonlChunkRecord(value: unknown): value is JsonlChunkRecord {
   );
 }
 
+function readTailWindow(fd: number, n: number): { window: Buffer; startOffset: number } {
+  const chunks: Buffer[] = [];
+  let position = fs.fstatSync(fd).size;
+  let scannedBytes = 0;
+  let newlineCount = 0;
+  while (position > 0 && scannedBytes < MAX_TAIL_SCAN_BYTES && newlineCount <= n) {
+    const length = Math.min(TAIL_READ_BLOCK_BYTES, position, MAX_TAIL_SCAN_BYTES - scannedBytes);
+    position -= length;
+    const chunk = Buffer.allocUnsafe(length);
+    const bytesRead = readRangeSync(fd, chunk, length, position);
+    // Stryker disable all: regular fileの有効offsetでshort readは決定的に再現できない防御
+    if (bytesRead !== length) {
+      throw new Error('Short read while scanning JSONL tail');
+    }
+    // Stryker restore all
+    const content = chunk.subarray(0, bytesRead);
+    chunks.unshift(content);
+    for (const byte of content) if (byte === 0x0a) newlineCount++;
+    scannedBytes += bytesRead;
+  }
+  return { window: Buffer.concat(chunks), startOffset: position };
+}
+
 /**
  * 末尾N行を効率的に読む（self-healing用）。
  * ファイル全体を読まず、末尾チャンクからのみパースする実装。
@@ -87,29 +110,15 @@ export function readTailRecords(filePath: string, n: number): JsonlChunkRecord[]
     filePath,
     fs.constants.O_RDONLY | (process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW)
   );
-  const chunks: Buffer[] = [];
+  let window: Buffer;
   let startOffset: number;
   try {
-    const size = fs.fstatSync(fd).size;
-    let position = size;
-    let scannedBytes = 0;
-    let newlineCount = 0;
-    while (position > 0 && scannedBytes < MAX_TAIL_SCAN_BYTES && newlineCount <= n) {
-      const length = Math.min(TAIL_READ_BLOCK_BYTES, position, MAX_TAIL_SCAN_BYTES - scannedBytes);
-      position -= length;
-      const chunk = Buffer.allocUnsafe(length);
-      const bytesRead = readRangeSync(fd, chunk, length, position);
-      const content = chunk.subarray(0, bytesRead);
-      chunks.unshift(content);
-      for (const byte of content) if (byte === 0x0a) newlineCount++;
-      scannedBytes += bytesRead;
-    }
-    startOffset = position;
+    ({ window, startOffset } = readTailWindow(fd, n));
   } finally {
     fs.closeSync(fd);
   }
 
-  let content = Buffer.concat(chunks).toString('utf-8');
+  let content = window.toString('utf-8');
   if (startOffset > 0) {
     const firstNewline = content.indexOf('\n');
     content = firstNewline === -1 ? '' : content.slice(firstNewline + 1);

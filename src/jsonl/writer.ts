@@ -73,7 +73,9 @@ function forEachPrivateFileLine(
   assertPrivateFileTarget(filePath);
   const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollowFlag());
   const readBuffer = Buffer.allocUnsafe(FILE_SCAN_BLOCK_BYTES);
-  const lineBuffer = Buffer.allocUnsafe(MAX_JSONL_RECORD_BYTES);
+  // MAX_JSONL_RECORD_BYTES (4 MiB) の常時確保はbuffer poolを外れGC負荷になるため、
+  // 小さく確保して上限まで倍々に成長させる
+  let lineBuffer = Buffer.allocUnsafe(FILE_SCAN_BLOCK_BYTES);
   let lineLength = 0;
   let oversized = false;
   let position = 0;
@@ -102,7 +104,16 @@ function forEachPrivateFileLine(
           visitCurrentLine();
           lineLength = 0;
           oversized = false;
-        } else if (lineLength < lineBuffer.length) {
+        } else if (lineLength < MAX_JSONL_RECORD_BYTES) {
+          if (lineLength === lineBuffer.length) {
+            // Stryker disable all: capはメモリ量のみに影響し正しさはlineLength比較が保証する
+            const grown = Buffer.allocUnsafe(
+              Math.min(lineBuffer.length * 2, MAX_JSONL_RECORD_BYTES)
+            );
+            // Stryker restore all
+            lineBuffer.copy(grown, 0, 0, lineLength);
+            lineBuffer = grown;
+          }
           lineBuffer[lineLength++] = byte;
         } else {
           oversized = true;

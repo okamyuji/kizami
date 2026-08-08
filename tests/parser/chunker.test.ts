@@ -61,6 +61,31 @@ describe('buildChunks', () => {
     expect(chunks[0].content).not.toContain('line 30');
   });
 
+  it('keeps exactly 25 lines without truncation regardless of a terminal newline', () => {
+    const lines = Array.from({ length: 25 }, (_, i) => `line ${i + 1}`).join('\n');
+
+    expect(truncateToolOutput(lines)).toBe(lines);
+    expect(truncateToolOutput(`${lines}\n`)).toBe(`${lines}\n`);
+  });
+
+  it('keeps the last 5 content lines when the output ends with a newline', () => {
+    const lines = Array.from({ length: 26 }, (_, i) => `line ${i + 1}`);
+    const truncated = truncateToolOutput(`${lines.join('\n')}\n`);
+
+    expect(truncated).toBe(
+      `${lines.slice(0, 20).join('\n')}\n...(truncated)\n${lines.slice(21).join('\n')}\n`
+    );
+  });
+
+  it('truncates 26 single-character lines to the exact head and tail', () => {
+    const lines = Array.from({ length: 26 }, (_, i) => String.fromCharCode(97 + i));
+    const truncated = truncateToolOutput(lines.join('\n'));
+
+    expect(truncated).toBe(
+      `${lines.slice(0, 20).join('\n')}\n...(truncated)\n${lines.slice(21).join('\n')}`
+    );
+  });
+
   it('limits a single-line tool output by UTF-8 bytes', () => {
     const output = truncateToolOutput(`first-${'あ'.repeat(100_000)}-last`);
 

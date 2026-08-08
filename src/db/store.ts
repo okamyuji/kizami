@@ -452,7 +452,7 @@ export class Store {
           `SELECT DISTINCT session_id FROM execution_observations
            WHERE rowid IN (
              SELECT rowid FROM execution_observations
-             ORDER BY completed_at ASC, history_epoch ASC, source_order ASC, execution_index ASC
+             ORDER BY completed_at ASC, history_epoch ASC, source_order ASC, execution_index ASC, rowid ASC
              LIMIT ?
            )`
         )
@@ -461,7 +461,7 @@ export class Store {
         .prepare(
           `DELETE FROM execution_observations WHERE rowid IN (
              SELECT rowid FROM execution_observations
-             ORDER BY completed_at ASC, history_epoch ASC, source_order ASC, execution_index ASC
+             ORDER BY completed_at ASC, history_epoch ASC, source_order ASC, execution_index ASC, rowid ASC
              LIMIT ?
            )`
         )

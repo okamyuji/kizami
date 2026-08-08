@@ -26,8 +26,29 @@ export function assertPrivateFileTarget(filePath: string): void {
 
 export function enforcePrivateFile(filePath: string): void {
   assertPrivateFileTarget(filePath);
+  // Stryker disable next-line all: ENOENT catchにより変異しても観測可能な挙動が変わらない
   if (process.platform === 'win32' || !fs.existsSync(filePath)) return;
-  fs.chmodSync(filePath, 0o600);
+  // chmodSyncはsymlinkを辿るため、O_NOFOLLOW fdへのfchmodで差し替え競合を防ぐ
+  let fd: number;
+  // Stryker disable all: existsSyncとopenの間の消失raceは決定的に再現できない
+  try {
+    fd = fs.openSync(
+      filePath,
+      fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW
+    );
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  // Stryker restore all
+  try {
+    // Stryker disable next-line all: assertPrivateFileTarget通過後の差し替えraceは決定的に再現できない
+    if (!fs.fstatSync(fd).isFile()) throw new Error('Private storage path is not a file');
+    fs.fchmodSync(fd, 0o600);
+    // Stryker disable next-line all: fd leakはプロセス外部観測が必要でユニットテスト不能
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {

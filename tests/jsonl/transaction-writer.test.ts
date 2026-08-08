@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -303,6 +304,143 @@ describe('JsonlTransactionWriter', () => {
         })
       ).toThrow(/safe scan limit/);
       expect(fs.statSync(targetPath).size).toBe(sizeBefore);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it('recognizes an existing committed payload larger than the initial scan buffer', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const serialized = serializeV2Transaction(
+      [
+        makePayload({
+          parts: [
+            {
+              partIndex: 0,
+              externalId: 'large',
+              content: 'x'.repeat(128 * 1024),
+              role: 'assistant',
+              metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+              tokenCount: 32 * 1024,
+            },
+          ],
+        }),
+      ],
+      {
+        txId: 'tx-large-line',
+        createdAt: '2026-06-21T00:00:00.000Z',
+        targetPath,
+      }
+    );
+    fs.writeFileSync(targetPath, `${serialized.allLines.join('\n')}\n`, { mode: 0o600 });
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      writer.withExclusiveTransaction((lockedWriter) => {
+        expect(lockedWriter.appendPrepared(serialized).receipt.status).toBe('already_committed');
+      });
+      expect(fs.readFileSync(targetPath, 'utf-8').match(/"tx_commit"/g)).toHaveLength(1);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it('fails closed when an existing payload line exceeds the record limit by one byte', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const template = makePayload({
+      txId: 'tx-one-over',
+      parts: [
+        {
+          partIndex: 0,
+          externalId: 'one-over',
+          content: '',
+          role: 'assistant',
+          metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+          tokenCount: 1,
+        },
+      ],
+    });
+    const overhead = JSON.stringify(template).length;
+    const payload: JsonlV2Payload = {
+      ...template,
+      parts: [{ ...template.parts[0], content: 'x'.repeat(MAX_JSONL_RECORD_BYTES + 1 - overhead) }],
+    };
+    const payloadLine = JSON.stringify(payload);
+    expect(Buffer.byteLength(payloadLine, 'utf-8')).toBe(MAX_JSONL_RECORD_BYTES + 1);
+    const payloadDigest = computePayloadDigest([payloadLine]);
+    const begin = JSON.stringify({
+      v: 2,
+      type: 'tx_begin',
+      txId: payload.txId,
+      createdAt: '2026-06-21T00:00:00.000Z',
+    });
+    const commit = JSON.stringify({
+      v: 2,
+      type: 'tx_commit',
+      txId: payload.txId,
+      recordCount: 1,
+      payloadDigest,
+      createdAt: '2026-06-21T00:00:00.000Z',
+    });
+    fs.writeFileSync(targetPath, `${begin}\n${payloadLine}\n${commit}\n`);
+    const serialized: SerializedJsonlTransaction = {
+      txId: payload.txId,
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+      payloadLines: [payloadLine],
+      payloadDigest,
+      allLines: [begin, payloadLine, commit],
+      records: [JSON.parse(begin) as JsonlV2Record, payload, JSON.parse(commit) as JsonlV2Record],
+    };
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      expect(() =>
+        writer.withExclusiveTransaction((lockedWriter) => {
+          lockedWriter.appendPrepared(serialized);
+        })
+      ).toThrow(/safe scan limit/);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it('leaves the commit scan state matching the file stat so the next commit skips the rescan', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const serialized = serializeV2Transaction([makePayload()], {
+      txId: 'tx-fast-path',
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+    });
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      writer.withExclusiveTransaction((lockedWriter) => {
+        const { transaction } = lockedWriter.appendPrepared(serialized);
+        lockedWriter.applyCommittedToIndex(transaction);
+      });
+
+      const stat = fs.statSync(targetPath);
+      const lockDb = new Database(path.join(dir, '.writer-lock.sqlite'), { readonly: true });
+      try {
+        const scanState = lockDb
+          .prepare(
+            'SELECT file_identity, file_size, mtime_ms, ctime_ms FROM file_commit_scan_state WHERE file_path = ?'
+          )
+          .get(targetPath) as
+          | { file_identity: string; file_size: number; mtime_ms: number; ctime_ms: number }
+          | undefined;
+        expect(scanState).toBeDefined();
+        expect(scanState?.file_identity).toBe(`${stat.dev}:${stat.ino}`);
+        expect(scanState?.file_size).toBe(stat.size);
+        expect(scanState?.mtime_ms).toBe(stat.mtimeMs);
+        expect(scanState?.ctime_ms).toBe(stat.ctimeMs);
+      } finally {
+        lockDb.close();
+      }
     } finally {
       writer.close();
     }

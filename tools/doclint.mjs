@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
 
 const REQUIRED_FEATURE_DESIGN_SECTIONS = [
@@ -29,10 +29,11 @@ function collectMarkdownFiles(inputPaths) {
   const files = [];
   const visit = (inputPath) => {
     const absolute = resolve(inputPath);
-    const stat = statSync(absolute);
+    const stat = lstatSync(absolute);
+    if (stat.isSymbolicLink()) return;
     if (stat.isDirectory()) {
       for (const entry of readdirSync(absolute)) visit(resolve(absolute, entry));
-    } else if (extname(absolute) === '.md') {
+    } else if (stat.isFile() && extname(absolute) === '.md') {
       files.push(absolute);
     }
   };

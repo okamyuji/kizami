@@ -6,7 +6,8 @@ import { getDatabase } from '../../src/db/connection';
 import { initializeSchema } from '../../src/db/schema';
 import { Store } from '../../src/db/store';
 import type { Chunk } from '../../src/db/store';
-import { runAutoMaintenance } from '../../src/maintenance/auto';
+import { deleteBySizeLimit, runAutoMaintenance } from '../../src/maintenance/auto';
+import type { SizeLimitStore } from '../../src/maintenance/auto';
 import { getDefaultConfig, type EngramConfig } from '../../src/config';
 import type Database from 'better-sqlite3';
 
@@ -208,12 +209,48 @@ describe('runAutoMaintenance', () => {
       '2020-01-01T00:00:00.000Z'
     );
 
-    runAutoMaintenance(
+    const result = runAutoMaintenance(
       store,
       makeConfig({ maxChunkAgeDays: 9999, maxDbSizeMB: 0.001, intervalHours: 0 })
     );
 
     expect(store.getStats().explicitExecutionObservations).toBe(0);
+    expect(result.executionObservationsDeleted).toBeGreaterThan(0);
+  });
+
+  it('prunes dominant execution observations while recent chunks remain', () => {
+    store.insertChunks([makeChunk('mixed-session', 0, '/test', 'recent chunk')]);
+    const insert = db.prepare(
+      `INSERT INTO execution_observations (
+         runtime, session_id, project_path, turn_key, source_order, history_epoch, revision,
+         execution_index, tool_name, command, status, output_excerpt, completed_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (let i = 0; i < 20; i++) {
+      insert.run(
+        'claude',
+        'mixed-session',
+        '/test',
+        `turn-${i}`,
+        String(i + 1).padStart(20, '0'),
+        0,
+        1,
+        0,
+        'Bash',
+        'pnpm test',
+        'failed',
+        'x'.repeat(50_000),
+        '2020-01-01T00:00:00.000Z'
+      );
+    }
+
+    const result = runAutoMaintenance(
+      store,
+      makeConfig({ maxChunkAgeDays: 9999, maxDbSizeMB: 0.001, intervalHours: 0 })
+    );
+
+    expect(result.executionObservationsDeleted).toBeGreaterThan(0);
+    expect(store.getStats().explicitExecutionObservations).toBeLessThan(20);
   });
 
   it('recomputes resolutions after deleting the oldest execution observation', () => {
@@ -323,5 +360,172 @@ describe('runAutoMaintenance', () => {
 
     expect(result.chunksDeleted).toBe(0);
     expect(store.getStats().totalChunks).toBe(1);
+  });
+});
+
+interface FakeState {
+  chunks: number;
+  explicitObs: number;
+  unknownObs: number;
+  bytesPerRecord: number;
+  baseBytes: number;
+  chunkDeleteReturns?: number;
+}
+
+function makeFakeStore(state: FakeState): {
+  store: SizeLimitStore;
+  calls: { vacuum: number; chunkBatches: number[]; observationBatches: number[] };
+} {
+  const calls = { vacuum: 0, chunkBatches: [] as number[], observationBatches: [] as number[] };
+  const store: SizeLimitStore = {
+    vacuum() {
+      calls.vacuum++;
+    },
+    getStats() {
+      return {
+        dbSizeBytes:
+          state.baseBytes +
+          (state.chunks + state.explicitObs + state.unknownObs) * state.bytesPerRecord,
+        totalChunks: state.chunks,
+        explicitExecutionObservations: state.explicitObs,
+        unknownExecutionObservations: state.unknownObs,
+      };
+    },
+    deleteOldestChunks(count: number) {
+      calls.chunkBatches.push(count);
+      if (state.chunkDeleteReturns !== undefined) return state.chunkDeleteReturns;
+      const removed = Math.min(count, state.chunks);
+      state.chunks -= removed;
+      return removed;
+    },
+    deleteOldestExecutionObservations(count: number) {
+      calls.observationBatches.push(count);
+      const total = state.explicitObs + state.unknownObs;
+      const removed = Math.min(count, total);
+      const fromExplicit = Math.min(removed, state.explicitObs);
+      state.explicitObs -= fromExplicit;
+      state.unknownObs -= removed - fromExplicit;
+      return removed;
+    },
+    deleteOrphanedSessions() {
+      return 0;
+    },
+  };
+  return { store, calls };
+}
+
+describe('deleteBySizeLimit', () => {
+  it('deletes nothing when the size is exactly at the limit', () => {
+    const { store, calls } = makeFakeStore({
+      chunks: 5,
+      explicitObs: 0,
+      unknownObs: 0,
+      bytesPerRecord: 100,
+      baseBytes: 500,
+    });
+
+    const deleted = deleteBySizeLimit(store, 1000);
+
+    expect(deleted).toEqual({ chunks: 0, observations: 0 });
+    expect(calls.vacuum).toBe(1);
+    expect(calls.chunkBatches).toEqual([]);
+    expect(calls.observationBatches).toEqual([]);
+  });
+
+  it('stops after exactly 10 iterations when the size never drops', () => {
+    const { store, calls } = makeFakeStore({
+      chunks: 1000,
+      explicitObs: 0,
+      unknownObs: 0,
+      bytesPerRecord: 100,
+      baseBytes: 0,
+      chunkDeleteReturns: 1,
+    });
+
+    deleteBySizeLimit(store, 10);
+
+    expect(calls.vacuum).toBe(10);
+    expect(calls.chunkBatches).toHaveLength(10);
+  });
+
+  it('stops immediately when the DB is oversized but holds no records', () => {
+    const { store, calls } = makeFakeStore({
+      chunks: 0,
+      explicitObs: 0,
+      unknownObs: 0,
+      bytesPerRecord: 100,
+      baseBytes: 5000,
+    });
+
+    const deleted = deleteBySizeLimit(store, 1000);
+
+    expect(deleted).toEqual({ chunks: 0, observations: 0 });
+    expect(calls.vacuum).toBe(1);
+    expect(calls.chunkBatches).toEqual([]);
+    expect(calls.observationBatches).toEqual([]);
+  });
+
+  it('deletes 10% of observations when they outnumber chunks', () => {
+    const state: FakeState = {
+      chunks: 2,
+      explicitObs: 0,
+      unknownObs: 20,
+      bytesPerRecord: 100,
+      baseBytes: 0,
+    };
+    const { store, calls } = makeFakeStore(state);
+
+    const deleted = deleteBySizeLimit(store, 2100);
+
+    expect(calls.observationBatches).toEqual([2]);
+    expect(calls.chunkBatches).toEqual([]);
+    expect(deleted).toEqual({ chunks: 0, observations: 2 });
+  });
+
+  it('prefers chunks when chunk and observation counts tie', () => {
+    const { store, calls } = makeFakeStore({
+      chunks: 4,
+      explicitObs: 4,
+      unknownObs: 0,
+      bytesPerRecord: 100,
+      baseBytes: 0,
+    });
+
+    const deleted = deleteBySizeLimit(store, 750);
+
+    expect(calls.chunkBatches).toEqual([1]);
+    expect(calls.observationBatches).toEqual([]);
+    expect(deleted).toEqual({ chunks: 1, observations: 0 });
+  });
+
+  it('deletes 10% of chunks per iteration until the size fits', () => {
+    const { store, calls } = makeFakeStore({
+      chunks: 30,
+      explicitObs: 0,
+      unknownObs: 0,
+      bytesPerRecord: 100,
+      baseBytes: 0,
+    });
+
+    const deleted = deleteBySizeLimit(store, 2450);
+
+    expect(calls.chunkBatches).toEqual([3, 3]);
+    expect(deleted).toEqual({ chunks: 6, observations: 0 });
+  });
+
+  it('stops when a delete batch removes nothing', () => {
+    const { store, calls } = makeFakeStore({
+      chunks: 10,
+      explicitObs: 0,
+      unknownObs: 0,
+      bytesPerRecord: 100,
+      baseBytes: 5000,
+      chunkDeleteReturns: 0,
+    });
+
+    const deleted = deleteBySizeLimit(store, 1000);
+
+    expect(calls.chunkBatches).toEqual([1]);
+    expect(deleted).toEqual({ chunks: 0, observations: 0 });
   });
 });
