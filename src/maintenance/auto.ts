@@ -60,14 +60,17 @@ export function runAutoMaintenance(store: Store, config: EngramConfig): Maintena
   // 2. DBサイズ上限を超えていたら古い順に追加削除
   const maxBytes = config.maintenance.maxDbSizeMB * 1024 * 1024;
   const statsAfterAge = store.getStats();
+  let totalOrphanedDeleted = 0;
+  // Stryker disable next-line all: deleteBySizeLimitが同じ判定で自己防御するためこの短絡は変異しても観測不能
   if (statsAfterAge.dbSizeBytes > maxBytes) {
     const sizeDeleted = deleteBySizeLimit(store, maxBytes);
     totalChunksDeleted += sizeDeleted.chunks;
     totalObservationsDeleted += sizeDeleted.observations;
+    totalOrphanedDeleted += sizeDeleted.orphanedSessions;
   }
 
   // 3. 孤立セッションを削除
-  const orphaned = store.deleteOrphanedSessions();
+  const orphaned = totalOrphanedDeleted + store.deleteOrphanedSessions();
 
   // 4. WALチェックポイント
   store.vacuum();
@@ -102,8 +105,8 @@ export interface SizeLimitStore {
 export function deleteBySizeLimit(
   store: SizeLimitStore,
   maxBytes: number
-): { chunks: number; observations: number } {
-  const deleted = { chunks: 0, observations: 0 };
+): { chunks: number; observations: number; orphanedSessions: number } {
+  const deleted = { chunks: 0, observations: 0, orphanedSessions: 0 };
   for (let i = 0; i < 10; i++) {
     // VACUUMで解放ページを反映してからサイズを測定
     store.vacuum();
@@ -118,7 +121,7 @@ export function deleteBySizeLimit(
       const batchSize = Math.max(1, Math.ceil(stats.totalChunks * 0.1));
       batch = store.deleteOldestChunks(batchSize);
       deleted.chunks += batch;
-      store.deleteOrphanedSessions();
+      deleted.orphanedSessions += store.deleteOrphanedSessions();
     } else if (totalExecutions > 0) {
       const batchSize = Math.max(1, Math.ceil(totalExecutions * 0.1));
       batch = store.deleteOldestExecutionObservations(batchSize);

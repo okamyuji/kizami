@@ -218,6 +218,24 @@ describe('runAutoMaintenance', () => {
     expect(result.executionObservationsDeleted).toBeGreaterThan(0);
   });
 
+  it('counts orphaned sessions deleted during size cleanup', () => {
+    store.insertChunks([makeChunk('s-size-orphan', 0, '/test', 'x'.repeat(100_000))]);
+    store.insertSession({
+      sessionId: 's-size-orphan',
+      projectPath: '/test',
+      chunkCount: 1,
+    });
+
+    const result = runAutoMaintenance(
+      store,
+      makeConfig({ maxChunkAgeDays: 9999, maxDbSizeMB: 0.001, intervalHours: 0 })
+    );
+
+    expect(result.chunksDeleted).toBeGreaterThan(0);
+    expect(result.orphanedSessionsDeleted).toBe(1);
+    expect(store.getSessionList().length).toBe(0);
+  });
+
   it('prunes dominant execution observations while recent chunks remain', () => {
     store.insertChunks([makeChunk('mixed-session', 0, '/test', 'recent chunk')]);
     const insert = db.prepare(
@@ -370,6 +388,7 @@ interface FakeState {
   bytesPerRecord: number;
   baseBytes: number;
   chunkDeleteReturns?: number;
+  orphanedReturns?: number;
 }
 
 function makeFakeStore(state: FakeState): {
@@ -408,7 +427,7 @@ function makeFakeStore(state: FakeState): {
       return removed;
     },
     deleteOrphanedSessions() {
-      return 0;
+      return state.orphanedReturns ?? 0;
     },
   };
   return { store, calls };
@@ -426,7 +445,7 @@ describe('deleteBySizeLimit', () => {
 
     const deleted = deleteBySizeLimit(store, 1000);
 
-    expect(deleted).toEqual({ chunks: 0, observations: 0 });
+    expect(deleted).toEqual({ chunks: 0, observations: 0, orphanedSessions: 0 });
     expect(calls.vacuum).toBe(1);
     expect(calls.chunkBatches).toEqual([]);
     expect(calls.observationBatches).toEqual([]);
@@ -459,7 +478,7 @@ describe('deleteBySizeLimit', () => {
 
     const deleted = deleteBySizeLimit(store, 1000);
 
-    expect(deleted).toEqual({ chunks: 0, observations: 0 });
+    expect(deleted).toEqual({ chunks: 0, observations: 0, orphanedSessions: 0 });
     expect(calls.vacuum).toBe(1);
     expect(calls.chunkBatches).toEqual([]);
     expect(calls.observationBatches).toEqual([]);
@@ -479,7 +498,7 @@ describe('deleteBySizeLimit', () => {
 
     expect(calls.observationBatches).toEqual([2]);
     expect(calls.chunkBatches).toEqual([]);
-    expect(deleted).toEqual({ chunks: 0, observations: 2 });
+    expect(deleted).toEqual({ chunks: 0, observations: 2, orphanedSessions: 0 });
   });
 
   it('prefers chunks when chunk and observation counts tie', () => {
@@ -489,13 +508,14 @@ describe('deleteBySizeLimit', () => {
       unknownObs: 0,
       bytesPerRecord: 100,
       baseBytes: 0,
+      orphanedReturns: 1,
     });
 
     const deleted = deleteBySizeLimit(store, 750);
 
     expect(calls.chunkBatches).toEqual([1]);
     expect(calls.observationBatches).toEqual([]);
-    expect(deleted).toEqual({ chunks: 1, observations: 0 });
+    expect(deleted).toEqual({ chunks: 1, observations: 0, orphanedSessions: 1 });
   });
 
   it('deletes 10% of chunks per iteration until the size fits', () => {
@@ -505,12 +525,13 @@ describe('deleteBySizeLimit', () => {
       unknownObs: 0,
       bytesPerRecord: 100,
       baseBytes: 0,
+      orphanedReturns: 1,
     });
 
     const deleted = deleteBySizeLimit(store, 2450);
 
     expect(calls.chunkBatches).toEqual([3, 3]);
-    expect(deleted).toEqual({ chunks: 6, observations: 0 });
+    expect(deleted).toEqual({ chunks: 6, observations: 0, orphanedSessions: 2 });
   });
 
   it('stops when a delete batch removes nothing', () => {
@@ -526,6 +547,6 @@ describe('deleteBySizeLimit', () => {
     const deleted = deleteBySizeLimit(store, 1000);
 
     expect(calls.chunkBatches).toEqual([1]);
-    expect(deleted).toEqual({ chunks: 0, observations: 0 });
+    expect(deleted).toEqual({ chunks: 0, observations: 0, orphanedSessions: 0 });
   });
 });
