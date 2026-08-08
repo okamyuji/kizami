@@ -28,7 +28,7 @@ function makeConfig(dir: string): EngramConfig {
   const defaults = getDefaultConfig();
   const jsonlDir = path.join(dir, 'jsonl');
   const dbPath = path.join(dir, 'memory.db');
-  fs.mkdirSync(jsonlDir, { recursive: true });
+  fs.mkdirSync(jsonlDir, { recursive: true, mode: 0o700 });
 
   // Pre-create and initialize the database
   const db = getDatabase(dbPath);
@@ -199,6 +199,43 @@ describe('commitCheckpointBatch', () => {
     db2.close();
   });
 
+  it('keeps an unchanged turn in a newly allocated reset epoch', async () => {
+    const dir = makeTmpDir();
+    const config = makeConfig(dir);
+    const candidate = makeCandidate();
+
+    await commitCheckpointBatch(
+      {
+        runtime: 'claude',
+        sessionId: 'sess-1',
+        candidates: [candidate],
+        finalization: { pendingPaths: [] },
+      },
+      config
+    );
+
+    const resetResults = await commitCheckpointBatch(
+      {
+        runtime: 'claude',
+        sessionId: 'sess-1',
+        candidates: [candidate],
+        resetReason: 'legacy_mismatch',
+        finalization: { pendingPaths: [] },
+      },
+      config
+    );
+
+    expect(resetResults).toMatchObject([{ status: 'inserted', turnKey: 'tk-1', revision: 1 }]);
+    const db = getDatabase(config.database.path);
+    const store = new Store(db);
+    expect(store.getStoredTurnState('sess-1', 'tk-1')).toMatchObject({
+      historyEpoch: 1,
+      revision: 1,
+    });
+    expect(store.countChunksForSession('sess-1')).toBe(1);
+    db.close();
+  });
+
   it('removes pending files on success', async () => {
     const dir = makeTmpDir();
     const config = makeConfig(dir);
@@ -215,5 +252,57 @@ describe('commitCheckpointBatch', () => {
 
     await commitCheckpointBatch(batch, config);
     expect(fs.existsSync(pendingFile)).toBe(false);
+  });
+
+  it('rejects more than 4096 payloads before writing JSONL or a receipt', async () => {
+    const dir = makeTmpDir();
+    const config = makeConfig(dir);
+    const candidates = Array.from({ length: 4097 }, (_, index) =>
+      makeCandidate({
+        turnKey: `turn-${index}`,
+        sourceOrder: String(index + 1).padStart(20, '0'),
+        observedThrough: { kind: 'source_offset', generation: 0, offset: index + 1 },
+      })
+    );
+
+    await expect(
+      commitCheckpointBatch(
+        {
+          runtime: 'claude',
+          sessionId: 'sess-1',
+          candidates,
+          finalization: { pendingPaths: [] },
+        },
+        config
+      )
+    ).rejects.toThrow(/4096 payload records/);
+
+    expect(fs.readdirSync(config.storage.jsonlDir).some((name) => name.endsWith('.jsonl'))).toBe(
+      false
+    );
+    expect(fs.existsSync(path.join(dir, 'prepared', 'claude'))).toBe(false);
+  });
+
+  it('rejects a receipt larger than 64 MiB before writing JSONL', async () => {
+    const dir = makeTmpDir();
+    const config = makeConfig(dir);
+    const oversizedPath = path.join(dir, `${'x'.repeat(64 * 1024 * 1024)}.json`);
+
+    await expect(
+      commitCheckpointBatch(
+        {
+          runtime: 'claude',
+          sessionId: 'sess-1',
+          candidates: [makeCandidate()],
+          finalization: { pendingPaths: [oversizedPath] },
+        },
+        config
+      )
+    ).rejects.toThrow(/Prepared receipt exceeds/);
+
+    expect(fs.readdirSync(config.storage.jsonlDir).some((name) => name.endsWith('.jsonl'))).toBe(
+      false
+    );
+    expect(fs.existsSync(path.join(dir, 'prepared', 'claude'))).toBe(false);
   });
 });

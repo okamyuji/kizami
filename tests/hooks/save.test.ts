@@ -12,15 +12,23 @@ describe('handleSave', () => {
   let tmpDir: string;
   let dbPath: string;
   let configPath: string;
+  let previousJsonlDir: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-save-'));
     dbPath = path.join(tmpDir, 'test.db');
     configPath = path.join(tmpDir, 'config.json');
+    previousJsonlDir = process.env.KIZAMI_JSONL_DIR;
+    process.env.KIZAMI_JSONL_DIR = path.join(tmpDir, 'jsonl');
     fs.writeFileSync(configPath, JSON.stringify({ database: { path: dbPath } }), 'utf-8');
   });
 
   afterEach(() => {
+    if (previousJsonlDir === undefined) {
+      delete process.env.KIZAMI_JSONL_DIR;
+    } else {
+      process.env.KIZAMI_JSONL_DIR = previousJsonlDir;
+    }
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

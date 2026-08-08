@@ -4,3 +4,6 @@ dist/
 *.db-wal
 *.db-shm
 .env
+docs/_quality/
+docs/analysis/
+.stryker-tmp/

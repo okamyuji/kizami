@@ -1,0 +1,27 @@
+/** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
+export default {
+  plugins: ['@stryker-mutator/vitest-runner'],
+  testRunner: 'vitest',
+  vitest: { related: false, configFile: 'vitest.stryker.config.ts' },
+  mutate: [
+    'src/execution/claude.ts:28-53',
+    'src/execution/resolver.ts',
+    'src/checkpoint/identity.ts:46-68',
+    'src/checkpoint/coordinator.ts:360-361',
+    'src/jsonl/writer.ts:219-233',
+    'src/jsonl/fold.ts:57-65',
+    'src/jsonl/fold.ts:130-134',
+    'src/jsonl/fold.ts:144-144',
+    'src/jsonl/rebuild.ts:34-36',
+    'src/jsonl/rebuild.ts:45-50',
+    'src/jsonl/rebuild.ts:56-57',
+    'src/db/store.ts:185-197',
+    'src/db/store.ts:448-487',
+    'src/db/store.ts:558-561',
+    'src/db/store.ts:620-690',
+  ],
+  reporters: ['clear-text', 'progress'],
+  thresholds: { high: 100, low: 100, break: 100 },
+  timeoutMS: 15000,
+  concurrency: 4,
+};

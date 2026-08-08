@@ -7,6 +7,9 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   eslintConfigPrettier,
   {
-    ignores: ['dist/', 'node_modules/'],
+    ignores: ['dist/', 'node_modules/', '.stryker-tmp/'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'error',
+    },
   }
 );

@@ -9,6 +9,7 @@ import type {
 import { createTurnKey } from '@/checkpoint/identity';
 import { writePendingPrompt, readPendingPrompts } from '@/checkpoint/state';
 import type { RuntimeAdapter, AdapterExtraction, AdapterEnvironment } from '@/checkpoint/adapter';
+import { extractClaudeExecutions } from '@/execution/claude';
 
 export interface ClaudePromptPayload {
   hook_event_name?: string;
@@ -59,6 +60,18 @@ function extractAssistantText(messages: TranscriptMessage[], fromIndex: number):
     }
   }
   return parts.join('');
+}
+
+function extractLastAssistantText(messages: TranscriptMessage[], fromIndex: number): string {
+  for (let index = messages.length - 1; index >= fromIndex; index--) {
+    const message = messages[index];
+    if (message.kind !== 'assistant') continue;
+    return message.content
+      .filter((block) => block.type === 'text')
+      .map((block) => block.text)
+      .join('');
+  }
+  return '';
 }
 
 async function extractTurns(
@@ -120,7 +133,7 @@ async function extractTurns(
 
   // Validate last_assistant_message if provided (Stop only, not SessionEnd)
   if (!toEof && payload.last_assistant_message) {
-    const extractedAssistant = normalizeText(extractAssistantText(messages, lastUserIdx + 1));
+    const extractedAssistant = normalizeText(extractLastAssistantText(messages, lastUserIdx + 1));
     const expected = normalizeText(payload.last_assistant_message);
     if (extractedAssistant !== expected) {
       return {
@@ -165,13 +178,14 @@ async function extractTurns(
     sourceOrder:
       pendingPrompts.length > 0
         ? pendingPrompts[pendingPrompts.length - 1].sourceOrder
-        : '00000000000000000001',
+        : String(lastUserIdx + 1).padStart(20, '0'),
     observedThrough,
     projectPath,
     completedAt: env.now().toISOString(),
     prompt,
     assistant,
     messages: turnMessages,
+    executions: extractClaudeExecutions(turnMessages),
   };
 
   const pendingPaths = pendingPrompts.filter((p) => p.source.path).map((p) => p.source.path!);

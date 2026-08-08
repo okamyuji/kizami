@@ -14,17 +14,75 @@ export interface Turn {
 
 export const MAX_TOOL_HEAD = 20;
 export const MAX_TOOL_TAIL = 5;
+export const MAX_TOOL_OUTPUT_BYTES = 64 * 1024;
+const BYTE_TRUNCATION_MARKER = '\n...(truncated by byte limit)...\n';
 
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
 export function truncateToolOutput(output: string): string {
-  const lines = output.split('\n');
-  if (lines.length <= MAX_TOOL_HEAD + MAX_TOOL_TAIL) return output;
-  const head = lines.slice(0, MAX_TOOL_HEAD).join('\n');
-  const tail = lines.slice(-MAX_TOOL_TAIL).join('\n');
-  return `${head}\n...(truncated)\n${tail}`;
+  const lineLimited = limitToolOutputLines(output);
+  if (Buffer.byteLength(lineLimited, 'utf-8') <= MAX_TOOL_OUTPUT_BYTES) return lineLimited;
+
+  const markerBytes = Buffer.byteLength(BYTE_TRUNCATION_MARKER, 'utf-8');
+  const availableBytes = MAX_TOOL_OUTPUT_BYTES - markerBytes;
+  const headBytes = Math.floor(availableBytes * 0.8);
+  const tailBytes = availableBytes - headBytes;
+  return `${takePrefixByBytes(lineLimited, headBytes)}${BYTE_TRUNCATION_MARKER}${takeSuffixByBytes(
+    lineLimited,
+    tailBytes
+  )}`;
+}
+
+function limitToolOutputLines(output: string): string {
+  let newline = -1;
+  let headEnd = -1;
+  for (let count = 1; count <= MAX_TOOL_HEAD + MAX_TOOL_TAIL; count++) {
+    newline = output.indexOf('\n', newline + 1);
+    if (newline === -1) return output;
+    if (count === MAX_TOOL_HEAD) headEnd = newline;
+  }
+
+  let tailStart = output.length;
+  for (let count = 0; count < MAX_TOOL_TAIL; count++) {
+    const previousNewline = output.lastIndexOf('\n', tailStart - 1);
+    if (previousNewline === -1) return output;
+    tailStart = previousNewline;
+  }
+
+  return `${output.slice(0, headEnd)}\n...(truncated)\n${output.slice(tailStart + 1)}`;
+}
+
+function takePrefixByBytes(value: string, byteLimit: number): string {
+  let result = '';
+  let usedBytes = 0;
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, 'utf-8');
+    if (usedBytes + characterBytes > byteLimit) break;
+    result += character;
+    usedBytes += characterBytes;
+  }
+  return result;
+}
+
+function takeSuffixByBytes(value: string, byteLimit: number): string {
+  let start = value.length;
+  let usedBytes = 0;
+  while (start > 0) {
+    let characterStart = start - 1;
+    const lastUnit = value.charCodeAt(characterStart);
+    if (lastUnit >= 0xdc00 && lastUnit <= 0xdfff && characterStart > 0) {
+      const previousUnit = value.charCodeAt(characterStart - 1);
+      if (previousUnit >= 0xd800 && previousUnit <= 0xdbff) characterStart--;
+    }
+    const character = value.slice(characterStart, start);
+    const characterBytes = Buffer.byteLength(character, 'utf-8');
+    if (usedBytes + characterBytes > byteLimit) break;
+    usedBytes += characterBytes;
+    start = characterStart;
+  }
+  return value.slice(start);
 }
 
 export function formatAssistant(msg: AssistantMessage): string {

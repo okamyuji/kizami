@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { configDefaults } from 'vitest/config';
 import { builtinModules } from 'node:module';
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -47,5 +48,6 @@ export default defineConfig({
   },
   test: {
     globals: true,
+    exclude: [...configDefaults.exclude, '.stryker-tmp/**'],
   },
 });

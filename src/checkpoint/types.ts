@@ -1,5 +1,6 @@
 import type { Chunk } from '@/db/store';
 import type { TranscriptMessage } from '@/parser/transcript';
+import type { ExecutionObservationV1 } from '@/execution/types';
 
 export type HookRuntime = 'claude' | 'codex' | 'kimi';
 
@@ -51,6 +52,7 @@ export interface TurnCheckpointCandidate {
   assistant: string;
   messages: TranscriptMessage[];
   model?: string;
+  executions?: ExecutionObservationV1[];
 }
 
 export interface TurnCheckpointV2 {
@@ -65,6 +67,7 @@ export interface TurnCheckpointV2 {
   completedAt: string;
   projectPath: string;
   parts: TurnPartV2[];
+  executions?: ExecutionObservationV1[];
 }
 
 export type ObservationBoundaryV2 =

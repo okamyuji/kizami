@@ -1,27 +1,35 @@
 import Database from 'better-sqlite3';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getDefaultDbPath } from '@/config';
+import {
+  assertPrivateFileTarget,
+  enforcePrivateDirectory,
+  enforcePrivateFile,
+} from '@/storage/permissions';
 
 export function getDatabase(dbPath?: string): Database.Database {
   const resolvedPath = dbPath || getDefaultDbPath();
 
   // Create parent directories if needed
   const dir = path.dirname(resolvedPath);
-  fs.mkdirSync(dir, { recursive: true });
+  enforcePrivateDirectory(dir);
+  assertPrivateFileTarget(resolvedPath);
+  assertPrivateFileTarget(`${resolvedPath}-wal`);
+  assertPrivateFileTarget(`${resolvedPath}-shm`);
 
   const db = new Database(resolvedPath);
-
-  // Set WAL mode for better concurrent access
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
-
-  // Set file permissions to 0600 (owner read/write only)
   try {
-    fs.chmodSync(resolvedPath, 0o600);
-  } catch {
-    // May fail on some platforms, non-critical
+    // Set WAL mode for better concurrent access
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    db.pragma('busy_timeout = 5000');
+
+    enforcePrivateFile(resolvedPath);
+    enforcePrivateFile(`${resolvedPath}-wal`);
+    enforcePrivateFile(`${resolvedPath}-shm`);
+  } catch (error: unknown) {
+    db.close();
+    throw error;
   }
 
   return db;

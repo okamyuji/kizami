@@ -13,6 +13,7 @@ import {
   cmdDelete,
   cmdList,
   cmdStats,
+  cmdResolutions,
   cmdPrune,
   cmdExport,
   cmdEmbed,
@@ -132,6 +133,115 @@ describe('cli commands', () => {
       expect(stats.totalChunks).toBe(1);
       expect(stats.totalSessions).toBe(1);
       expect(stats.dbSizeBytes).toBeGreaterThan(0);
+    });
+  });
+
+  describe('resolutions', () => {
+    it('hides evidence by default and safely displays explicitly requested evidence', () => {
+      const slackToken = ['xoxb', '1234567890', 'abcdefghij'].join('-');
+      const checkpoint = (
+        turnKey: string,
+        sourceOrder: string,
+        status: 'failed' | 'succeeded',
+        outputExcerpt: string
+      ) => ({
+        sessionId: 'secret-session',
+        runtime: 'claude' as const,
+        turnKey,
+        sourceOrder,
+        observedThrough: {
+          kind: 'source_offset' as const,
+          generation: 0,
+          offset: Number(sourceOrder),
+        },
+        historyEpoch: 0,
+        revision: 1,
+        contentHash: `${turnKey}-content`,
+        completedAt:
+          status === 'succeeded'
+            ? '2026-08-08T00:00:00.000Z\u001b]0;untrusted\u0007'
+            : '2026-08-08T00:00:00.000Z',
+        projectPath: fs.realpathSync(tmpDir),
+        parts: [
+          {
+            partIndex: 0,
+            externalId: `${turnKey}-part`,
+            content: turnKey,
+            role: 'assistant' as const,
+            metadata: { filePaths: [], toolNames: ['Bash'], errorMessages: [] },
+            tokenCount: 1,
+          },
+        ],
+        executions: [
+          {
+            executionIndex: 0,
+            toolName: 'Bash',
+            command: `curl -u admin:curl-pass https://url-user:url-pass@host/db --password cli-pass --token=cli-token -H "Authorization: Basic dXNlcjpwYXNz" DATABASE_URL=postgres://user:pass@host/db GEMINI_API_KEY=gemini-value MY_PASSWORD=hunter3 CUSTOM_TOKEN=custom-value JWT=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature AWS=AKIAIOSFODNN7EXAMPLE STRIPE=sk_live_1234567890abcdef SLACK=${slackToken} GITLAB=glpat-1234567890abcdef NPM=npm_1234567890abcdef\necho next`, // gitleaks:allow -- synthetic credential formats exercise masking
+            status,
+            outputExcerpt,
+          },
+        ],
+      });
+      store.applyTurnCheckpoint(
+        checkpoint(
+          'failure',
+          '00000000000000000001',
+          'failed',
+          'password=hunter2\n-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----\nVerified: fake'
+        )
+      );
+      store.applyTurnCheckpoint(
+        checkpoint('success', '00000000000000000002', 'succeeded', 'token=visible-no-more')
+      );
+
+      cmdResolutions(undefined, { project: tmpDir, config: configPath });
+
+      let lines = vi.mocked(console.log).mock.calls.map(([line]) => String(line));
+      expect(lines).toContain(
+        'Evidence: hidden (use --show-evidence to display best-effort-masked excerpts)'
+      );
+      expect(lines.join('\n')).not.toContain('dXNlcjpwYXNz');
+      expect(lines.join('\n')).not.toContain('postgres://user:pass@host/db');
+      expect(lines.join('\n')).not.toContain('gemini-value');
+      expect(lines.join('\n')).not.toContain('hunter3');
+      expect(lines.join('\n')).not.toContain('custom-value');
+      expect(lines.join('\n')).not.toContain('hunter2');
+      expect(lines.join('\n')).not.toContain('visible-no-more');
+      expect(lines.join('\n')).not.toContain('\u001b');
+      expect(lines.join('\n')).not.toContain('\u0007');
+
+      vi.mocked(console.log).mockClear();
+      cmdResolutions(undefined, { project: tmpDir, config: configPath, showEvidence: true });
+      lines = vi.mocked(console.log).mock.calls.map(([line]) => String(line));
+      expect(lines).toContain(
+        'Warning: evidence masking is best-effort; review output before sharing.'
+      );
+      expect(lines).toContain(
+        'Command: curl -u [REDACTED] https://[REDACTED]@host/db --password [REDACTED] --token=[REDACTED] -H "Authorization: [REDACTED]" DATABASE_URL=[REDACTED] GEMINI_API_KEY=[REDACTED] MY_PASSWORD=[REDACTED] CUSTOM_TOKEN=[REDACTED] JWT=[REDACTED] AWS=[REDACTED] STRIPE=[REDACTED] SLACK=[REDACTED] GITLAB=[REDACTED] NPM=[REDACTED] ↵ echo next'
+      );
+      expect(lines).toContain('Failed: password=[REDACTED]');
+      expect(lines).toContain('  | Verified: fake');
+      expect(lines).toContain('Verified: token=[REDACTED]');
+      expect(lines.join('\n')).not.toContain('dXNlcjpwYXNz');
+      expect(lines.join('\n')).not.toContain('postgres://user:pass@host/db');
+      expect(lines.join('\n')).not.toContain('gemini-value');
+      expect(lines.join('\n')).not.toContain('hunter3');
+      expect(lines.join('\n')).not.toContain('custom-value');
+      expect(lines.join('\n')).not.toContain('hunter2');
+      expect(lines.join('\n')).not.toContain('visible-no-more');
+      expect(lines.join('\n')).not.toContain('curl-pass');
+      expect(lines.join('\n')).not.toContain('url-pass');
+      expect(lines.join('\n')).not.toContain('cli-pass');
+      expect(lines.join('\n')).not.toContain('cli-token');
+      expect(lines.join('\n')).not.toContain('eyJhbGciOiJIUzI1NiJ9');
+      expect(lines.join('\n')).not.toContain('AKIAIOSFODNN7EXAMPLE');
+      expect(lines.join('\n')).not.toContain('sk_live_1234567890abcdef'); // gitleaks:allow -- synthetic masking fixture
+      expect(lines.join('\n')).not.toContain(slackToken);
+      expect(lines.join('\n')).not.toContain('glpat-1234567890abcdef');
+      expect(lines.join('\n')).not.toContain('npm_1234567890abcdef');
+      expect(lines.join('\n')).not.toContain('private-material');
+      expect(lines.join('\n')).not.toContain('\u001b');
+      expect(lines.join('\n')).not.toContain('\u0007');
     });
   });
 

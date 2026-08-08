@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseTranscript } from '../../src/parser/transcript';
 import type { AssistantMessage } from '../../src/parser/transcript';
@@ -6,6 +8,76 @@ import type { AssistantMessage } from '../../src/parser/transcript';
 const FIXTURE = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
 
 describe('parseTranscript', () => {
+  it('skips malformed external content blocks without throwing', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-transcript-'));
+    const file = path.join(dir, 'malformed.jsonl');
+    fs.writeFileSync(
+      file,
+      [
+        JSON.stringify({
+          type: 'user',
+          sessionId: 42,
+          timestamp: { malformed: true },
+          message: { role: 'user', content: [null, 1, { type: 'text', text: 'valid' }] },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          sessionId: 's',
+          message: {
+            role: 'assistant',
+            content: [
+              null,
+              { type: 'tool_use', id: 'missing-input', name: 'Bash' },
+              { type: 'text', text: 'answer' },
+            ],
+          },
+        }),
+      ].join('\n')
+    );
+
+    await expect(parseTranscript(file)).resolves.toMatchObject([
+      { kind: 'user', sessionId: '', timestamp: undefined, text: 'valid' },
+      { kind: 'assistant', content: [{ type: 'text', text: 'answer' }] },
+    ]);
+  });
+
+  it('attaches user tool_result blocks with is_error to the prior assistant', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-transcript-'));
+    const file = path.join(dir, 'transcript.jsonl');
+    fs.writeFileSync(
+      file,
+      [
+        JSON.stringify({
+          type: 'assistant',
+          sessionId: 's',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'false' } }],
+          },
+        }),
+        JSON.stringify({
+          type: 'user',
+          sessionId: 's',
+          message: {
+            role: 'user',
+            content: [
+              { type: 'tool_result', tool_use_id: 'c1', content: 'failed', is_error: true },
+            ],
+          },
+        }),
+      ].join('\n')
+    );
+    const messages = await parseTranscript(file);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].kind).toBe('assistant');
+    if (messages[0].kind === 'assistant') {
+      expect(messages[0].toolResults[0]).toMatchObject({
+        toolUseId: 'c1',
+        content: 'failed',
+        isError: true,
+      });
+    }
+  });
   it('should parse user and assistant messages', async () => {
     const messages = await parseTranscript(FIXTURE);
     // 2 user messages + 4 assistant messages (compaction summary excluded, tool results attached)
@@ -27,7 +99,7 @@ describe('parseTranscript', () => {
 
   it('should skip compaction summaries', async () => {
     const messages = await parseTranscript(FIXTURE);
-    // The summary line should not produce any message
+    // The summary line should produce no message
     const allTexts = messages.map((m) => (m.kind === 'user' ? m.text : ''));
     expect(allTexts.some((t) => t.includes('User asked to create'))).toBe(false);
   });

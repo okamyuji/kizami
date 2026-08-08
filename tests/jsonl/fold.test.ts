@@ -131,7 +131,127 @@ describe('foldCanonicalHistory', () => {
 
     const history = await foldCanonicalHistory([file]);
     expect(history.turns.size).toBe(0);
-    expect(history.errors).toHaveLength(1);
+    expect(history.errors).toHaveLength(0);
+  });
+
+  it('accepts an abandoned frame only when the committed retry has the same payload', async () => {
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'test.jsonl');
+    const serialized = serializeV2Transaction(
+      [{ v: 2, type: 'turn_checkpoint', txId: 'tx-retry', ...makeCheckpoint() }],
+      { txId: 'tx-retry', createdAt: '2026-06-21T00:00:00.000Z', targetPath: file }
+    );
+    fs.writeFileSync(
+      file,
+      `${serialized.allLines.slice(0, -1).join('\n')}\n${serialized.allLines.join('\n')}\n`
+    );
+
+    const history = await foldCanonicalHistory([file]);
+
+    expect(history.turns.size).toBe(1);
+    expect(history.errors).toEqual([]);
+  });
+
+  it('rejects a committed frame that reuses an abandoned tx ID with different payload', async () => {
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'test.jsonl');
+    const abandoned = serializeV2Transaction(
+      [{ v: 2, type: 'turn_checkpoint', txId: 'tx-retry', ...makeCheckpoint() }],
+      { txId: 'tx-retry', createdAt: '2026-06-21T00:00:00.000Z', targetPath: file }
+    );
+    const committed = serializeV2Transaction(
+      [
+        {
+          v: 2,
+          type: 'turn_checkpoint',
+          txId: 'tx-retry',
+          ...makeCheckpoint({ contentHash: 'different-payload' }),
+        },
+      ],
+      { txId: 'tx-retry', createdAt: '2026-06-21T00:00:01.000Z', targetPath: file }
+    );
+    fs.writeFileSync(
+      file,
+      `${abandoned.allLines.slice(0, -1).join('\n')}\n${committed.allLines.join('\n')}\n`
+    );
+
+    const history = await foldCanonicalHistory([file]);
+
+    expect(history.errors).toMatchObject([
+      {
+        code: 'invalid_transaction',
+        txId: 'tx-retry',
+        message: expect.stringContaining('abandoned'),
+      },
+    ]);
+  });
+
+  it('keeps an abandoned-frame error when no committed transaction has that tx ID', async () => {
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'test.jsonl');
+    const abandoned = serializeV2Transaction(
+      [{ v: 2, type: 'turn_checkpoint', txId: 'tx-abandoned', ...makeCheckpoint() }],
+      { txId: 'tx-abandoned', createdAt: '2026-06-21T00:00:00.000Z', targetPath: file }
+    );
+    const committed = serializeV2Transaction(
+      [
+        {
+          v: 2,
+          type: 'turn_checkpoint',
+          txId: 'tx-other',
+          ...makeCheckpoint({ turnKey: 'other-turn' }),
+        },
+      ],
+      { txId: 'tx-other', createdAt: '2026-06-21T00:00:01.000Z', targetPath: file }
+    );
+    fs.writeFileSync(
+      file,
+      `${abandoned.allLines.slice(0, -1).join('\n')}\n${committed.allLines.join('\n')}\n`
+    );
+
+    const history = await foldCanonicalHistory([file]);
+
+    expect(history.errors).toMatchObject([
+      {
+        code: 'invalid_transaction',
+        txId: 'tx-abandoned',
+        message: expect.stringContaining('abandoned'),
+      },
+    ]);
+  });
+
+  it('rejects two committed frames that reuse one tx ID for different payloads', async () => {
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'test.jsonl');
+    writeV2Transaction(
+      file,
+      [{ v: 2, type: 'turn_checkpoint', txId: 'tx-duplicate', ...makeCheckpoint() }],
+      'tx-duplicate'
+    );
+    writeV2Transaction(
+      file,
+      [
+        {
+          v: 2,
+          type: 'turn_checkpoint',
+          txId: 'tx-duplicate',
+          ...makeCheckpoint({ turnKey: 'different-turn', contentHash: 'different-content' }),
+        },
+      ],
+      'tx-duplicate',
+      true
+    );
+
+    const history = await foldCanonicalHistory([file]);
+
+    expect([...history.turns.values()].map((turn) => turn.turnKey)).toEqual(['tk-1']);
+    expect(history.errors).toMatchObject([
+      {
+        code: 'invalid_transaction',
+        txId: 'tx-duplicate',
+        message: expect.stringContaining('different payload digest'),
+      },
+    ]);
   });
 
   it('deduplicates same revision/same hash', async () => {
@@ -181,6 +301,39 @@ describe('foldCanonicalHistory', () => {
     const turn = [...history.turns.values()][0];
     expect(turn.revision).toBe(2);
     expect(turn.contentHash).toBe('hash-2');
+  });
+
+  it('selects the maximum epoch before revision and ignores conflicts only in an old epoch', async () => {
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'test.jsonl');
+    const oldA = makeCheckpoint({ historyEpoch: 0, revision: 9, contentHash: 'old-a' });
+    const oldB = makeCheckpoint({ historyEpoch: 0, revision: 9, contentHash: 'old-b' });
+    const reset: JsonlV2Payload = {
+      v: 2,
+      type: 'session_reset',
+      txId: 'tx-new',
+      sessionId: 'sess-1',
+      historyEpoch: 1,
+      reason: 'legacy_mismatch',
+    };
+    const current = makeCheckpoint({ historyEpoch: 1, revision: 1, contentHash: 'current' });
+    writeV2Transaction(file, [{ v: 2, type: 'turn_checkpoint', txId: 'tx-a', ...oldA }], 'tx-a');
+    writeV2Transaction(
+      file,
+      [{ v: 2, type: 'turn_checkpoint', txId: 'tx-b', ...oldB }],
+      'tx-b',
+      true
+    );
+    writeV2Transaction(
+      file,
+      [reset, { v: 2, type: 'turn_checkpoint', txId: 'tx-new', ...current }],
+      'tx-new',
+      true
+    );
+
+    const history = await foldCanonicalHistory([file]);
+    expect([...history.turns.values()][0]).toMatchObject({ historyEpoch: 1, revision: 1 });
+    expect(history.errors).toEqual([]);
   });
 
   it('suppresses v1 legacy chunks when reset exists', async () => {

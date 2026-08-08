@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
+import { enforcePrivateDirectory } from '@/storage/permissions';
 
 /**
  * JSONL正本のファイル名規約: {YYYY}-{MM}-{hostname}.jsonl
@@ -32,9 +33,7 @@ export function getJsonlFilePath(jsonlDir: string, date: Date = new Date()): str
 }
 
 export function ensureJsonlDir(jsonlDir: string): void {
-  if (!fs.existsSync(jsonlDir)) {
-    fs.mkdirSync(jsonlDir, { recursive: true });
-  }
+  enforcePrivateDirectory(jsonlDir);
 }
 
 /**

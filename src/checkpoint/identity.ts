@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { HookRuntime, ObservationBoundaryV2, TurnPartV2 } from './types';
+import type { ExecutionObservationV1 } from '@/execution/types';
 
 export function hashFields(...fields: Array<string | number>): string {
   const encoded = fields
@@ -32,19 +33,37 @@ export function createContentHash(
   prompt: string,
   assistant: string,
   toolResults: string[],
-  parts: TurnPartV2[]
+  parts: TurnPartV2[],
+  executions: ExecutionObservationV1[] = [],
+  runtime: HookRuntime | '' = '',
+  projectPath = ''
 ): string {
   const partFields: Array<string | number> = [];
   for (const part of parts) {
     partFields.push(part.content, part.role, part.tokenCount);
   }
+  const executionFields: Array<string | number> = [];
+  for (const execution of executions) {
+    executionFields.push(
+      execution.executionIndex,
+      execution.toolName,
+      execution.command,
+      execution.status,
+      execution.exitCode ?? 'null',
+      execution.outputExcerpt
+    );
+  }
   return hashFields(
+    runtime,
+    projectPath,
     prompt,
     assistant,
     toolResults.length,
     ...toolResults,
     parts.length,
-    ...partFields
+    ...partFields,
+    executions.length,
+    ...executionFields
   );
 }
 

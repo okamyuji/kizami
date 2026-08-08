@@ -23,8 +23,10 @@ import { JsonlWriter } from '../../src/jsonl/writer.js';
 import { rebuildFromJsonl } from '../../src/jsonl/rebuild.js';
 import { handleInject } from '../../src/hooks/inject.js';
 import { selfHealFromJsonl } from '../../src/jsonl/self_heal.js';
+import { resolveVerifiedErrors } from '../../src/execution/resolver.js';
 import type { JsonlChunkRecord } from '../../src/jsonl/types.js';
 import type { EngramConfig } from '../../src/config.js';
+import type { StoredExecutionObservation } from '../../src/execution/types.js';
 
 interface BenchResult {
   name: string;
@@ -65,13 +67,47 @@ function makeRecord(idx: number, projectPath: string): JsonlChunkRecord {
 }
 
 function now(): number {
-  return Number(process.hrtime.bigint() / 1_000_000n);
+  return Number(process.hrtime.bigint()) / 1_000_000;
+}
+
+function benchResolve1000(): BenchResult {
+  const observations: StoredExecutionObservation[] = Array.from({ length: 1000 }, (_, index) => ({
+    runtime: 'claude',
+    sessionId: 'resolution-bench',
+    projectPath: '/tmp/proj-resolution',
+    turnKey: `turn-${index.toString().padStart(4, '0')}`,
+    sourceOrder: index.toString().padStart(20, '0'),
+    historyEpoch: 0,
+    revision: 1,
+    completedAt: new Date(Date.UTC(2026, 0, 1) + index * 1000).toISOString(),
+    executionIndex: 0,
+    toolName: 'Bash',
+    command: `pnpm test ${Math.floor(index / 2)}`,
+    status: index % 2 === 0 ? 'failed' : 'succeeded',
+    outputExcerpt: index % 2 === 0 ? 'failed' : 'passed',
+  }));
+
+  resolveVerifiedErrors(observations);
+  const samples = Array.from({ length: 20 }, () => {
+    const start = now();
+    const resolutions = resolveVerifiedErrors(observations);
+    return { duration: now() - start, resolutionCount: resolutions.length };
+  }).sort((left, right) => left.duration - right.duration);
+  const median = samples[Math.floor(samples.length / 2)];
+
+  return {
+    name: 'resolve 1000 execution observations',
+    durationMs: median.duration,
+    target: '<25ms, 500 resolutions',
+    passed: median.duration < 25 && median.resolutionCount === 500,
+    detail: `resolutions=${median.resolutionCount}`,
+  };
 }
 
 async function benchRebuild1000(): Promise<BenchResult> {
   const dir = makeTmpDir();
   const config = makeTestConfig(dir);
-  fs.mkdirSync(config.storage.jsonlDir, { recursive: true });
+  fs.mkdirSync(config.storage.jsonlDir, { recursive: true, mode: 0o700 });
   const writer = new JsonlWriter(config.storage.jsonlDir);
   const projectPath = '/tmp/proj-rebuild';
   const records = Array.from({ length: 1000 }, (_, i) => makeRecord(i, projectPath));
@@ -136,7 +172,7 @@ async function benchSessionInject(): Promise<BenchResult> {
 async function benchCrashRecovery(): Promise<BenchResult> {
   const dir = makeTmpDir();
   const config = makeTestConfig(dir);
-  fs.mkdirSync(config.storage.jsonlDir, { recursive: true });
+  fs.mkdirSync(config.storage.jsonlDir, { recursive: true, mode: 0o700 });
   const writer = new JsonlWriter(config.storage.jsonlDir);
   const projectPath = '/tmp/proj-crash';
   const records = Array.from({ length: 500 }, (_, i) => makeRecord(i, projectPath));
@@ -166,7 +202,7 @@ async function benchCrashRecovery(): Promise<BenchResult> {
 async function benchSelfHeal(): Promise<BenchResult> {
   const dir = makeTmpDir();
   const config = makeTestConfig(dir);
-  fs.mkdirSync(config.storage.jsonlDir, { recursive: true });
+  fs.mkdirSync(config.storage.jsonlDir, { recursive: true, mode: 0o700 });
   const writer = new JsonlWriter(config.storage.jsonlDir);
   const projectPath = '/tmp/proj-heal';
   // 末尾100行スキャン対象
@@ -212,6 +248,7 @@ async function main(): Promise<void> {
   results.push(await benchSessionInject());
   results.push(await benchCrashRecovery());
   results.push(await benchSelfHeal());
+  results.push(benchResolve1000());
 
   let pass = 0;
   for (const r of results) {

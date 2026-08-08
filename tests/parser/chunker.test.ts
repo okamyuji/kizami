@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildChunks } from '../../src/parser/chunker';
+import { buildChunks, MAX_TOOL_OUTPUT_BYTES, truncateToolOutput } from '../../src/parser/chunker';
 import type { TranscriptMessage, AssistantMessage, UserMessage } from '../../src/parser/transcript';
 
 function makeUser(text: string): UserMessage {
@@ -59,6 +59,15 @@ describe('buildChunks', () => {
     expect(chunks[0].content).toContain('line 50');
     // Middle lines should be omitted
     expect(chunks[0].content).not.toContain('line 30');
+  });
+
+  it('limits a single-line tool output by UTF-8 bytes', () => {
+    const output = truncateToolOutput(`first-${'あ'.repeat(100_000)}-last`);
+
+    expect(Buffer.byteLength(output, 'utf-8')).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_BYTES);
+    expect(output).toContain('first-');
+    expect(output).toContain('-last');
+    expect(output).toContain('...(truncated by byte limit)...');
   });
 
   it('should split large turns into multiple chunks', () => {

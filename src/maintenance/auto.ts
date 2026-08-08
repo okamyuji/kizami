@@ -51,12 +51,13 @@ export function runAutoMaintenance(store: Store, config: EngramConfig): Maintena
     .replace('T', ' ')
     .replace(/\.\d+Z$/, '');
   const ageDeleted = store.deleteChunksBefore(cutoffStr);
+  store.deleteExecutionObservationsBefore(cutoffDate.toISOString());
   totalChunksDeleted += ageDeleted;
 
   // 2. DBサイズ上限を超えていたら古い順に追加削除
   const maxBytes = config.maintenance.maxDbSizeMB * 1024 * 1024;
   const statsAfterAge = store.getStats();
-  if (statsAfterAge.dbSizeBytes > maxBytes && statsAfterAge.totalChunks > 0) {
+  if (statsAfterAge.dbSizeBytes > maxBytes) {
     const sizeDeleted = deleteBySizeLimit(store, maxBytes);
     totalChunksDeleted += sizeDeleted;
   }
@@ -86,11 +87,22 @@ function deleteBySizeLimit(store: Store, maxBytes: number): number {
     // VACUUMで解放ページを反映してからサイズを測定
     store.vacuum();
     const stats = store.getStats();
-    if (stats.dbSizeBytes <= maxBytes || stats.totalChunks === 0) break;
+    if (stats.dbSizeBytes <= maxBytes) break;
 
-    const batchSize = Math.max(1, Math.ceil(stats.totalChunks * 0.1));
-    const batch = store.deleteOldestChunks(batchSize);
-    deleted += batch;
+    const totalExecutions =
+      stats.explicitExecutionObservations + stats.unknownExecutionObservations;
+    let batch: number;
+    if (stats.totalChunks > 0) {
+      const batchSize = Math.max(1, Math.ceil(stats.totalChunks * 0.1));
+      batch = store.deleteOldestChunks(batchSize);
+      deleted += batch;
+      store.deleteOrphanedSessions();
+    } else if (totalExecutions > 0) {
+      const batchSize = Math.max(1, Math.ceil(totalExecutions * 0.1));
+      batch = store.deleteOldestExecutionObservations(batchSize);
+    } else {
+      break;
+    }
     if (batch === 0) break;
   }
   return deleted;

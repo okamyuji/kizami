@@ -51,10 +51,51 @@ function makeRec(id: string, idx: number, sess: string = 'sess-1'): JsonlChunkRe
 }
 
 describe('rebuildFromJsonl', () => {
+  it('rejects --from-month without dry-run before opening the database', async () => {
+    const dir = makeTmpDir();
+    const config = makeTestConfig(dir);
+    await expect(rebuildFromJsonl(config, { fromMonth: '2026-05' })).rejects.toThrow(
+      '--from-month is only supported with --dry-run'
+    );
+    expect(fs.existsSync(config.database.path)).toBe(false);
+  });
+
+  it('does not modify existing SQLite data when JSONL validation is fatal', async () => {
+    const dir = makeTmpDir();
+    const config = makeTestConfig(dir);
+    fs.mkdirSync(config.storage.jsonlDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(config.storage.jsonlDir, '2026-05-host.jsonl'),
+      '{invalid}\n{also-invalid}\n'
+    );
+    const db = getDatabase(config.database.path);
+    initializeSchema(db);
+    const store = new Store(db);
+    store.insertChunks([
+      {
+        sessionId: 'existing',
+        projectPath: '/tmp',
+        chunkIndex: 0,
+        content: 'preserve me',
+        role: 'human',
+        metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+        tokenCount: 2,
+      },
+    ]);
+    db.close();
+
+    await expect(rebuildFromJsonl(config)).rejects.toThrow(
+      'Rebuild validation failed: invalid JSON; invalid JSON'
+    );
+    const after = getDatabase(config.database.path);
+    initializeSchema(after);
+    expect(new Store(after).getStats().totalChunks).toBe(1);
+    after.close();
+  });
   it('reconstructs SQLite chunks from JSONL', async () => {
     const dir = makeTmpDir();
     const config = makeTestConfig(dir);
-    fs.mkdirSync(config.storage.jsonlDir, { recursive: true });
+    fs.mkdirSync(config.storage.jsonlDir, { recursive: true, mode: 0o700 });
 
     const writer = new JsonlWriter(config.storage.jsonlDir);
     const ids = [randomUUID(), randomUUID(), randomUUID()];
@@ -81,7 +122,7 @@ describe('rebuildFromJsonl', () => {
   it('dryRun does not write to SQLite', async () => {
     const dir = makeTmpDir();
     const config = makeTestConfig(dir);
-    fs.mkdirSync(config.storage.jsonlDir, { recursive: true });
+    fs.mkdirSync(config.storage.jsonlDir, { recursive: true, mode: 0o700 });
 
     const writer = new JsonlWriter(config.storage.jsonlDir);
     writer.appendRecords([makeRec(randomUUID(), 0)], new Date(Date.UTC(2026, 4, 21)));
@@ -100,7 +141,7 @@ describe('rebuildFromJsonl', () => {
   it('is idempotent: re-running gives same row count', async () => {
     const dir = makeTmpDir();
     const config = makeTestConfig(dir);
-    fs.mkdirSync(config.storage.jsonlDir, { recursive: true });
+    fs.mkdirSync(config.storage.jsonlDir, { recursive: true, mode: 0o700 });
 
     const writer = new JsonlWriter(config.storage.jsonlDir);
     writer.appendRecords(
