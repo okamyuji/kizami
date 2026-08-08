@@ -407,6 +407,54 @@ describe('JsonlTransactionWriter', () => {
     }
   });
 
+  it('serves the second lookup from the commit cache without rescanning the file', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const serialized = serializeV2Transaction([makePayload()], {
+      txId: 'tx-cached',
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+    });
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      writer.withExclusiveTransaction((lockedWriter) => {
+        const { transaction } = lockedWriter.appendPrepared(serialized);
+        lockedWriter.applyCommittedToIndex(transaction);
+      });
+
+      // fileに存在しないprobe行をcacheへ直接仕込む。再走査はindexをfileから
+      // 再構築するためprobeを消す。probeが見えるのはfast pathだけ。
+      const lockDb = new Database(path.join(dir, '.writer-lock.sqlite'));
+      const poison = (): void => {
+        lockDb
+          .prepare(
+            'INSERT OR REPLACE INTO committed_transactions (file_path, tx_id, payload_digest) VALUES (?, ?, ?)'
+          )
+          .run(targetPath, 'tx-probe', 'poisoned-digest');
+      };
+      try {
+        poison();
+        writer.withExclusiveTransaction((lockedWriter) => {
+          expect(() => lockedWriter.findCommitted(targetPath, 'tx-probe', 'real-digest')).toThrow(
+            /different payload/
+          );
+        });
+
+        // snapshotを無効化すると再走査になり、probeはfile由来のindexへ置換される
+        fs.utimesSync(targetPath, new Date(), new Date(Date.now() + 1000));
+        poison();
+        writer.withExclusiveTransaction((lockedWriter) => {
+          expect(lockedWriter.findCommitted(targetPath, 'tx-probe', 'real-digest')).toBe(false);
+        });
+      } finally {
+        lockDb.close();
+      }
+    } finally {
+      writer.close();
+    }
+  });
+
   it('leaves the commit scan state matching the file stat so the next commit skips the rescan', () => {
     const dir = makeTmpDir();
     const targetPath = path.join(dir, 'test.jsonl');
