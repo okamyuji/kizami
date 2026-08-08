@@ -1,3 +1,14 @@
+## [0.6.0](https://github.com/okamyuji/kizami/compare/v0.5.5...v0.6.0) (2026-08-08)
+
+### Features
+
+- add verified error resolution records ([0fc760b](https://github.com/okamyuji/kizami/commit/0fc760bcd3abf8e86e52aa4f4074408c3ffb8e4e))
+
+### Bug Fixes
+
+- address CodeRabbit review findings on PR [#20](https://github.com/okamyuji/kizami/issues/20) ([6f63424](https://github.com/okamyuji/kizami/commit/6f6342471b012fd9b0c1ef3fe3ab474eb28c6159))
+- count orphaned sessions deleted during size cleanup ([3981ff3](https://github.com/okamyuji/kizami/commit/3981ff3b5e2be53d3a8ba7a96c281ce442b910f3))
+
 ## [0.5.5](https://github.com/okamyuji/kizami/compare/v0.5.4...v0.5.5) (2026-08-07)
 
 ### Bug Fixes
