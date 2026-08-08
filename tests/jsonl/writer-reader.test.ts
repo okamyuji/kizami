@@ -63,6 +63,19 @@ describe('jsonl writer + reader', () => {
     expect(typeof filePath).toBe('string');
   });
 
+  it.skipIf(process.platform === 'win32')('rejects a JSONL symlink before writing', () => {
+    const dir = makeTmpDir();
+    const writer = new JsonlWriter(dir);
+    const now = new Date(Date.UTC(2026, 4, 21));
+    const filePath = getJsonlFilePath(dir, now);
+    const targetPath = path.join(dir, 'outside.jsonl');
+    fs.writeFileSync(targetPath, 'unchanged\n');
+    fs.symlinkSync(targetPath, filePath);
+
+    expect(() => writer.appendRecords([makeRecord('blocked')], now)).toThrow(/symlink/);
+    expect(fs.readFileSync(targetPath, 'utf-8')).toBe('unchanged\n');
+  });
+
   it('skips malformed lines in reader', async () => {
     const dir = makeTmpDir();
     const filePath = path.join(dir, '2026-05-host.jsonl');
@@ -95,21 +108,45 @@ describe('jsonl writer + reader', () => {
     expect(tail[9].id).toBe('id-49');
   });
 
+  it('readTailRecords finds recent records after a prefix larger than the scan window', () => {
+    const dir = makeTmpDir();
+    const filePath = path.join(dir, '2026-05-host.jsonl');
+    const records = Array.from({ length: 10 }, (_, index) =>
+      JSON.stringify(makeRecord(`tail-${index}`))
+    );
+    fs.writeFileSync(filePath, `${'x'.repeat(2 * 1024 * 1024)}\n${records.join('\n')}\n`);
+
+    const tail = readTailRecords(filePath, 5);
+    expect(tail.map((record) => record.id)).toEqual([
+      'tail-5',
+      'tail-6',
+      'tail-7',
+      'tail-8',
+      'tail-9',
+    ]);
+  });
+
+  it('readTailRecords stops at the byte cap and still returns whole records', () => {
+    const dir = makeTmpDir();
+    const filePath = path.join(dir, '2026-05-host.jsonl');
+    const records = Array.from({ length: 10 }, (_, index) =>
+      JSON.stringify(makeRecord(`cap-${index}`))
+    );
+    fs.writeFileSync(filePath, `${'x'.repeat(2 * 1024 * 1024)}\n${records.join('\n')}\n`);
+
+    const tail = readTailRecords(filePath, 10000);
+    expect(tail.map((record) => record.id)).toEqual(records.map((_, i) => `cap-${i}`));
+  });
+
   it('isJsonlChunkRecord rejects invalid shapes', () => {
     expect(isJsonlChunkRecord(null)).toBe(false);
     expect(isJsonlChunkRecord({})).toBe(false);
     expect(isJsonlChunkRecord({ v: 1, type: 'chunk' })).toBe(false);
-    expect(
-      isJsonlChunkRecord({
-        v: 1,
-        type: 'chunk',
-        id: 'x',
-        sessionId: 's',
-        projectPath: '/p',
-        chunkIndex: 0,
-        content: 'c',
-        createdAt: '2026-01-01',
-      })
-    ).toBe(true);
+    const valid = makeRecord('valid');
+    expect(isJsonlChunkRecord(valid)).toBe(true);
+    expect(isJsonlChunkRecord({ ...valid, role: 42 })).toBe(false);
+    expect(isJsonlChunkRecord({ ...valid, tokenCount: 'bad' })).toBe(false);
+    expect(isJsonlChunkRecord({ ...valid, metadata: [] })).toBe(false);
+    expect(isJsonlChunkRecord({ ...valid, embeddingDim: 'bad' })).toBe(false);
   });
 });

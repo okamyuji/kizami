@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
-import { serializeV2Transaction, validateCommittedTransaction } from '@/jsonl/transaction';
+import {
+  MAX_JSONL_RECORD_BYTES,
+  computePayloadDigest,
+  serializeV2Transaction,
+  validateCommittedTransaction,
+} from '@/jsonl/transaction';
 import type { JsonlV2Payload } from '@/jsonl/types';
 import type { TurnCheckpointV2 } from '@/checkpoint/types';
 
@@ -164,6 +169,29 @@ describe('JSONL v2 transaction', () => {
       expect(roundTrip.turnKey).toBe(checkpoint.turnKey);
       expect(roundTrip.observedThrough).toEqual(checkpoint.observedThrough);
     });
+
+    it('rejects a payload record larger than the scanner limit before writing', () => {
+      const payload = makePayload({
+        parts: [
+          {
+            partIndex: 0,
+            externalId: 'oversized',
+            content: 'x'.repeat(MAX_JSONL_RECORD_BYTES),
+            role: 'assistant',
+            metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+            tokenCount: MAX_JSONL_RECORD_BYTES / 4,
+          },
+        ],
+      });
+
+      expect(() =>
+        serializeV2Transaction([payload], {
+          txId: 'tx-oversized',
+          createdAt: '2026-06-21T00:00:00.000Z',
+          targetPath: '/tmp/data.jsonl',
+        })
+      ).toThrow(/record exceeds/);
+    });
   });
 
   describe('validateCommittedTransaction', () => {
@@ -291,6 +319,37 @@ describe('JSONL v2 transaction', () => {
         JSON.stringify(commitObj)
       );
       expect(result).toBeUndefined();
+    });
+
+    it('rejects digest-valid checkpoint payloads with missing or malformed required fields', () => {
+      const serialized = serializeV2Transaction([makePayload()], {
+        txId: 'tx-1',
+        createdAt: '2026-06-21T00:00:00.000Z',
+        targetPath: '/tmp/data.jsonl',
+      });
+      const malformedLines = [
+        JSON.stringify({ v: 2, type: 'turn_checkpoint', txId: 'tx-1' }),
+        JSON.stringify({ ...makePayload(), parts: [{ role: 42 }] }),
+        JSON.stringify({ ...makePayload(), executions: [{ status: 'guessed' }] }),
+      ];
+
+      for (const payloadLine of malformedLines) {
+        const commit = {
+          v: 2,
+          type: 'tx_commit',
+          txId: 'tx-1',
+          recordCount: 1,
+          payloadDigest: computePayloadDigest([payloadLine]),
+          createdAt: '2026-06-21T00:00:00.000Z',
+        };
+        expect(
+          validateCommittedTransaction(
+            serialized.allLines[0],
+            [payloadLine],
+            JSON.stringify(commit)
+          )
+        ).toBeUndefined();
+      }
     });
 
     it('validates multi-payload transaction correctly', () => {

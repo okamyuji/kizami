@@ -82,4 +82,11 @@ export type JsonlLineResult =
 
 export type CanonicalTransactionResult =
   | { kind: 'transaction'; transaction: CommittedTransaction }
-  | { kind: 'diagnostic'; filePath: string; offset: number; txId?: string; message: string };
+  | {
+      kind: 'diagnostic';
+      filePath: string;
+      offset: number;
+      txId?: string;
+      payloadDigest?: string;
+      message: string;
+    };

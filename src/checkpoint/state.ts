@@ -2,7 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import type { HookRuntime, PendingPromptV2 } from '@/checkpoint/types';
-import type { JsonlV2Record } from '@/jsonl/types';
+import {
+  enforcePrivateDirectory,
+  enforcePrivateFile,
+  readPrivateTextFile,
+} from '@/storage/permissions';
 
 export interface RuntimeCursorV2 {
   version: 2;
@@ -24,7 +28,6 @@ export interface PreparedCheckpointV2 {
   targetPath: string;
   payloadDigest: string;
   allLines: string[];
-  records: JsonlV2Record[];
   turnKeys: string[];
   finalization: {
     pendingPaths: string[];
@@ -44,6 +47,8 @@ interface LegacyKimiPending {
 const STATE_DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const TEMP_SUFFIX_RE = /\.tmp\.[a-f0-9]+$/i;
+export const MAX_PREPARED_RECEIPT_BYTES = 64 * 1024 * 1024;
+export const MAX_INITIAL_PREPARED_RECEIPT_BYTES = MAX_PREPARED_RECEIPT_BYTES - 1024;
 
 export interface DurableFsAdapter {
   mkdirSync(path: string, options: { recursive: boolean; mode?: number }): string | undefined;
@@ -168,7 +173,9 @@ export function writeDurableJsonWithAdapter<T>(
 }
 
 export function writeDurableJson<T>(filePath: string, value: T, mode = FILE_MODE): void {
-  return writeDurableJsonWithAdapter(defaultAdapter, filePath, value, mode);
+  enforcePrivateDirectory(path.dirname(filePath));
+  writeDurableJsonWithAdapter(defaultAdapter, filePath, value, mode);
+  enforcePrivateFile(filePath);
 }
 
 function isPendingPromptV2(value: unknown): value is PendingPromptV2 {
@@ -298,13 +305,23 @@ export function writePreparedCheckpoint(stateRoot: string, value: PreparedCheckp
   const dir = stateDir(stateRoot, 'prepared', value.runtime);
   const fileName = `${preparedFileName(value.txId)}.json`;
   const filePath = path.join(dir, fileName);
+  assertPreparedCheckpointSize(value, MAX_INITIAL_PREPARED_RECEIPT_BYTES);
   writeDurableJson(filePath, value);
   return filePath;
 }
 
+function assertPreparedCheckpointSize(value: PreparedCheckpointV2, maxBytes: number): void {
+  if (Buffer.byteLength(JSON.stringify(value), 'utf-8') > maxBytes) {
+    throw new Error(`Prepared receipt exceeds ${maxBytes} bytes`);
+  }
+}
+
 export function updatePreparedPhase(filePath: string, phase: PreparedCheckpointV2['phase']): void {
-  const existing = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as PreparedCheckpointV2;
+  const existing = JSON.parse(
+    readPrivateTextFile(filePath, MAX_PREPARED_RECEIPT_BYTES)
+  ) as PreparedCheckpointV2;
   const updated: PreparedCheckpointV2 = { ...existing, phase };
+  assertPreparedCheckpointSize(updated, MAX_PREPARED_RECEIPT_BYTES);
   writeDurableJson(filePath, updated);
 }
 
@@ -313,12 +330,15 @@ export function finalizePreparedCheckpoint(filePath: string): void {
 }
 
 export function markPreparedSuperseded(filePath: string, reason: string): void {
-  const existing = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as PreparedCheckpointV2;
+  const existing = JSON.parse(
+    readPrivateTextFile(filePath, MAX_PREPARED_RECEIPT_BYTES)
+  ) as PreparedCheckpointV2;
   const updated: PreparedCheckpointV2 = {
     ...existing,
     phase: 'superseded',
     supersededReason: reason,
   };
+  assertPreparedCheckpointSize(updated, MAX_PREPARED_RECEIPT_BYTES);
   writeDurableJson(filePath, updated);
 }
 

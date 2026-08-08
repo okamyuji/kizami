@@ -8,6 +8,8 @@ import type {
 import type { AdapterExtraction } from './adapter';
 import type { PreparedCheckpointV2 } from './state';
 import {
+  MAX_INITIAL_PREPARED_RECEIPT_BYTES,
+  MAX_PREPARED_RECEIPT_BYTES,
   writePreparedCheckpoint,
   updatePreparedPhase,
   removePendingPrompt,
@@ -17,15 +19,24 @@ import {
 } from './state';
 import { buildCheckpointParts } from './builder';
 import { hashFields, createContentHash, compareObservationBoundary } from './identity';
-import { serializeV2Transaction } from '@/jsonl/transaction';
+import {
+  MAX_JSONL_RECORD_BYTES,
+  serializeV2Transaction,
+  validateCommittedTransaction,
+} from '@/jsonl/transaction';
 import { JsonlTransactionWriter } from '@/jsonl/writer';
-import type { JsonlV2Payload, SerializedJsonlTransaction } from '@/jsonl/types';
+import type { CanonicalTurnHead } from '@/jsonl/writer';
+import type { JsonlV2Payload } from '@/jsonl/types';
 import { getJsonlFilePath } from '@/jsonl/path';
 import { Store } from '@/db/store';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { enforcePrivateDirectory, readPrivateTextFile } from '@/storage/permissions';
+
+const MAX_PREPARED_PAYLOAD_RECORDS = 4096;
+const PREPARED_TRANSACTION_FRAME_RESERVE_BYTES = 4096;
 
 export interface CheckpointBatch {
   runtime: HookRuntime;
@@ -33,6 +44,190 @@ export interface CheckpointBatch {
   candidates: TurnCheckpointCandidate[];
   resetReason?: 'legacy_mismatch';
   finalization: AdapterExtraction['finalization'];
+}
+
+interface ValidatedRecoveryReceipt {
+  phase: PreparedCheckpointV2['phase'];
+  txId: string;
+  runtime: HookRuntime;
+  sessionId: string;
+  targetPath: string;
+  payloadDigest: string;
+  historyEpoch: number;
+  allLines: string[];
+  payloads: JsonlV2Payload[];
+  turnKeys: string[];
+  pendingPaths: string[];
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isPreparedPhase(value: unknown): value is PreparedCheckpointV2['phase'] {
+  return (
+    value === 'prepared' ||
+    value === 'jsonl_committed' ||
+    value === 'sqlite_applied' ||
+    value === 'finalized' ||
+    value === 'superseded'
+  );
+}
+
+function isHookRuntime(value: unknown): value is HookRuntime {
+  return value === 'claude' || value === 'codex' || value === 'kimi';
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function assertPreparedTransactionBounds(allLines: string[]): void {
+  if (allLines.length < 3 || allLines.length > MAX_PREPARED_PAYLOAD_RECORDS + 2) {
+    throw new Error(`Prepared receipt exceeds ${MAX_PREPARED_PAYLOAD_RECORDS} payload records`);
+  }
+  if (allLines.some((line) => Buffer.byteLength(line, 'utf-8') > MAX_JSONL_RECORD_BYTES)) {
+    throw new Error(`Prepared receipt contains a line larger than ${MAX_JSONL_RECORD_BYTES} bytes`);
+  }
+}
+
+function assertPreparedReceiptCanBeRecovered(receipt: PreparedCheckpointV2): void {
+  assertPreparedTransactionBounds(receipt.allLines);
+  if (Buffer.byteLength(JSON.stringify(receipt), 'utf-8') > MAX_INITIAL_PREPARED_RECEIPT_BYTES) {
+    throw new Error(`Prepared receipt exceeds ${MAX_INITIAL_PREPARED_RECEIPT_BYTES} bytes`);
+  }
+}
+
+function assertPayloadsFitPreparedReceipt(
+  payloads: JsonlV2Payload[],
+  receiptWithoutLines: Omit<PreparedCheckpointV2, 'allLines' | 'payloadDigest'>
+): void {
+  const skeleton: PreparedCheckpointV2 = {
+    ...receiptWithoutLines,
+    payloadDigest: '',
+    allLines: ['', '', ''],
+  };
+  let projectedBytes =
+    Buffer.byteLength(JSON.stringify(skeleton), 'utf-8') + PREPARED_TRANSACTION_FRAME_RESERVE_BYTES;
+  for (const payload of payloads) {
+    const payloadLine = JSON.stringify(payload);
+    if (Buffer.byteLength(payloadLine, 'utf-8') > MAX_JSONL_RECORD_BYTES) {
+      throw new Error(`JSONL transaction record exceeds ${MAX_JSONL_RECORD_BYTES} bytes`);
+    }
+    projectedBytes += Buffer.byteLength(JSON.stringify(payloadLine), 'utf-8') + 1;
+    if (projectedBytes > MAX_INITIAL_PREPARED_RECEIPT_BYTES) {
+      throw new Error(`Prepared receipt exceeds ${MAX_INITIAL_PREPARED_RECEIPT_BYTES} bytes`);
+    }
+  }
+}
+
+function parseRecoveryReceipt(filePath: string): ValidatedRecoveryReceipt {
+  const parsed: unknown = JSON.parse(readPrivateTextFile(filePath, MAX_PREPARED_RECEIPT_BYTES));
+  if (!isObject(parsed) || !isObject(parsed.finalization)) {
+    throw new Error('Invalid prepared receipt structure');
+  }
+  if (
+    parsed.version !== 2 ||
+    !isPreparedPhase(parsed.phase) ||
+    typeof parsed.txId !== 'string' ||
+    !isHookRuntime(parsed.runtime) ||
+    typeof parsed.sessionId !== 'string' ||
+    typeof parsed.targetPath !== 'string' ||
+    typeof parsed.payloadDigest !== 'string' ||
+    !isStringArray(parsed.allLines) ||
+    !isStringArray(parsed.finalization.pendingPaths)
+  ) {
+    throw new Error('Invalid prepared receipt fields');
+  }
+
+  const allLines = parsed.allLines;
+  assertPreparedTransactionBounds(allLines);
+  const frame = validateCommittedTransaction(
+    allLines[0],
+    allLines.slice(1, -1),
+    allLines[allLines.length - 1]
+  );
+  if (
+    !frame ||
+    frame.txId !== parsed.txId ||
+    frame.payloadDigest !== parsed.payloadDigest ||
+    frame.payloads.some(
+      (payload) =>
+        payload.sessionId !== parsed.sessionId ||
+        (payload.type === 'turn_checkpoint' && payload.runtime !== parsed.runtime)
+    )
+  ) {
+    throw new Error('Prepared receipt does not match its validated transaction');
+  }
+  const historyEpoch = frame.payloads[0]?.historyEpoch;
+  if (
+    historyEpoch === undefined ||
+    frame.payloads.some((payload) => payload.historyEpoch !== historyEpoch)
+  ) {
+    throw new Error('Prepared receipt contains inconsistent history epochs');
+  }
+
+  return {
+    phase: parsed.phase,
+    txId: parsed.txId,
+    runtime: parsed.runtime,
+    sessionId: parsed.sessionId,
+    targetPath: parsed.targetPath,
+    payloadDigest: parsed.payloadDigest,
+    historyEpoch,
+    allLines,
+    payloads: frame.payloads,
+    turnKeys: frame.payloads
+      .filter((payload) => payload.type === 'turn_checkpoint')
+      .map((payload) => payload.turnKey),
+    pendingPaths: parsed.finalization.pendingPaths,
+  };
+}
+
+function validateRecoveryPaths(
+  receipt: ValidatedRecoveryReceipt,
+  config: EngramConfig,
+  stateRoot: string
+): void {
+  const targetPath = path.resolve(receipt.targetPath);
+  const jsonlDir = path.resolve(config.storage.jsonlDir);
+  if (
+    path.dirname(targetPath) !== jsonlDir ||
+    !path.basename(targetPath).endsWith('.jsonl') ||
+    path.basename(targetPath).startsWith('.')
+  ) {
+    throw new Error('Prepared receipt target is not a canonical JSONL file');
+  }
+
+  const pendingDir = path.resolve(stateRoot, 'pending', receipt.runtime);
+  for (const pendingPath of receipt.pendingPaths) {
+    const resolvedPendingPath = path.resolve(pendingPath);
+    if (
+      path.dirname(resolvedPendingPath) !== pendingDir ||
+      !path.basename(resolvedPendingPath).endsWith('.json') ||
+      path.basename(resolvedPendingPath).startsWith('.')
+    ) {
+      throw new Error('Prepared receipt pending path is outside its runtime directory');
+    }
+  }
+}
+
+function canonicalHeadCoversCheckpoint(
+  head: CanonicalTurnHead,
+  checkpoint: TurnCheckpointV2
+): boolean {
+  if (head.historyEpoch !== checkpoint.historyEpoch) {
+    return head.historyEpoch > checkpoint.historyEpoch;
+  }
+
+  const boundaryComparison = compareObservationBoundary(
+    checkpoint.observedThrough,
+    head.observedThrough
+  );
+  if (boundaryComparison === 'older') return true;
+  if (boundaryComparison !== 'equal') return false;
+  if (head.revision !== checkpoint.revision) return head.revision > checkpoint.revision;
+  return head.contentHash === checkpoint.contentHash;
 }
 
 function getStateRoot(config: EngramConfig): string {
@@ -109,7 +304,8 @@ export async function commitCheckpointBatch(
       }
 
       for (const candidate of batch.candidates) {
-        const head = lockedWriter.getTurnHead(candidate.sessionId, candidate.turnKey);
+        const storedHead = lockedWriter.getTurnHead(candidate.sessionId, candidate.turnKey);
+        const head = storedHead?.historyEpoch === historyEpoch ? storedHead : undefined;
         const effectiveSourceOrder = head ? head.sourceOrder : candidate.sourceOrder;
 
         const effectiveCandidate = { ...candidate, sourceOrder: effectiveSourceOrder };
@@ -119,7 +315,10 @@ export async function commitCheckpointBatch(
           candidate.prompt,
           candidate.assistant,
           toolResults,
-          parts
+          parts,
+          candidate.executions ?? [],
+          candidate.runtime,
+          candidate.projectPath
         );
 
         if (head) {
@@ -166,6 +365,7 @@ export async function commitCheckpointBatch(
           completedAt: candidate.completedAt,
           projectPath: candidate.projectPath,
           parts,
+          executions: candidate.executions ?? [],
         };
 
         checkpoints.push(checkpoint);
@@ -180,6 +380,9 @@ export async function commitCheckpointBatch(
       }
 
       if (payloads.length === 0) return null;
+      if (payloads.length > MAX_PREPARED_PAYLOAD_RECORDS) {
+        throw new Error(`Prepared receipt exceeds ${MAX_PREPARED_PAYLOAD_RECORDS} payload records`);
+      }
 
       const txId = buildTxId(batch.sessionId, historyEpoch, !!batch.resetReason, turnData);
 
@@ -190,6 +393,17 @@ export async function commitCheckpointBatch(
 
       const now = new Date();
       const targetPath = getJsonlFilePath(jsonlDir, now);
+      const receiptWithoutLines: Omit<PreparedCheckpointV2, 'allLines' | 'payloadDigest'> = {
+        version: 2,
+        phase: 'prepared',
+        txId,
+        runtime: batch.runtime,
+        sessionId: batch.sessionId,
+        targetPath,
+        turnKeys: turnData.map((t) => t.turnKey),
+        finalization: batch.finalization,
+      };
+      assertPayloadsFitPreparedReceipt(payloads, receiptWithoutLines);
       const serialized = serializeV2Transaction(payloads, {
         txId,
         createdAt: now.toISOString(),
@@ -198,18 +412,11 @@ export async function commitCheckpointBatch(
 
       // Write prepared receipt
       const receiptValue: PreparedCheckpointV2 = {
-        version: 2,
-        phase: 'prepared',
-        txId,
-        runtime: batch.runtime,
-        sessionId: batch.sessionId,
-        targetPath,
+        ...receiptWithoutLines,
         payloadDigest: serialized.payloadDigest,
         allLines: serialized.allLines,
-        records: serialized.records,
-        turnKeys: turnData.map((t) => t.turnKey),
-        finalization: batch.finalization,
       };
+      assertPreparedReceiptCanBeRecovered(receiptValue);
       const receiptPath = writePreparedCheckpoint(stateRoot, receiptValue);
 
       const { transaction } = lockedWriter.appendPrepared(serialized);
@@ -291,9 +498,13 @@ export async function recoverPreparedCheckpoints(
   let superseded = 0;
   let failed = 0;
 
+  if (!fs.existsSync(preparedDir)) return { finalized, superseded, failed };
+  enforcePrivateDirectory(preparedDir);
+
   for (const rt of runtimes) {
     const dir = path.join(preparedDir, rt);
     if (!fs.existsSync(dir)) continue;
+    enforcePrivateDirectory(dir);
 
     const files = fs
       .readdirSync(dir, { withFileTypes: true })
@@ -302,7 +513,11 @@ export async function recoverPreparedCheckpoints(
     for (const file of files) {
       const filePath = path.join(dir, file.name);
       try {
-        const receipt = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as PreparedCheckpointV2;
+        const receipt = parseRecoveryReceipt(filePath);
+        if (receipt.runtime !== rt) {
+          throw new Error('Prepared receipt runtime does not match its directory');
+        }
+        validateRecoveryPaths(receipt, config, stateRoot);
         if (receipt.phase === 'finalized' || receipt.phase === 'superseded') {
           fs.rmSync(filePath, { force: true });
           continue;
@@ -312,18 +527,42 @@ export async function recoverPreparedCheckpoints(
         const txWriter = new JsonlTransactionWriter(jsonlDir);
         try {
           txWriter.withExclusiveTransaction((lockedWriter) => {
+            if (lockedWriter.getSessionEpoch(receipt.sessionId) > receipt.historyEpoch) {
+              markPreparedSuperseded(filePath, 'newer session epoch covers receipt');
+              superseded++;
+              return;
+            }
+
             // Check if already committed
             if (
               lockedWriter.findCommitted(receipt.targetPath, receipt.txId, receipt.payloadDigest)
             ) {
+              lockedWriter.applyCommittedToIndex({
+                txId: receipt.txId,
+                createdAt: new Date().toISOString(),
+                filePath: receipt.targetPath,
+                beginOffset: 0,
+                endOffset: fs.lstatSync(receipt.targetPath).size,
+                payloadDigest: receipt.payloadDigest,
+                payloads: receipt.payloads,
+              });
               // Already in JSONL — apply to SQLite and finalize
               const db = getDatabase(config.database.path);
               initializeSchema(db);
               const store = new Store(db);
               try {
-                for (const record of receipt.records) {
-                  if ('v' in record && record.v === 2 && record.type === 'turn_checkpoint') {
-                    store.applyTurnCheckpoint(record);
+                const checkpoints: TurnCheckpointV2[] = [];
+                let containsReset = false;
+                for (const record of receipt.payloads) {
+                  if (record.v !== 2) continue;
+                  if (record.type === 'session_reset') containsReset = true;
+                  if (record.type === 'turn_checkpoint') checkpoints.push(record);
+                }
+                if (containsReset) {
+                  store.replaceSessionWithBaseline(receipt.sessionId, checkpoints);
+                } else {
+                  for (const checkpoint of checkpoints) {
+                    store.applyTurnCheckpoint(checkpoint);
                   }
                 }
               } finally {
@@ -344,58 +583,46 @@ export async function recoverPreparedCheckpoints(
                 break;
               }
               // Find the receipt's checkpoint for this turn to compare boundaries
-              const receiptCheckpoint = receipt.records.find(
-                (r) =>
-                  'v' in r && r.v === 2 && r.type === 'turn_checkpoint' && r.turnKey === turnKey
+              const receiptCheckpoint = receipt.payloads.find(
+                (record) => record.type === 'turn_checkpoint' && record.turnKey === turnKey
               );
-              if (receiptCheckpoint && 'observedThrough' in receiptCheckpoint) {
-                const cmp = compareObservationBoundary(
-                  receiptCheckpoint.observedThrough,
-                  head.observedThrough
-                );
-                if (cmp !== 'older' && cmp !== 'equal') {
-                  allTurnsCovered = false;
-                  break;
-                }
+              if (
+                receiptCheckpoint?.type !== 'turn_checkpoint' ||
+                !canonicalHeadCoversCheckpoint(head, receiptCheckpoint)
+              ) {
+                allTurnsCovered = false;
+                break;
               }
             }
 
             if (allTurnsCovered) {
               markPreparedSuperseded(filePath, 'canonical head covers turns');
-              for (const pendingPath of receipt.finalization.pendingPaths) {
-                removePendingPrompt(pendingPath);
-              }
               superseded++;
               return;
             }
 
-            // Reconstruct and append
-            const serialized: SerializedJsonlTransaction = {
-              txId: receipt.txId,
-              createdAt: new Date().toISOString(),
-              targetPath: receipt.targetPath,
-              payloadLines: receipt.allLines.slice(1, -1),
-              payloadDigest: receipt.payloadDigest,
-              allLines: receipt.allLines,
-              records: receipt.records,
-            };
-
-            const { transaction } = lockedWriter.appendPrepared(serialized);
-            lockedWriter.applyCommittedToIndex(transaction);
-            updatePreparedPhase(filePath, 'jsonl_committed');
+            markPreparedSuperseded(filePath, 'uncommitted receipt requires source replay');
+            superseded++;
           });
 
           // If we got here and phase is jsonl_committed, apply to SQLite
-          const updated = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as PreparedCheckpointV2;
+          const updated = parseRecoveryReceipt(filePath);
           if (updated.phase === 'jsonl_committed') {
             const db = getDatabase(config.database.path);
             initializeSchema(db);
             const store = new Store(db);
             try {
-              for (const record of receipt.records) {
-                if ('v' in record && record.v === 2 && record.type === 'turn_checkpoint') {
-                  store.applyTurnCheckpoint(record);
-                }
+              const checkpoints: TurnCheckpointV2[] = [];
+              let containsReset = false;
+              for (const record of updated.payloads) {
+                if (record.v !== 2) continue;
+                if (record.type === 'session_reset') containsReset = true;
+                if (record.type === 'turn_checkpoint') checkpoints.push(record);
+              }
+              if (containsReset) {
+                store.replaceSessionWithBaseline(updated.sessionId, checkpoints);
+              } else {
+                for (const checkpoint of checkpoints) store.applyTurnCheckpoint(checkpoint);
               }
             } finally {
               db.close();

@@ -45,4 +45,14 @@ describe('connection', () => {
     expect(row.id).toBe(1);
     db.close();
   });
+
+  it.skipIf(process.platform === 'win32')('rejects a database symlink before opening it', () => {
+    const dbPath = makeTmpDb();
+    const targetPath = path.join(path.dirname(dbPath), 'outside.db');
+    fs.writeFileSync(targetPath, 'unchanged');
+    fs.symlinkSync(targetPath, dbPath);
+
+    expect(() => getDatabase(dbPath)).toThrow(/symlink/);
+    expect(fs.readFileSync(targetPath, 'utf-8')).toBe('unchanged');
+  });
 });

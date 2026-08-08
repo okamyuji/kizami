@@ -2,6 +2,8 @@ import type Database from 'better-sqlite3';
 import type { TurnCheckpointV2, ObservationBoundaryV2 } from '@/checkpoint/types';
 import type { CanonicalHistory } from '@/jsonl/fold';
 import { compareObservationBoundary } from '@/checkpoint/identity';
+import { resolveVerifiedErrors } from '@/execution/resolver';
+import type { StoredExecutionObservation, VerifiedErrorResolution } from '@/execution/types';
 
 export interface Chunk {
   id?: number;
@@ -68,6 +70,9 @@ export interface StoreStats {
   totalChunks: number;
   totalSessions: number;
   dbSizeBytes: number;
+  explicitExecutionObservations: number;
+  unknownExecutionObservations: number;
+  verifiedErrorResolutions: number;
 }
 
 export class Store {
@@ -164,6 +169,8 @@ export class Store {
 
   deleteSession(sessionId: string): void {
     const tx = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM verified_error_resolutions WHERE session_id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM execution_observations WHERE session_id = ?').run(sessionId);
       this.db.prepare('DELETE FROM chunks WHERE session_id = ?').run(sessionId);
       this.db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId);
     });
@@ -173,6 +180,21 @@ export class Store {
   deleteChunksBefore(date: string): number {
     const result = this.db.prepare('DELETE FROM chunks WHERE created_at < ?').run(date);
     return result.changes;
+  }
+
+  deleteExecutionObservationsBefore(date: string): number {
+    return this.db.transaction(() => {
+      const sessions = this.db
+        .prepare('SELECT DISTINCT session_id FROM execution_observations WHERE completed_at < ?')
+        .all(date) as Array<{ session_id: string }>;
+      const result = this.db
+        .prepare('DELETE FROM execution_observations WHERE completed_at < ?')
+        .run(date);
+      for (const { session_id: sessionId } of sessions) {
+        this.recomputeVerifiedResolutions(sessionId);
+      }
+      return result.changes;
+    })();
   }
 
   searchFTS(query: string, projectPath: string, limit: number): SearchResult[] {
@@ -279,11 +301,23 @@ export class Store {
       .get() as {
       size: number;
     };
+    const explicitRow = this.db
+      .prepare("SELECT COUNT(*) AS count FROM execution_observations WHERE status != 'unknown'")
+      .get() as { count: number };
+    const unknownRow = this.db
+      .prepare("SELECT COUNT(*) AS count FROM execution_observations WHERE status = 'unknown'")
+      .get() as { count: number };
+    const resolutionsRow = this.db
+      .prepare('SELECT COUNT(*) AS count FROM verified_error_resolutions')
+      .get() as { count: number };
 
     return {
       totalChunks: chunksRow.count,
       totalSessions: sessionsRow.count,
       dbSizeBytes: sizeRow?.size ?? 0,
+      explicitExecutionObservations: explicitRow.count,
+      unknownExecutionObservations: unknownRow.count,
+      verifiedErrorResolutions: resolutionsRow.count,
     };
   }
 
@@ -411,13 +445,46 @@ export class Store {
     return result.changes;
   }
 
+  deleteOldestExecutionObservations(count: number): number {
+    return this.db.transaction(() => {
+      const sessions = this.db
+        .prepare(
+          `SELECT DISTINCT session_id FROM execution_observations
+           WHERE rowid IN (
+             SELECT rowid FROM execution_observations
+             ORDER BY completed_at ASC, history_epoch ASC, source_order ASC, execution_index ASC, rowid ASC
+             LIMIT ?
+           )`
+        )
+        .all(count) as Array<{ session_id: string }>;
+      const result = this.db
+        .prepare(
+          `DELETE FROM execution_observations WHERE rowid IN (
+             SELECT rowid FROM execution_observations
+             ORDER BY completed_at ASC, history_epoch ASC, source_order ASC, execution_index ASC, rowid ASC
+             LIMIT ?
+           )`
+        )
+        .run(count);
+      for (const { session_id: sessionId } of sessions) {
+        this.recomputeVerifiedResolutions(sessionId);
+      }
+      return result.changes;
+    })();
+  }
+
   deleteOrphanedSessions(): number {
-    const result = this.db
-      .prepare(
-        'DELETE FROM sessions WHERE session_id NOT IN (SELECT DISTINCT session_id FROM chunks)'
-      )
-      .run();
-    return result.changes;
+    return this.db.transaction(() => {
+      const orphanPredicate =
+        'session_id IN (SELECT session_id FROM sessions WHERE session_id NOT IN (SELECT DISTINCT session_id FROM chunks))';
+      this.db.prepare(`DELETE FROM verified_error_resolutions WHERE ${orphanPredicate}`).run();
+      this.db.prepare(`DELETE FROM execution_observations WHERE ${orphanPredicate}`).run();
+      return this.db
+        .prepare(
+          'DELETE FROM sessions WHERE session_id NOT IN (SELECT DISTINCT session_id FROM chunks)'
+        )
+        .run().changes;
+    })();
   }
 
   /**
@@ -488,6 +555,8 @@ export class Store {
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks_vec'")
       .get();
     const tx = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM verified_error_resolutions WHERE 1=1').run();
+      this.db.prepare('DELETE FROM execution_observations WHERE 1=1').run();
       this.db.prepare('DELETE FROM chunks WHERE 1=1').run();
       this.db.prepare('DELETE FROM sessions WHERE 1=1').run();
       if (hasVecRow) {
@@ -547,6 +616,148 @@ export class Store {
   }
 
   // --- v2 checkpoint methods ---
+
+  private replaceCheckpointExecutions(checkpoint: TurnCheckpointV2): void {
+    this.db
+      .prepare(
+        'DELETE FROM execution_observations WHERE runtime = ? AND session_id = ? AND turn_key = ?'
+      )
+      .run(checkpoint.runtime, checkpoint.sessionId, checkpoint.turnKey);
+    const insert = this.db.prepare(`
+      INSERT INTO execution_observations (
+        runtime, session_id, project_path, turn_key, source_order, history_epoch, revision,
+        execution_index, tool_name, command, status, exit_code,
+        output_excerpt, completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const execution of checkpoint.executions ?? []) {
+      insert.run(
+        checkpoint.runtime,
+        checkpoint.sessionId,
+        checkpoint.projectPath,
+        checkpoint.turnKey,
+        checkpoint.sourceOrder,
+        checkpoint.historyEpoch,
+        checkpoint.revision,
+        execution.executionIndex,
+        execution.toolName,
+        execution.command,
+        execution.status,
+        execution.exitCode ?? null,
+        execution.outputExcerpt,
+        checkpoint.completedAt
+      );
+    }
+  }
+
+  private recomputeVerifiedResolutions(sessionId: string): void {
+    this.db.prepare('DELETE FROM verified_error_resolutions WHERE session_id = ?').run(sessionId);
+    const rows = this.db
+      .prepare(
+        `SELECT runtime, session_id, project_path, turn_key, source_order, history_epoch, revision,
+                execution_index, tool_name, command, status, exit_code,
+                output_excerpt, completed_at
+         FROM execution_observations WHERE session_id = ?`
+      )
+      .all(sessionId) as Record<string, unknown>[];
+    const observations = rows.map((row) => this.rowToExecutionObservation(row));
+    const insert = this.db.prepare(`
+      INSERT INTO verified_error_resolutions (
+        runtime, project_path, session_id, command,
+        first_failure_turn_key, first_failure_execution_index,
+        last_failure_turn_key, last_failure_execution_index, failure_count,
+        failure_output_excerpt, success_turn_key, success_execution_index,
+        success_output_excerpt, verified_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const resolution of resolveVerifiedErrors(observations)) {
+      insert.run(
+        resolution.runtime,
+        resolution.projectPath,
+        resolution.sessionId,
+        resolution.command,
+        resolution.firstFailureTurnKey,
+        resolution.firstFailureExecutionIndex,
+        resolution.lastFailureTurnKey,
+        resolution.lastFailureExecutionIndex,
+        resolution.failureCount,
+        resolution.failureOutputExcerpt,
+        resolution.successTurnKey,
+        resolution.successExecutionIndex,
+        resolution.successOutputExcerpt,
+        resolution.verifiedAt
+      );
+    }
+  }
+
+  private rowToExecutionObservation(row: Record<string, unknown>): StoredExecutionObservation {
+    return {
+      runtime: row['runtime'] as StoredExecutionObservation['runtime'],
+      sessionId: row['session_id'] as string,
+      projectPath: row['project_path'] as string,
+      turnKey: row['turn_key'] as string,
+      sourceOrder: row['source_order'] as string,
+      historyEpoch: row['history_epoch'] as number,
+      revision: row['revision'] as number,
+      executionIndex: row['execution_index'] as number,
+      toolName: row['tool_name'] as string,
+      command: row['command'] as string,
+      status: row['status'] as StoredExecutionObservation['status'],
+      exitCode: row['exit_code'] == null ? undefined : (row['exit_code'] as number),
+      outputExcerpt: row['output_excerpt'] as string,
+      completedAt: row['completed_at'] as string,
+    };
+  }
+
+  getExecutionObservations(sessionId?: string): StoredExecutionObservation[] {
+    const sql = `SELECT * FROM execution_observations${sessionId ? ' WHERE session_id = ?' : ''}
+      ORDER BY history_epoch, source_order, execution_index`;
+    const rows = (
+      sessionId ? this.db.prepare(sql).all(sessionId) : this.db.prepare(sql).all()
+    ) as Record<string, unknown>[];
+    return rows.map((row) => this.rowToExecutionObservation(row));
+  }
+
+  searchVerifiedResolutions(
+    query: string | undefined,
+    projectPath: string | undefined,
+    limit = 50
+  ): VerifiedErrorResolution[] {
+    const filters: string[] = [];
+    const params: unknown[] = [];
+    if (projectPath) {
+      filters.push('project_path = ?');
+      params.push(projectPath);
+    }
+    if (query) {
+      filters.push(
+        '(command LIKE ? OR failure_output_excerpt LIKE ? OR success_output_excerpt LIKE ?)'
+      );
+      const pattern = `%${query}%`;
+      params.push(pattern, pattern, pattern);
+    }
+    const where = filters.length ? ` WHERE ${filters.join(' AND ')}` : '';
+    params.push(limit);
+    const rows = this.db
+      .prepare(`SELECT * FROM verified_error_resolutions${where} ORDER BY verified_at DESC LIMIT ?`)
+      .all(...params) as Record<string, unknown>[];
+    return rows.map((row) => ({
+      runtime: row['runtime'] as VerifiedErrorResolution['runtime'],
+      projectPath: row['project_path'] as string,
+      sessionId: row['session_id'] as string,
+      command: row['command'] as string,
+      firstFailureTurnKey: row['first_failure_turn_key'] as string,
+      firstFailureExecutionIndex: row['first_failure_execution_index'] as number,
+      lastFailureTurnKey: row['last_failure_turn_key'] as string,
+      lastFailureExecutionIndex: row['last_failure_execution_index'] as number,
+      failureCount: row['failure_count'] as number,
+      failureOutputExcerpt: row['failure_output_excerpt'] as string,
+      successTurnKey: row['success_turn_key'] as string,
+      successExecutionIndex: row['success_execution_index'] as number,
+      successOutputExcerpt: row['success_output_excerpt'] as string,
+      verifiedAt: row['verified_at'] as string,
+    }));
+  }
 
   getStoredTurnState(sessionId: string, turnKey: string): StoredTurnState | undefined {
     const row = this.db
@@ -631,6 +842,8 @@ export class Store {
 
       this.reindexSessionChunks(checkpoint.sessionId);
       this.recomputeSessionMetadata(checkpoint.sessionId);
+      this.replaceCheckpointExecutions(checkpoint);
+      this.recomputeVerifiedResolutions(checkpoint.sessionId);
 
       return { status: 'inserted' as const, revision: checkpoint.revision };
     })();
@@ -640,6 +853,8 @@ export class Store {
     this.db.transaction(() => {
       // Delete all existing rows (v1 + v2 lower epoch)
       this.db.prepare('DELETE FROM chunks WHERE session_id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM execution_observations WHERE session_id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM verified_error_resolutions WHERE session_id = ?').run(sessionId);
 
       const insert = this.db.prepare(`
         INSERT INTO chunks (external_id, session_id, project_path, chunk_index, content, role, metadata, token_count, created_at, turn_key, source_order, part_index, revision, content_hash, observed_through, history_epoch)
@@ -667,10 +882,12 @@ export class Store {
             historyEpoch: cp.historyEpoch,
           });
         }
+        this.replaceCheckpointExecutions(cp);
       }
 
       this.reindexSessionChunks(sessionId);
       this.recomputeSessionMetadata(sessionId);
+      this.recomputeVerifiedResolutions(sessionId);
     })();
   }
 
@@ -737,7 +954,10 @@ export class Store {
       );
   }
 
-  materializeCanonicalHistory(history: CanonicalHistory): {
+  materializeCanonicalHistory(
+    history: CanonicalHistory,
+    embeddings: Array<{ externalId: string; vector: Float32Array }> = []
+  ): {
     chunksInserted: number;
     sessionsInserted: number;
   } {
@@ -798,12 +1018,19 @@ export class Store {
           chunksInserted++;
         }
         sessionIds.add(checkpoint.sessionId);
+        this.replaceCheckpointExecutions(checkpoint);
       }
 
       // Reindex and rebuild session metadata
       for (const sid of sessionIds) {
         this.reindexSessionChunks(sid);
         this.recomputeSessionMetadata(sid);
+        this.recomputeVerifiedResolutions(sid);
+      }
+
+      for (const embedding of embeddings) {
+        const chunkId = this.getChunkIdByExternalId(embedding.externalId);
+        if (chunkId !== undefined) this.insertEmbedding(chunkId, embedding.vector);
       }
 
       return { chunksInserted, sessionsInserted: sessionIds.size };

@@ -5,6 +5,7 @@ export interface MaintenanceResult {
   skipped: boolean;
   reason?: string;
   chunksDeleted: number;
+  executionObservationsDeleted: number;
   orphanedSessionsDeleted: number;
   bytesFreed: number;
 }
@@ -25,6 +26,7 @@ export function runAutoMaintenance(store: Store, config: EngramConfig): Maintena
       skipped: true,
       reason: 'disabled',
       chunksDeleted: 0,
+      executionObservationsDeleted: 0,
       orphanedSessionsDeleted: 0,
       bytesFreed: 0,
     };
@@ -35,6 +37,7 @@ export function runAutoMaintenance(store: Store, config: EngramConfig): Maintena
       skipped: true,
       reason: 'interval',
       chunksDeleted: 0,
+      executionObservationsDeleted: 0,
       orphanedSessionsDeleted: 0,
       bytesFreed: 0,
     };
@@ -51,18 +54,23 @@ export function runAutoMaintenance(store: Store, config: EngramConfig): Maintena
     .replace('T', ' ')
     .replace(/\.\d+Z$/, '');
   const ageDeleted = store.deleteChunksBefore(cutoffStr);
+  let totalObservationsDeleted = store.deleteExecutionObservationsBefore(cutoffDate.toISOString());
   totalChunksDeleted += ageDeleted;
 
   // 2. DBサイズ上限を超えていたら古い順に追加削除
   const maxBytes = config.maintenance.maxDbSizeMB * 1024 * 1024;
   const statsAfterAge = store.getStats();
-  if (statsAfterAge.dbSizeBytes > maxBytes && statsAfterAge.totalChunks > 0) {
+  let totalOrphanedDeleted = 0;
+  // Stryker disable next-line all: deleteBySizeLimitが同じ判定で自己防御するためこの短絡は変異しても観測不能
+  if (statsAfterAge.dbSizeBytes > maxBytes) {
     const sizeDeleted = deleteBySizeLimit(store, maxBytes);
-    totalChunksDeleted += sizeDeleted;
+    totalChunksDeleted += sizeDeleted.chunks;
+    totalObservationsDeleted += sizeDeleted.observations;
+    totalOrphanedDeleted += sizeDeleted.orphanedSessions;
   }
 
   // 3. 孤立セッションを削除
-  const orphaned = store.deleteOrphanedSessions();
+  const orphaned = totalOrphanedDeleted + store.deleteOrphanedSessions();
 
   // 4. WALチェックポイント
   store.vacuum();
@@ -75,22 +83,52 @@ export function runAutoMaintenance(store: Store, config: EngramConfig): Maintena
   return {
     skipped: false,
     chunksDeleted: totalChunksDeleted,
+    executionObservationsDeleted: totalObservationsDeleted,
     orphanedSessionsDeleted: orphaned,
     bytesFreed,
   };
 }
 
-function deleteBySizeLimit(store: Store, maxBytes: number): number {
-  let deleted = 0;
+export interface SizeLimitStore {
+  vacuum(): void;
+  getStats(): {
+    dbSizeBytes: number;
+    totalChunks: number;
+    explicitExecutionObservations: number;
+    unknownExecutionObservations: number;
+  };
+  deleteOldestChunks(count: number): number;
+  deleteOldestExecutionObservations(count: number): number;
+  deleteOrphanedSessions(): number;
+}
+
+export function deleteBySizeLimit(
+  store: SizeLimitStore,
+  maxBytes: number
+): { chunks: number; observations: number; orphanedSessions: number } {
+  const deleted = { chunks: 0, observations: 0, orphanedSessions: 0 };
   for (let i = 0; i < 10; i++) {
     // VACUUMで解放ページを反映してからサイズを測定
     store.vacuum();
     const stats = store.getStats();
-    if (stats.dbSizeBytes <= maxBytes || stats.totalChunks === 0) break;
+    if (stats.dbSizeBytes <= maxBytes) break;
 
-    const batchSize = Math.max(1, Math.ceil(stats.totalChunks * 0.1));
-    const batch = store.deleteOldestChunks(batchSize);
-    deleted += batch;
+    const totalExecutions =
+      stats.explicitExecutionObservations + stats.unknownExecutionObservations;
+    // chunk優先だと観測が大量に残るDBを上限内へ収められないため、多い方から削除する
+    let batch: number;
+    if (stats.totalChunks >= totalExecutions && stats.totalChunks > 0) {
+      const batchSize = Math.max(1, Math.ceil(stats.totalChunks * 0.1));
+      batch = store.deleteOldestChunks(batchSize);
+      deleted.chunks += batch;
+      deleted.orphanedSessions += store.deleteOrphanedSessions();
+    } else if (totalExecutions > 0) {
+      const batchSize = Math.max(1, Math.ceil(totalExecutions * 0.1));
+      batch = store.deleteOldestExecutionObservations(batchSize);
+      deleted.observations += batch;
+    } else {
+      break;
+    }
     if (batch === 0) break;
   }
   return deleted;

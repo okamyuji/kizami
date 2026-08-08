@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { createRequire } from 'node:module';
 
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS chunks (
@@ -143,6 +143,52 @@ END;
 INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild');
 `;
 
+const SCHEMA_V5 = `
+CREATE TABLE IF NOT EXISTS execution_observations (
+  runtime TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project_path TEXT NOT NULL,
+  turn_key TEXT NOT NULL,
+  source_order TEXT NOT NULL,
+  history_epoch INTEGER NOT NULL,
+  revision INTEGER NOT NULL,
+  execution_index INTEGER NOT NULL,
+  tool_name TEXT NOT NULL,
+  command TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('failed', 'succeeded', 'unknown')),
+  exit_code INTEGER,
+  output_excerpt TEXT NOT NULL,
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY (runtime, session_id, turn_key, execution_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_execution_session_order
+  ON execution_observations(runtime, session_id, history_epoch, source_order, execution_index);
+CREATE INDEX IF NOT EXISTS idx_execution_project_session
+  ON execution_observations(project_path, session_id);
+
+CREATE TABLE IF NOT EXISTS verified_error_resolutions (
+  runtime TEXT NOT NULL,
+  project_path TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  command TEXT NOT NULL,
+  first_failure_turn_key TEXT NOT NULL,
+  first_failure_execution_index INTEGER NOT NULL,
+  last_failure_turn_key TEXT NOT NULL,
+  last_failure_execution_index INTEGER NOT NULL,
+  failure_count INTEGER NOT NULL,
+  failure_output_excerpt TEXT NOT NULL,
+  success_turn_key TEXT NOT NULL,
+  success_execution_index INTEGER NOT NULL,
+  success_output_excerpt TEXT NOT NULL,
+  verified_at TEXT NOT NULL,
+  PRIMARY KEY (runtime, session_id, success_turn_key, success_execution_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_resolution_project_verified
+  ON verified_error_resolutions(project_path, verified_at DESC);
+`;
+
 function getSchemaVersion(db: Database.Database): number {
   try {
     const row = db.prepare('SELECT MAX(version) as version FROM schema_version').get() as
@@ -217,6 +263,9 @@ export function initializeSchema(db: Database.Database): void {
       }
 
       db.exec(SCHEMA_V4);
+    }
+    if (currentVersion < 5) {
+      db.exec(SCHEMA_V5);
     }
     db.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)').run(
       CURRENT_SCHEMA_VERSION

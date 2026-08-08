@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util';
 import * as path from 'node:path';
+import * as fs from 'node:fs';
 import { loadConfig } from '@/config';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
@@ -166,6 +167,111 @@ export function cmdSearch(
   }
 }
 
+function maskCredentials(value: string): string {
+  return value
+    .replace(
+      /-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g,
+      '[REDACTED PRIVATE KEY]'
+    )
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)([^\s/@:]+):([^\s/@]+)@/gi, '$1[REDACTED]@')
+    .replace(/((?:^|\s)(?:-u|--user)\s+)(?:"[^"]*"|'[^']*'|[^\s]+)/gi, '$1[REDACTED]')
+    .replace(
+      /((?:^|\s)--(?:password|passwd|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret)(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s]+)/gi,
+      '$1[REDACTED]'
+    )
+    .replace(/(\bauthorization\s*:\s*)(?:(?:basic|bearer)\s+)?[^\s"'\\]+/gi, '$1[REDACTED]')
+    .replace(
+      /(\b(?:aws_secret_access_key|database_url)\b\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s&]+)/gi,
+      '$1[REDACTED]'
+    )
+    .replace(
+      /((?:^|[^A-Za-z0-9_])[A-Za-z0-9_]*(?:api[_-]?key|password|token|secret)[A-Za-z0-9_]*\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s&]+)/gi,
+      '$1[REDACTED]'
+    )
+    .replace(
+      /(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|secret)\b\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s&]+)/gi,
+      '$1[REDACTED]'
+    )
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,})\b/g, '[REDACTED]')
+    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, '[REDACTED]')
+    .replace(/\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{8,}\b/g, '[REDACTED]')
+    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, '[REDACTED]')
+    .replace(/\bglpat-[A-Za-z0-9_-]{10,}\b/g, '[REDACTED]')
+    .replace(/\bnpm_[A-Za-z0-9]{10,}\b/g, '[REDACTED]')
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[REDACTED]')
+    .replace(/\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[REDACTED]');
+}
+
+function safeTerminalLine(value: string): string {
+  return [...value]
+    .map((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code < 32 ||
+        (code >= 127 && code <= 159) ||
+        code === 0x200e ||
+        code === 0x200f ||
+        (code >= 0x202a && code <= 0x202e) ||
+        (code >= 0x2066 && code <= 0x2069)
+        ? '�'
+        : character;
+    })
+    .join('');
+}
+
+function printResolutionField(label: string, value: string, singleLine = false): void {
+  const masked = maskCredentials(value);
+  if (singleLine) {
+    const line = masked.replace(/\r\n|[\n\r\u2028\u2029]/g, ' ↵ ');
+    console.log(`${label}: ${safeTerminalLine(line)}`);
+    return;
+  }
+  const lines = masked.split(/\r\n|[\n\r\u2028\u2029]/);
+  console.log(`${label}: ${safeTerminalLine(lines[0] ?? '')}`);
+  for (const line of lines.slice(1)) console.log(`  | ${safeTerminalLine(line)}`);
+}
+
+export function cmdResolutions(
+  query: string | undefined,
+  options: { project?: string; allProjects?: boolean; config?: string; showEvidence?: boolean }
+): ReturnType<Store['searchVerifiedResolutions']> {
+  const { store, close } = createStore(options.config);
+  try {
+    const requestedProjectPath = options.project ? path.resolve(options.project) : process.cwd();
+    let projectPath: string | undefined;
+    if (!options.allProjects) {
+      try {
+        projectPath = fs.realpathSync(requestedProjectPath);
+      } catch {
+        projectPath = requestedProjectPath;
+      }
+    }
+    const results = store.searchVerifiedResolutions(query, projectPath);
+    if (results.length === 0) {
+      console.log('No verified error resolutions found.');
+      return results;
+    }
+    if (options.showEvidence) {
+      console.log('Warning: evidence masking is best-effort; review output before sharing.');
+    }
+    for (const result of results) {
+      console.log(safeTerminalLine(`[${result.verifiedAt}] failures=${result.failureCount}`));
+      if (options.showEvidence) {
+        printResolutionField('Command', result.command, true);
+        printResolutionField('Failed', result.failureOutputExcerpt);
+        printResolutionField('Verified', result.successOutputExcerpt);
+      } else {
+        console.log(
+          'Evidence: hidden (use --show-evidence to display best-effort-masked excerpts)'
+        );
+      }
+      console.log('');
+    }
+    return results;
+  } finally {
+    close();
+  }
+}
+
 export function cmdEdit(chunkId: number, content: string, options: { config?: string }): void {
   const { store, close } = createStore(options.config);
   try {
@@ -262,6 +368,9 @@ export function cmdStats(options: { config?: string }): StoreStats {
     console.log(`Chunks:    ${stats.totalChunks}`);
     console.log(`Sessions:  ${stats.totalSessions}`);
     console.log(`DB size:   ${formatBytes(stats.dbSizeBytes)}`);
+    console.log(`Executions (explicit): ${stats.explicitExecutionObservations}`);
+    console.log(`Executions (unknown):  ${stats.unknownExecutionObservations}`);
+    console.log(`Verified resolutions:  ${stats.verifiedErrorResolutions}`);
     return stats;
   } finally {
     close();
@@ -458,6 +567,7 @@ Commands:
   save              Save transcript (SessionEnd hook, reads stdin)
   recall            Search and output memories (UserPromptSubmit hook, reads stdin)
   search <query>    Interactively search memories
+  resolutions       List verified failure-to-success command executions
   edit <chunk-id>   Edit chunk content (--content <text>)
   delete            Delete chunks/sessions/by date
   list              List sessions
@@ -478,6 +588,7 @@ Commands:
 Options:
   --project <path>    Project path
   --all-projects      Search across all projects
+  --show-evidence     resolutions: display best-effort-masked command and output excerpts
   --config <path>     Config file path
   --runtime <name>    Hook runtime: claude|codex|kimi
   --target <name>     setup target: claude|codex|kimi|all
@@ -496,6 +607,7 @@ async function main(): Promise<void> {
       stdin: { type: 'boolean', default: false },
       project: { type: 'string' },
       'all-projects': { type: 'boolean', default: false },
+      'show-evidence': { type: 'boolean', default: false },
       config: { type: 'string' },
       content: { type: 'string' },
       session: { type: 'string' },
@@ -596,6 +708,12 @@ async function main(): Promise<void> {
         return;
       }
       cmdSearch(query, sharedOpts);
+      break;
+    }
+
+    case 'resolutions': {
+      const query = positionals.slice(1).join(' ') || undefined;
+      cmdResolutions(query, { ...sharedOpts, showEvidence: !!values['show-evidence'] });
       break;
     }
 

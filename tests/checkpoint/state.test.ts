@@ -239,7 +239,6 @@ describe('checkpoint state', () => {
         targetPath: '/tmp/out.jsonl',
         payloadDigest: 'digest',
         allLines: [],
-        records: [],
         turnKeys: ['turn-1'],
         finalization: { pendingPaths: [] },
         ...overrides,
@@ -275,6 +274,13 @@ describe('checkpoint state', () => {
       markPreparedSuperseded(filePath, 'stale boundary');
       const updated = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as PreparedCheckpointV2;
       expect(updated.phase).toBe('superseded');
+    });
+
+    it('rejects an oversized receipt before reading it for a phase update', () => {
+      const filePath = writePreparedCheckpoint(stateRoot, makePrepared());
+      fs.truncateSync(filePath, 64 * 1024 * 1024 + 1);
+
+      expect(() => updatePreparedPhase(filePath, 'jsonl_committed')).toThrow(/exceeds/);
     });
   });
 

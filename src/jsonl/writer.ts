@@ -9,7 +9,121 @@ import type {
   JsonlV2Payload,
   SerializedJsonlTransaction,
 } from '@/jsonl/types';
-import type { HookRuntime, ObservationBoundaryV2 } from '@/checkpoint/types';
+import type { HookRuntime, ObservationBoundaryV2, TurnCheckpointV2 } from '@/checkpoint/types';
+import { compareObservationBoundary } from '@/checkpoint/identity';
+import { assertPrivateFileTarget, enforcePrivateFile } from '@/storage/permissions';
+import { isJsonlV2Payload, isJsonlV2Record, MAX_JSONL_RECORD_BYTES } from '@/jsonl/transaction';
+
+function noFollowFlag(): number {
+  return process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW;
+}
+
+function openPrivateFileForAppend(filePath: string): number {
+  assertPrivateFileTarget(filePath);
+  const fd = fs.openSync(
+    filePath,
+    fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | noFollowFlag(),
+    0o600
+  );
+  try {
+    if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
+    return fd;
+  } catch (error: unknown) {
+    fs.closeSync(fd);
+    throw error;
+  }
+}
+
+const FILE_SCAN_BLOCK_BYTES = 64 * 1024;
+
+interface FileSnapshot {
+  identity: string;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+}
+
+function snapshotFromStat(stat: fs.Stats): FileSnapshot {
+  return {
+    identity: `${stat.dev}:${stat.ino}`,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+  };
+}
+
+function sameSnapshot(left: FileSnapshot, right: FileSnapshot): boolean {
+  return (
+    left.identity === right.identity &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+
+function getFileSnapshot(filePath: string): FileSnapshot {
+  assertPrivateFileTarget(filePath);
+  return snapshotFromStat(fs.lstatSync(filePath));
+}
+
+function forEachPrivateFileLine(
+  filePath: string,
+  callback: (line: string | undefined) => void
+): FileSnapshot {
+  assertPrivateFileTarget(filePath);
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollowFlag());
+  const readBuffer = Buffer.allocUnsafe(FILE_SCAN_BLOCK_BYTES);
+  // MAX_JSONL_RECORD_BYTES (4 MiB) の常時確保はbuffer poolを外れGC負荷になるため、
+  // 小さく確保して上限まで倍々に成長させる
+  let lineBuffer = Buffer.allocUnsafe(FILE_SCAN_BLOCK_BYTES);
+  let lineLength = 0;
+  let oversized = false;
+  let position = 0;
+
+  const visitCurrentLine = (): void => {
+    if (oversized) callback(undefined);
+    else if (lineLength > 0) callback(lineBuffer.subarray(0, lineLength).toString('utf-8'));
+  };
+
+  try {
+    const initial = snapshotFromStat(fs.fstatSync(fd));
+    while (true) {
+      const bytesRead = fs.readSync(fd, readBuffer, 0, readBuffer.length, position);
+      if (bytesRead === 0) {
+        visitCurrentLine();
+        const final = snapshotFromStat(fs.fstatSync(fd));
+        if (!sameSnapshot(initial, final)) {
+          throw new Error('JSONL file changed while scanning transactions');
+        }
+        return final;
+      }
+      position += bytesRead;
+      for (let index = 0; index < bytesRead; index++) {
+        const byte = readBuffer[index];
+        if (byte === 0x0a) {
+          visitCurrentLine();
+          lineLength = 0;
+          oversized = false;
+        } else if (lineLength < MAX_JSONL_RECORD_BYTES) {
+          if (lineLength === lineBuffer.length) {
+            // Stryker disable all: capはメモリ量のみに影響し正しさはlineLength比較が保証する
+            const grown = Buffer.allocUnsafe(
+              Math.min(lineBuffer.length * 2, MAX_JSONL_RECORD_BYTES)
+            );
+            // Stryker restore all
+            lineBuffer.copy(grown, 0, 0, lineLength);
+            lineBuffer = grown;
+          }
+          lineBuffer[lineLength++] = byte;
+        } else {
+          oversized = true;
+        }
+      }
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 /**
  * 単一の月ファイルに対する追記writer。
@@ -27,13 +141,14 @@ export class JsonlWriter {
     const filePath = getJsonlFilePath(this.jsonlDir, now);
     const lines = records.map((r) => JSON.stringify(r)).join('\n') + '\n';
 
-    const fd = fs.openSync(filePath, 'a');
+    const fd = openPrivateFileForAppend(filePath);
     try {
-      fs.writeSync(fd, lines);
+      writeAllSync(fd, lines);
       fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);
     }
+    enforcePrivateFile(filePath);
     return filePath;
   }
 }
@@ -81,6 +196,21 @@ CREATE TABLE IF NOT EXISTS file_replay_offsets (
   replay_offset INTEGER NOT NULL,
   hash_chain TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS committed_transactions (
+  file_path TEXT NOT NULL,
+  tx_id TEXT NOT NULL,
+  payload_digest TEXT NOT NULL,
+  PRIMARY KEY (file_path, tx_id)
+);
+
+CREATE TABLE IF NOT EXISTS file_commit_scan_state (
+  file_path TEXT NOT NULL PRIMARY KEY,
+  file_identity TEXT NOT NULL,
+  file_size INTEGER NOT NULL,
+  mtime_ms REAL NOT NULL,
+  ctime_ms REAL NOT NULL
+);
 `;
 
 export interface CanonicalTurnHead {
@@ -91,6 +221,26 @@ export interface CanonicalTurnHead {
   contentHash: string;
   observedThrough: ObservationBoundaryV2;
   sourceOrder: string;
+}
+
+function shouldAdvanceTurnHead(
+  current: CanonicalTurnHead | undefined,
+  incoming: TurnCheckpointV2
+): boolean {
+  if (!current) return true;
+  if (incoming.historyEpoch < current.historyEpoch) return false;
+  if (incoming.historyEpoch > current.historyEpoch) return true;
+  if (incoming.revision < current.revision) return false;
+  if (incoming.revision === current.revision) {
+    if (incoming.contentHash === current.contentHash) return false;
+    throw new Error(
+      `Turn ${incoming.turnKey} revision ${incoming.revision} has conflicting content`
+    );
+  }
+
+  const boundary = compareObservationBoundary(incoming.observedThrough, current.observedThrough);
+  if (boundary === 'newer' || boundary === 'equal') return true;
+  throw new Error(`Turn ${incoming.turnKey} has a non-monotonic observation boundary`);
 }
 
 export interface JsonlTransactionReceipt {
@@ -132,10 +282,22 @@ export class JsonlTransactionWriter {
     ensureJsonlDir(jsonlDir);
     const lockDbPath = path.join(jsonlDir, WRITER_LOCK_DB);
     fs.mkdirSync(path.dirname(lockDbPath), { recursive: true });
-    this.lockDb = new Database(lockDbPath);
-    this.lockDb.pragma('journal_mode = WAL');
-    this.lockDb.pragma('busy_timeout = 5000');
-    this.lockDb.exec(COORDINATION_SCHEMA);
+    assertPrivateFileTarget(lockDbPath);
+    assertPrivateFileTarget(`${lockDbPath}-wal`);
+    assertPrivateFileTarget(`${lockDbPath}-shm`);
+    const lockDb = new Database(lockDbPath);
+    try {
+      lockDb.pragma('journal_mode = WAL');
+      lockDb.pragma('busy_timeout = 5000');
+      lockDb.exec(COORDINATION_SCHEMA);
+      enforcePrivateFile(lockDbPath);
+      enforcePrivateFile(`${lockDbPath}-wal`);
+      enforcePrivateFile(`${lockDbPath}-shm`);
+    } catch (error: unknown) {
+      lockDb.close();
+      throw error;
+    }
+    this.lockDb = lockDb;
   }
 
   withExclusiveTransaction<T>(operation: (writer: LockedJsonlWriter) => T): T {
@@ -158,39 +320,83 @@ function writeAllSync(fd: number, data: string): void {
   }
 }
 
-function repairPartialTail(filePath: string): void {
-  const content = fs.readFileSync(filePath);
-  if (content.length === 0) return;
-  if (content[content.length - 1] === 0x0a) return;
-
-  const lastNewline = content.lastIndexOf(0x0a);
-  const corruptBytes = lastNewline === -1 ? content : content.subarray(lastNewline + 1);
-
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const rand = randomBytes(4).toString('hex');
-  const sidecarPath = `${filePath}.corrupt-${timestamp}-${rand}`;
-
-  const sfd = fs.openSync(sidecarPath, 'wx');
-  try {
-    fs.writeSync(sfd, corruptBytes);
-    fs.fsyncSync(sfd);
-  } finally {
-    fs.closeSync(sfd);
+function writeBufferAllSync(fd: number, buffer: Buffer): void {
+  let offset = 0;
+  while (offset < buffer.length) {
+    const written = fs.writeSync(fd, buffer, offset, buffer.length - offset);
+    if (written <= 0) throw new Error(`writeSync returned ${written}`);
+    offset += written;
   }
+}
 
-  const truncateAt = lastNewline === -1 ? 0 : lastNewline + 1;
-  fs.truncateSync(filePath, truncateAt);
-  const mfd = fs.openSync(filePath, 'r+');
+function readRangeSync(fd: number, buffer: Buffer, length: number, position: number): number {
+  let total = 0;
+  while (total < length) {
+    const bytesRead = fs.readSync(fd, buffer, total, length - total, position + total);
+    if (bytesRead === 0) break;
+    total += bytesRead;
+  }
+  return total;
+}
+
+function findLastNewlineOffset(fd: number, fileSize: number): number {
+  const buffer = Buffer.allocUnsafe(FILE_SCAN_BLOCK_BYTES);
+  let position = fileSize;
+  while (position > 0) {
+    const length = Math.min(buffer.length, position);
+    position -= length;
+    const bytesRead = readRangeSync(fd, buffer, length, position);
+    const index = buffer.subarray(0, bytesRead).lastIndexOf(0x0a);
+    if (index !== -1) return position + index;
+  }
+  return -1;
+}
+
+function copyFileRange(sourceFd: number, targetFd: number, start: number, end: number): void {
+  const buffer = Buffer.allocUnsafe(FILE_SCAN_BLOCK_BYTES);
+  let position = start;
+  while (position < end) {
+    const length = Math.min(buffer.length, end - position);
+    const bytesRead = readRangeSync(sourceFd, buffer, length, position);
+    if (bytesRead <= 0) throw new Error('Unexpected EOF while preserving corrupt JSONL tail');
+    writeBufferAllSync(targetFd, buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+}
+
+function repairPartialTail(filePath: string): void {
+  assertPrivateFileTarget(filePath);
+  const fd = fs.openSync(filePath, fs.constants.O_RDWR | noFollowFlag());
   try {
-    fs.fsyncSync(mfd);
+    const fileSize = fs.fstatSync(fd).size;
+    if (fileSize === 0) return;
+    const lastNewline = findLastNewlineOffset(fd, fileSize);
+    if (lastNewline === fileSize - 1) return;
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const rand = randomBytes(4).toString('hex');
+    const sidecarPath = `${filePath}.corrupt-${timestamp}-${rand}`;
+
+    const sidecarFd = fs.openSync(sidecarPath, 'wx', 0o600);
+    try {
+      copyFileRange(fd, sidecarFd, lastNewline + 1, fileSize);
+      fs.fsyncSync(sidecarFd);
+    } finally {
+      fs.closeSync(sidecarFd);
+    }
+
+    const truncateAt = lastNewline + 1;
+    fs.ftruncateSync(fd, truncateAt);
+    fs.fsyncSync(fd);
   } finally {
-    fs.closeSync(mfd);
+    fs.closeSync(fd);
   }
 }
 
 function getFileIdentity(filePath: string): string | undefined {
   try {
-    const stat = fs.statSync(filePath);
+    assertPrivateFileTarget(filePath);
+    const stat = fs.lstatSync(filePath);
     return `${stat.dev}:${stat.ino}`;
   } catch {
     return undefined;
@@ -210,6 +416,11 @@ class LockedJsonlWriterImpl implements LockedJsonlWriter {
     upsertEpoch: Database.Statement;
     getReplay: Database.Statement;
     upsertReplay: Database.Statement;
+    getCommitted: Database.Statement;
+    upsertCommitted: Database.Statement;
+    deleteCommittedByFile: Database.Statement;
+    getCommitScanState: Database.Statement;
+    upsertCommitScanState: Database.Statement;
   };
 
   constructor(
@@ -252,7 +463,7 @@ class LockedJsonlWriterImpl implements LockedJsonlWriter {
       getEpoch: db.prepare('SELECT epoch FROM session_epochs WHERE session_id = ?'),
       upsertEpoch: db.prepare(`
         INSERT INTO session_epochs (session_id, epoch) VALUES (?, ?)
-        ON CONFLICT(session_id) DO UPDATE SET epoch = excluded.epoch
+        ON CONFLICT(session_id) DO UPDATE SET epoch = MAX(session_epochs.epoch, excluded.epoch)
       `),
       getReplay: db.prepare(
         'SELECT file_identity, file_size, replay_offset, hash_chain FROM file_replay_offsets WHERE file_path = ?'
@@ -265,6 +476,27 @@ class LockedJsonlWriterImpl implements LockedJsonlWriter {
           file_size = excluded.file_size,
           replay_offset = excluded.replay_offset,
           hash_chain = excluded.hash_chain
+      `),
+      getCommitted: db.prepare(
+        'SELECT payload_digest FROM committed_transactions WHERE file_path = ? AND tx_id = ?'
+      ),
+      upsertCommitted: db.prepare(`
+        INSERT INTO committed_transactions (file_path, tx_id, payload_digest)
+        VALUES (?, ?, ?)
+        ON CONFLICT(file_path, tx_id) DO UPDATE SET payload_digest = excluded.payload_digest
+      `),
+      deleteCommittedByFile: db.prepare('DELETE FROM committed_transactions WHERE file_path = ?'),
+      getCommitScanState: db.prepare(
+        'SELECT file_identity, file_size, mtime_ms, ctime_ms FROM file_commit_scan_state WHERE file_path = ?'
+      ),
+      upsertCommitScanState: db.prepare(`
+        INSERT INTO file_commit_scan_state (file_path, file_identity, file_size, mtime_ms, ctime_ms)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(file_path) DO UPDATE SET
+          file_identity = excluded.file_identity,
+          file_size = excluded.file_size,
+          mtime_ms = excluded.mtime_ms,
+          ctime_ms = excluded.ctime_ms
       `),
     };
   }
@@ -355,6 +587,7 @@ class LockedJsonlWriterImpl implements LockedJsonlWriter {
     transaction: CommittedTransaction;
   } {
     const { targetPath, txId, payloadDigest, allLines } = transaction;
+    assertPrivateFileTarget(targetPath);
 
     if (this.findCommitted(targetPath, txId, payloadDigest)) {
       const stat = fs.statSync(targetPath);
@@ -390,13 +623,14 @@ class LockedJsonlWriterImpl implements LockedJsonlWriter {
     const beginOffset = stat?.size ?? 0;
 
     const data = allLines.join('\n') + '\n';
-    const fd = fs.openSync(targetPath, 'a');
+    const fd = openPrivateFileForAppend(targetPath);
     try {
       writeAllSync(fd, data);
       fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);
     }
+    enforcePrivateFile(targetPath);
 
     if (isNew) {
       try {
@@ -434,34 +668,138 @@ class LockedJsonlWriterImpl implements LockedJsonlWriter {
   }
 
   findCommitted(targetPath: string, txId: string, payloadDigest: string): boolean {
+    assertPrivateFileTarget(targetPath);
     if (!fs.existsSync(targetPath)) return false;
 
-    const content = fs.readFileSync(targetPath, 'utf-8');
-    const lines = content.split('\n');
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (!line.includes('"tx_commit"') || !line.includes(txId)) continue;
-      try {
-        const parsed = JSON.parse(line) as Record<string, unknown>;
-        if (
-          parsed.v === 2 &&
-          parsed.type === 'tx_commit' &&
-          parsed.txId === txId &&
-          parsed.payloadDigest === payloadDigest
-        ) {
-          return true;
+    const current = getFileSnapshot(targetPath);
+    const scanState = this.stmts.getCommitScanState.get(targetPath) as
+      | { file_identity: string; file_size: number; mtime_ms: number; ctime_ms: number }
+      | undefined;
+    if (scanState) {
+      const indexed: FileSnapshot = {
+        identity: scanState.file_identity,
+        size: scanState.file_size,
+        mtimeMs: scanState.mtime_ms,
+        ctimeMs: scanState.ctime_ms,
+      };
+      if (sameSnapshot(current, indexed)) {
+        const cached = this.stmts.getCommitted.get(targetPath, txId) as
+          | { payload_digest: string }
+          | undefined;
+        if (!cached) return false;
+        if (cached.payload_digest !== payloadDigest) {
+          throw new Error(`Transaction ID ${txId} is already committed with a different payload`);
         }
-      } catch {
-        continue;
+        return true;
       }
     }
-    return false;
+
+    this.stmts.deleteCommittedByFile.run(targetPath);
+    let active:
+      | {
+          txId: string;
+          recordCount: number;
+          valid: boolean;
+          digest: ReturnType<typeof createHash>;
+        }
+      | undefined;
+
+    const scanned = forEachPrivateFileLine(targetPath, (line) => {
+      if (line === undefined) {
+        if (active) throw new Error(`JSONL transaction record exceeds safe scan limit`);
+        return;
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line) as unknown;
+      } catch {
+        if (active) active.valid = false;
+        return;
+      }
+
+      if (isJsonlV2Record(parsed) && parsed.type === 'tx_begin') {
+        active = {
+          txId: parsed.txId,
+          recordCount: 0,
+          valid: true,
+          digest: createHash('sha256'),
+        };
+        return;
+      }
+
+      if (isJsonlV2Record(parsed) && parsed.type === 'tx_commit') {
+        if (!active) return;
+        const digest = active.digest.digest('hex');
+        if (
+          active.valid &&
+          parsed.txId === active.txId &&
+          parsed.recordCount === active.recordCount &&
+          parsed.payloadDigest === digest
+        ) {
+          const cached = this.stmts.getCommitted.get(targetPath, parsed.txId) as
+            | { payload_digest: string }
+            | undefined;
+          if (cached && cached.payload_digest !== parsed.payloadDigest) {
+            throw new Error(
+              `Transaction ID ${parsed.txId} is already committed with a different payload`
+            );
+          }
+          this.stmts.upsertCommitted.run(targetPath, parsed.txId, parsed.payloadDigest);
+        }
+        active = undefined;
+        return;
+      }
+
+      if (!active) return;
+      active.digest.update(line, 'utf-8').update('\n', 'utf-8');
+      active.recordCount++;
+      if (!isJsonlV2Payload(parsed) || parsed.txId !== active.txId) active.valid = false;
+    });
+
+    const afterScan = getFileSnapshot(targetPath);
+    if (!sameSnapshot(scanned, afterScan)) {
+      throw new Error('JSONL file changed while indexing transactions');
+    }
+    this.stmts.upsertCommitScanState.run(
+      targetPath,
+      scanned.identity,
+      scanned.size,
+      scanned.mtimeMs,
+      scanned.ctimeMs
+    );
+
+    const cached = this.stmts.getCommitted.get(targetPath, txId) as
+      | { payload_digest: string }
+      | undefined;
+    if (!cached) return false;
+    if (cached.payload_digest !== payloadDigest) {
+      throw new Error(`Transaction ID ${txId} is already committed with a different payload`);
+    }
+    return true;
   }
 
   applyCommittedToIndex(transaction: CommittedTransaction): void {
+    const cached = this.stmts.getCommitted.get(transaction.filePath, transaction.txId) as
+      | { payload_digest: string }
+      | undefined;
+    if (cached && cached.payload_digest !== transaction.payloadDigest) {
+      throw new Error(
+        `Transaction ID ${transaction.txId} is already committed with a different payload`
+      );
+    }
+    this.stmts.upsertCommitted.run(
+      transaction.filePath,
+      transaction.txId,
+      transaction.payloadDigest
+    );
+
     for (const payload of transaction.payloads) {
-      if (payload.type === 'turn_checkpoint') {
+      if (payload.type === 'session_reset') {
+        this.stmts.upsertEpoch.run(payload.sessionId, payload.historyEpoch);
+      } else if (
+        shouldAdvanceTurnHead(this.getTurnHead(payload.sessionId, payload.turnKey), payload)
+      ) {
         this.stmts.upsertTurnHead.run(
           payload.sessionId,
           payload.turnKey,
@@ -476,6 +814,7 @@ class LockedJsonlWriterImpl implements LockedJsonlWriter {
 
     const identity = getFileIdentity(transaction.filePath);
     if (identity) {
+      const snapshot = getFileSnapshot(transaction.filePath);
       const chainInput = `${transaction.txId}:${transaction.payloadDigest}:${transaction.endOffset}`;
       const hashChain = createHash('sha256').update(chainInput).digest('hex');
       this.stmts.upsertReplay.run(
@@ -485,6 +824,15 @@ class LockedJsonlWriterImpl implements LockedJsonlWriter {
         transaction.endOffset,
         hashChain
       );
+      if (snapshot.identity === identity && snapshot.size === transaction.endOffset) {
+        this.stmts.upsertCommitScanState.run(
+          transaction.filePath,
+          snapshot.identity,
+          snapshot.size,
+          snapshot.mtimeMs,
+          snapshot.ctimeMs
+        );
+      }
     }
   }
 }

@@ -3,11 +3,32 @@ import * as readline from 'node:readline';
 import type {
   JsonlChunkRecord,
   JsonlLineResult,
-  JsonlRecord,
   CanonicalTransactionResult,
   CommittedTransaction,
 } from '@/jsonl/types';
-import { validateCommittedTransaction } from '@/jsonl/transaction';
+import {
+  computePayloadDigest,
+  isJsonlV2Record,
+  validateCommittedTransaction,
+} from '@/jsonl/transaction';
+import { assertPrivateFileTarget } from '@/storage/permissions';
+
+const TAIL_READ_BLOCK_BYTES = 64 * 1024;
+const MAX_TAIL_SCAN_BYTES = 1024 * 1024;
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function readRangeSync(fd: number, buffer: Buffer, length: number, position: number): number {
+  let total = 0;
+  while (total < length) {
+    const bytesRead = fs.readSync(fd, buffer, total, length - total, position + total);
+    if (bytesRead === 0) break;
+    total += bytesRead;
+  }
+  return total;
+}
 
 /**
  * JSONLを行単位でstreaming読み込みする。
@@ -35,18 +56,47 @@ export async function* readJsonlFile(
 }
 
 export function isJsonlChunkRecord(value: unknown): value is JsonlChunkRecord {
-  if (!value || typeof value !== 'object') return false;
-  const v = value as Partial<JsonlRecord>;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
   return (
     v.v === 1 &&
     v.type === 'chunk' &&
     typeof v.id === 'string' &&
     typeof v.sessionId === 'string' &&
     typeof v.projectPath === 'string' &&
-    typeof v.chunkIndex === 'number' &&
+    isNonNegativeInteger(v.chunkIndex) &&
     typeof v.content === 'string' &&
-    typeof v.createdAt === 'string'
+    (v.role === 'human' || v.role === 'assistant' || v.role === 'mixed') &&
+    (v.metadata === null || typeof v.metadata === 'string') &&
+    isNonNegativeInteger(v.tokenCount) &&
+    typeof v.createdAt === 'string' &&
+    (v.embedding === undefined || typeof v.embedding === 'string') &&
+    (v.embeddingDim === undefined || isNonNegativeInteger(v.embeddingDim)) &&
+    (v.embeddingModel === undefined || typeof v.embeddingModel === 'string')
   );
+}
+
+function readTailWindow(fd: number, n: number): { window: Buffer; startOffset: number } {
+  const chunks: Buffer[] = [];
+  let position = fs.fstatSync(fd).size;
+  let scannedBytes = 0;
+  let newlineCount = 0;
+  while (position > 0 && scannedBytes < MAX_TAIL_SCAN_BYTES && newlineCount <= n) {
+    const length = Math.min(TAIL_READ_BLOCK_BYTES, position, MAX_TAIL_SCAN_BYTES - scannedBytes);
+    position -= length;
+    const chunk = Buffer.allocUnsafe(length);
+    const bytesRead = readRangeSync(fd, chunk, length, position);
+    // Stryker disable all: regular fileの有効offsetでshort readは決定的に再現できない防御
+    if (bytesRead !== length) {
+      throw new Error('Short read while scanning JSONL tail');
+    }
+    // Stryker restore all
+    const content = chunk.subarray(0, bytesRead);
+    chunks.unshift(content);
+    for (const byte of content) if (byte === 0x0a) newlineCount++;
+    scannedBytes += bytesRead;
+  }
+  return { window: Buffer.concat(chunks), startOffset: position };
 }
 
 /**
@@ -55,7 +105,24 @@ export function isJsonlChunkRecord(value: unknown): value is JsonlChunkRecord {
  */
 export function readTailRecords(filePath: string, n: number): JsonlChunkRecord[] {
   if (!fs.existsSync(filePath) || n <= 0) return [];
-  const content = fs.readFileSync(filePath, 'utf-8');
+  assertPrivateFileTarget(filePath);
+  const fd = fs.openSync(
+    filePath,
+    fs.constants.O_RDONLY | (process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW)
+  );
+  let window: Buffer;
+  let startOffset: number;
+  try {
+    ({ window, startOffset } = readTailWindow(fd, n));
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  let content = window.toString('utf-8');
+  if (startOffset > 0) {
+    const firstNewline = content.indexOf('\n');
+    content = firstNewline === -1 ? '' : content.slice(firstNewline + 1);
+  }
   const lines = content.split('\n').filter((l) => l.length > 0);
   const tail = lines.slice(-n);
   const out: JsonlChunkRecord[] = [];
@@ -103,8 +170,8 @@ export async function* readJsonlLines(filePath: string): AsyncGenerator<JsonlLin
     const record = parsed as Record<string, unknown>;
     if (record.v === 1 && isJsonlChunkRecord(parsed)) {
       yield { kind: 'record', offset, endOffset, line, record: parsed };
-    } else if (record.v === 2 && typeof record.type === 'string') {
-      yield { kind: 'record', offset, endOffset, line, record: parsed as JsonlRecord };
+    } else if (isJsonlV2Record(parsed)) {
+      yield { kind: 'record', offset, endOffset, line, record: parsed };
     } else {
       yield { kind: 'diagnostic', offset, endOffset, line, message: 'unknown record version/type' };
     }
@@ -119,7 +186,15 @@ export async function* readCanonicalTransactions(
   let activePayloadLines: string[] = [];
 
   for await (const result of readJsonlLines(filePath)) {
-    if (result.kind === 'diagnostic') continue;
+    if (result.kind === 'diagnostic') {
+      yield {
+        kind: 'diagnostic',
+        filePath,
+        offset: result.offset,
+        message: result.message,
+      };
+      continue;
+    }
 
     const { record, offset, line } = result;
     if (!('v' in record) || record.v !== 2) continue;
@@ -131,6 +206,7 @@ export async function* readCanonicalTransactions(
           filePath,
           offset: activeBegin.offset,
           txId: activeBegin.txId,
+          payloadDigest: computePayloadDigest(activePayloadLines),
           message: 'abandoned frame: new tx_begin before commit',
         };
       }

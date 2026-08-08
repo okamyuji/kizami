@@ -54,7 +54,7 @@ describe('rebuildFromJsonl — vec0 unloaded resilience (kizami v0.2.0 rebuild r
   it('does not throw "no such module: vec0" when chunks_vec exists but sqlite-vec is not pre-loaded', async () => {
     const dir = makeTmpDir();
     const config = makeTestConfig(dir, 'core');
-    fs.mkdirSync(config.storage.jsonlDir, { recursive: true });
+    fs.mkdirSync(config.storage.jsonlDir, { recursive: true, mode: 0o700 });
 
     // 既存DBに chunks_vec (vec0 仮想テーブル) を残した状態を再現する。
     // sqlite-vec を load して仮想テーブルを作成 → 接続を閉じる。

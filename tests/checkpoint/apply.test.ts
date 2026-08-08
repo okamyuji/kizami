@@ -46,6 +46,117 @@ function makeCheckpoint(overrides: Partial<TurnCheckpointV2> = {}): TurnCheckpoi
 }
 
 describe('applyTurnCheckpoint', () => {
+  it('creates a verified resolution only after the same command succeeds', () => {
+    const command = 'pnpm test';
+    store.applyTurnCheckpoint(
+      makeCheckpoint({
+        executions: [
+          {
+            executionIndex: 0,
+            toolName: 'Bash',
+            command,
+            status: 'failed',
+            exitCode: 1,
+            outputExcerpt: '1 failed',
+          },
+        ],
+      })
+    );
+    expect(store.searchVerifiedResolutions(undefined, '/tmp/proj')).toEqual([]);
+
+    store.applyTurnCheckpoint(
+      makeCheckpoint({
+        turnKey: 'tk-2',
+        sourceOrder: '00000000000000000002',
+        contentHash: 'hash-2',
+        observedThrough: { kind: 'source_offset', generation: 0, offset: 200 },
+        parts: [
+          {
+            partIndex: 0,
+            externalId: 'ext-2',
+            content: 'success',
+            role: 'assistant',
+            metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+            tokenCount: 1,
+          },
+        ],
+        executions: [
+          {
+            executionIndex: 0,
+            toolName: 'Bash',
+            command,
+            status: 'succeeded',
+            outputExcerpt: 'all passed',
+          },
+        ],
+      })
+    );
+    expect(store.searchVerifiedResolutions(undefined, '/tmp/proj')).toMatchObject([
+      { failureCount: 1, failureOutputExcerpt: '1 failed', successOutputExcerpt: 'all passed' },
+    ]);
+    expect(store.getExecutionObservations('sess-1')[0].exitCode).toBe(1);
+  });
+
+  it('truncateAll removes observations and derived resolutions', () => {
+    const command = 'pnpm test';
+    const execution = (status: 'failed' | 'succeeded') => ({
+      executionIndex: 0,
+      toolName: 'Bash',
+      command,
+      status,
+      outputExcerpt: status,
+    });
+    store.applyTurnCheckpoint(makeCheckpoint({ executions: [execution('failed')] }));
+    store.applyTurnCheckpoint(
+      makeCheckpoint({
+        turnKey: 'tk-success',
+        sourceOrder: '00000000000000000002',
+        contentHash: 'success-hash',
+        parts: [
+          {
+            partIndex: 0,
+            externalId: 'ext-success',
+            content: 'success',
+            role: 'assistant',
+            metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+            tokenCount: 1,
+          },
+        ],
+        executions: [execution('succeeded')],
+      })
+    );
+    expect(store.getStats().verifiedErrorResolutions).toBe(1);
+    store.truncateAll();
+    expect(store.getExecutionObservations()).toEqual([]);
+    expect(store.getStats().verifiedErrorResolutions).toBe(0);
+  });
+
+  it('revision replacement removes old observations using the stable turn identity', () => {
+    const command = 'pnpm test';
+    store.applyTurnCheckpoint(
+      makeCheckpoint({
+        executions: [
+          {
+            executionIndex: 0,
+            toolName: 'Bash',
+            command,
+            status: 'failed',
+            outputExcerpt: 'failed',
+          },
+        ],
+      })
+    );
+    store.applyTurnCheckpoint(
+      makeCheckpoint({
+        revision: 2,
+        contentHash: 'hash-2',
+        projectPath: '/tmp/other',
+        observedThrough: { kind: 'source_offset', generation: 0, offset: 200 },
+        executions: [],
+      })
+    );
+    expect(store.getExecutionObservations('sess-1')).toEqual([]);
+  });
   it('inserts a new checkpoint', () => {
     const result = store.applyTurnCheckpoint(makeCheckpoint());
     expect(result.status).toBe('inserted');

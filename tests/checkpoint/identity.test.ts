@@ -30,7 +30,7 @@ describe('checkpoint identity', () => {
       expect(hashFields('a', 'b', 1)).toBe(hashFields('a', 'b', 1));
     });
 
-    it('changes when any field changes', () => {
+    it('changes when each identity field changes', () => {
       expect(hashFields('a', 'b', 1)).not.toBe(hashFields('a', 'b', 2));
       expect(hashFields('a', 'b', 1)).not.toBe(hashFields('a', 'c', 1));
       expect(hashFields('a', 'b', 1)).not.toBe(hashFields('z', 'b', 1));
@@ -143,6 +143,80 @@ describe('checkpoint identity', () => {
       expect(createContentHash('p', 'a', ['t1'], parts)).toBe(
         createContentHash('p', 'a', ['t1'], parts)
       );
+    });
+
+    it('covers runtime, project path, execution order, and every non-derived execution field', () => {
+      const parts = [makePart()];
+      const execution = {
+        executionIndex: 0,
+        toolName: 'Bash',
+        command: 'pnpm test',
+        status: 'failed' as const,
+        outputExcerpt: 'failed',
+      };
+      const base = createContentHash('p', 'a', [], parts, [execution], 'claude', '/a');
+      expect(base).toBe('04f1c5e4791692fd9be02b8bfa042b4f2ed55f8adea551ad55667de5efcb36e2');
+      expect(createContentHash('p', 'a', [], parts, [execution], 'codex', '/a')).not.toBe(base);
+      expect(createContentHash('p', 'a', [], parts, [execution], 'claude', '/b')).not.toBe(base);
+      expect(
+        createContentHash(
+          'p',
+          'a',
+          [],
+          parts,
+          [{ ...execution, executionIndex: 1 }],
+          'claude',
+          '/a'
+        )
+      ).not.toBe(base);
+      expect(
+        createContentHash(
+          'p',
+          'a',
+          [],
+          parts,
+          [{ ...execution, toolName: 'Write' }],
+          'claude',
+          '/a'
+        )
+      ).not.toBe(base);
+      expect(
+        createContentHash(
+          'p',
+          'a',
+          [],
+          parts,
+          [{ ...execution, command: 'pnpm lint' }],
+          'claude',
+          '/a'
+        )
+      ).not.toBe(base);
+      expect(
+        createContentHash(
+          'p',
+          'a',
+          [],
+          parts,
+          [{ ...execution, status: 'succeeded' }],
+          'claude',
+          '/a'
+        )
+      ).not.toBe(base);
+      expect(
+        createContentHash('p', 'a', [], parts, [{ ...execution, exitCode: 1 }], 'claude', '/a')
+      ).not.toBe(base);
+      expect(
+        createContentHash(
+          'p',
+          'a',
+          [],
+          parts,
+          [{ ...execution, outputExcerpt: 'other' }],
+          'claude',
+          '/a'
+        )
+      ).not.toBe(base);
+      expect(createContentHash('p', 'a', [], parts, [], 'claude', '/a')).not.toBe(base);
     });
   });
 });

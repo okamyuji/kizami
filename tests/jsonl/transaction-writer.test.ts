@@ -1,11 +1,17 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { JsonlTransactionWriter } from '@/jsonl/writer';
-import { serializeV2Transaction } from '@/jsonl/transaction';
+import {
+  computePayloadDigest,
+  MAX_JSONL_RECORD_BYTES,
+  serializeV2Transaction,
+} from '@/jsonl/transaction';
 import { readCanonicalTransactions } from '@/jsonl/reader';
-import type { JsonlV2Payload } from '@/jsonl/types';
+import type { JsonlV2Payload, JsonlV2Record } from '@/jsonl/types';
+import type { SerializedJsonlTransaction } from '@/jsonl/types';
 import type { TurnCheckpointV2 } from '@/checkpoint/types';
 
 const tmpDirs: string[] = [];
@@ -124,6 +130,370 @@ describe('JsonlTransactionWriter', () => {
     }
   });
 
+  it('rejects a cached txId reused with a different payload before appending', () => {
+    const dir = makeTmpDir();
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      const targetPath = path.join(dir, 'test.jsonl');
+      const first = serializeV2Transaction([makePayload()], {
+        txId: 'tx-reused',
+        createdAt: '2026-06-21T00:00:00.000Z',
+        targetPath,
+      });
+      writer.withExclusiveTransaction((lockedWriter) => {
+        const { transaction } = lockedWriter.appendPrepared(first);
+        lockedWriter.applyCommittedToIndex(transaction);
+      });
+
+      const different = serializeV2Transaction(
+        [makePayload({ contentHash: 'different-payload' })],
+        {
+          txId: 'tx-reused',
+          createdAt: '2026-06-21T00:00:01.000Z',
+          targetPath,
+        }
+      );
+      expect(() =>
+        writer.withExclusiveTransaction((lockedWriter) => {
+          lockedWriter.appendPrepared(different);
+        })
+      ).toThrow(/different payload/);
+
+      const commitLines = fs
+        .readFileSync(targetPath, 'utf-8')
+        .split('\n')
+        .filter((line) => line.includes('"tx_commit"'));
+      expect(commitLines).toHaveLength(1);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it('does not treat an orphan commit marker as a committed transaction', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const serialized = serializeV2Transaction([makePayload()], {
+      txId: 'tx-orphan',
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+    });
+    fs.writeFileSync(targetPath, `${serialized.allLines.at(-1)}\n`);
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      writer.withExclusiveTransaction((lockedWriter) => {
+        expect(lockedWriter.appendPrepared(serialized).receipt.status).toBe('inserted');
+      });
+      expect(fs.readFileSync(targetPath, 'utf-8').match(/"tx_commit"/g)).toHaveLength(2);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it('invalidates a positive cache entry after the JSONL file is truncated', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const serialized = serializeV2Transaction([makePayload()], {
+      txId: 'tx-truncated',
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+    });
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      writer.withExclusiveTransaction((lockedWriter) => {
+        const { transaction } = lockedWriter.appendPrepared(serialized);
+        lockedWriter.applyCommittedToIndex(transaction);
+      });
+      fs.truncateSync(targetPath, 0);
+
+      writer.withExclusiveTransaction((lockedWriter) => {
+        expect(lockedWriter.appendPrepared(serialized).receipt.status).toBe('inserted');
+      });
+      expect(fs.readFileSync(targetPath, 'utf-8').match(/"tx_commit"/g)).toHaveLength(1);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it('detects a conflicting committed frame appended after the cache snapshot', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const first = serializeV2Transaction([makePayload()], {
+      txId: 'tx-conflict',
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+    });
+    const different = serializeV2Transaction([makePayload({ contentHash: 'different-payload' })], {
+      txId: 'tx-conflict',
+      createdAt: '2026-06-21T00:00:01.000Z',
+      targetPath,
+    });
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      writer.withExclusiveTransaction((lockedWriter) => {
+        const { transaction } = lockedWriter.appendPrepared(first);
+        lockedWriter.applyCommittedToIndex(transaction);
+      });
+      fs.appendFileSync(targetPath, `${different.allLines.join('\n')}\n`);
+
+      expect(() =>
+        writer.withExclusiveTransaction((lockedWriter) => {
+          lockedWriter.findCommitted(targetPath, first.txId, first.payloadDigest);
+        })
+      ).toThrow(/different payload/);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it('fails closed without appending when an existing committed payload exceeds the scan limit', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const payload: JsonlV2Payload = {
+      ...makePayload(),
+      txId: 'tx-oversized-existing',
+      parts: [
+        {
+          partIndex: 0,
+          externalId: 'oversized',
+          content: 'x'.repeat(MAX_JSONL_RECORD_BYTES),
+          role: 'assistant',
+          metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+          tokenCount: MAX_JSONL_RECORD_BYTES / 4,
+        },
+      ],
+    };
+    const payloadLine = JSON.stringify(payload);
+    const payloadDigest = computePayloadDigest([payloadLine]);
+    const beginRecord: JsonlV2Record = {
+      v: 2,
+      type: 'tx_begin',
+      txId: payload.txId,
+      createdAt: '2026-06-21T00:00:00.000Z',
+    };
+    const commitRecord: JsonlV2Record = {
+      v: 2,
+      type: 'tx_commit',
+      txId: payload.txId,
+      recordCount: 1,
+      payloadDigest,
+      createdAt: '2026-06-21T00:00:00.000Z',
+    };
+    const begin = JSON.stringify(beginRecord);
+    const commit = JSON.stringify(commitRecord);
+    const serialized: SerializedJsonlTransaction = {
+      txId: payload.txId,
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+      payloadLines: [payloadLine],
+      payloadDigest,
+      allLines: [begin, payloadLine, commit],
+      records: [beginRecord, payload, commitRecord],
+    };
+    fs.writeFileSync(targetPath, `${serialized.allLines.join('\n')}\n`);
+    const sizeBefore = fs.statSync(targetPath).size;
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      expect(() =>
+        writer.withExclusiveTransaction((lockedWriter) => {
+          lockedWriter.appendPrepared(serialized);
+        })
+      ).toThrow(/safe scan limit/);
+      expect(fs.statSync(targetPath).size).toBe(sizeBefore);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it('recognizes an existing committed payload larger than the initial scan buffer', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const serialized = serializeV2Transaction(
+      [
+        makePayload({
+          parts: [
+            {
+              partIndex: 0,
+              externalId: 'large',
+              content: 'x'.repeat(128 * 1024),
+              role: 'assistant',
+              metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+              tokenCount: 32 * 1024,
+            },
+          ],
+        }),
+      ],
+      {
+        txId: 'tx-large-line',
+        createdAt: '2026-06-21T00:00:00.000Z',
+        targetPath,
+      }
+    );
+    fs.writeFileSync(targetPath, `${serialized.allLines.join('\n')}\n`, { mode: 0o600 });
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      writer.withExclusiveTransaction((lockedWriter) => {
+        expect(lockedWriter.appendPrepared(serialized).receipt.status).toBe('already_committed');
+      });
+      expect(fs.readFileSync(targetPath, 'utf-8').match(/"tx_commit"/g)).toHaveLength(1);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it('fails closed when an existing payload line exceeds the record limit by one byte', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const template = makePayload({
+      txId: 'tx-one-over',
+      parts: [
+        {
+          partIndex: 0,
+          externalId: 'one-over',
+          content: '',
+          role: 'assistant',
+          metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+          tokenCount: 1,
+        },
+      ],
+    });
+    const overhead = JSON.stringify(template).length;
+    const payload: JsonlV2Payload = {
+      ...template,
+      parts: [{ ...template.parts[0], content: 'x'.repeat(MAX_JSONL_RECORD_BYTES + 1 - overhead) }],
+    };
+    const payloadLine = JSON.stringify(payload);
+    expect(Buffer.byteLength(payloadLine, 'utf-8')).toBe(MAX_JSONL_RECORD_BYTES + 1);
+    const payloadDigest = computePayloadDigest([payloadLine]);
+    const begin = JSON.stringify({
+      v: 2,
+      type: 'tx_begin',
+      txId: payload.txId,
+      createdAt: '2026-06-21T00:00:00.000Z',
+    });
+    const commit = JSON.stringify({
+      v: 2,
+      type: 'tx_commit',
+      txId: payload.txId,
+      recordCount: 1,
+      payloadDigest,
+      createdAt: '2026-06-21T00:00:00.000Z',
+    });
+    fs.writeFileSync(targetPath, `${begin}\n${payloadLine}\n${commit}\n`);
+    const serialized: SerializedJsonlTransaction = {
+      txId: payload.txId,
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+      payloadLines: [payloadLine],
+      payloadDigest,
+      allLines: [begin, payloadLine, commit],
+      records: [JSON.parse(begin) as JsonlV2Record, payload, JSON.parse(commit) as JsonlV2Record],
+    };
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      expect(() =>
+        writer.withExclusiveTransaction((lockedWriter) => {
+          lockedWriter.appendPrepared(serialized);
+        })
+      ).toThrow(/safe scan limit/);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it('serves the second lookup from the commit cache without rescanning the file', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const serialized = serializeV2Transaction([makePayload()], {
+      txId: 'tx-cached',
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+    });
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      writer.withExclusiveTransaction((lockedWriter) => {
+        const { transaction } = lockedWriter.appendPrepared(serialized);
+        lockedWriter.applyCommittedToIndex(transaction);
+      });
+
+      // fileに存在しないprobe行をcacheへ直接仕込む。再走査はindexをfileから
+      // 再構築するためprobeを消す。probeが見えるのはfast pathだけ。
+      const lockDb = new Database(path.join(dir, '.writer-lock.sqlite'));
+      const poison = (): void => {
+        lockDb
+          .prepare(
+            'INSERT OR REPLACE INTO committed_transactions (file_path, tx_id, payload_digest) VALUES (?, ?, ?)'
+          )
+          .run(targetPath, 'tx-probe', 'poisoned-digest');
+      };
+      try {
+        poison();
+        writer.withExclusiveTransaction((lockedWriter) => {
+          expect(() => lockedWriter.findCommitted(targetPath, 'tx-probe', 'real-digest')).toThrow(
+            /different payload/
+          );
+        });
+
+        // snapshotを無効化すると再走査になり、probeはfile由来のindexへ置換される
+        fs.utimesSync(targetPath, new Date(), new Date(Date.now() + 1000));
+        poison();
+        writer.withExclusiveTransaction((lockedWriter) => {
+          expect(lockedWriter.findCommitted(targetPath, 'tx-probe', 'real-digest')).toBe(false);
+        });
+      } finally {
+        lockDb.close();
+      }
+    } finally {
+      writer.close();
+    }
+  });
+
+  it('leaves the commit scan state matching the file stat so the next commit skips the rescan', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const serialized = serializeV2Transaction([makePayload()], {
+      txId: 'tx-fast-path',
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+    });
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      writer.withExclusiveTransaction((lockedWriter) => {
+        const { transaction } = lockedWriter.appendPrepared(serialized);
+        lockedWriter.applyCommittedToIndex(transaction);
+      });
+
+      const stat = fs.statSync(targetPath);
+      const lockDb = new Database(path.join(dir, '.writer-lock.sqlite'), { readonly: true });
+      try {
+        const scanState = lockDb
+          .prepare(
+            'SELECT file_identity, file_size, mtime_ms, ctime_ms FROM file_commit_scan_state WHERE file_path = ?'
+          )
+          .get(targetPath) as
+          | { file_identity: string; file_size: number; mtime_ms: number; ctime_ms: number }
+          | undefined;
+        expect(scanState).toBeDefined();
+        expect(scanState?.file_identity).toBe(`${stat.dev}:${stat.ino}`);
+        expect(scanState?.file_size).toBe(stat.size);
+        expect(scanState?.mtime_ms).toBe(stat.mtimeMs);
+        expect(scanState?.ctime_ms).toBe(stat.ctimeMs);
+      } finally {
+        lockDb.close();
+      }
+    } finally {
+      writer.close();
+    }
+  });
+
   it('repairs partial tail before appending', () => {
     const dir = makeTmpDir();
     const targetPath = path.join(dir, 'test.jsonl');
@@ -154,6 +524,47 @@ describe('JsonlTransactionWriter', () => {
       writer.close();
     }
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects a transaction target symlink before writing',
+    () => {
+      const dir = makeTmpDir();
+      const targetPath = path.join(dir, 'test.jsonl');
+      const linkedTarget = path.join(dir, 'outside.jsonl');
+      fs.writeFileSync(linkedTarget, 'unchanged\n');
+      fs.symlinkSync(linkedTarget, targetPath);
+      const writer = new JsonlTransactionWriter(dir);
+
+      try {
+        const serialized = serializeV2Transaction([makePayload()], {
+          txId: 'tx-symlink',
+          createdAt: '2026-06-21T00:00:00.000Z',
+          targetPath,
+        });
+        expect(() =>
+          writer.withExclusiveTransaction((lockedWriter) => {
+            lockedWriter.appendPrepared(serialized);
+          })
+        ).toThrow(/symlink/);
+        expect(fs.readFileSync(linkedTarget, 'utf-8')).toBe('unchanged\n');
+      } finally {
+        writer.close();
+      }
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects a writer-lock database symlink before opening',
+    () => {
+      const dir = makeTmpDir();
+      const linkedTarget = path.join(dir, 'outside.sqlite');
+      fs.writeFileSync(linkedTarget, 'unchanged');
+      fs.symlinkSync(linkedTarget, path.join(dir, '.writer-lock.sqlite'));
+
+      expect(() => new JsonlTransactionWriter(dir)).toThrow(/symlink/);
+      expect(fs.readFileSync(linkedTarget, 'utf-8')).toBe('unchanged');
+    }
+  );
 
   it('handles abandoned frame followed by valid retry', async () => {
     const dir = makeTmpDir();
@@ -292,6 +703,131 @@ describe('JsonlTransactionWriter', () => {
         writer.close();
       }
     });
+
+    it('keeps turn heads monotonic across old, conflicting, and newer payloads', () => {
+      const dir = makeTmpDir();
+      const writer = new JsonlTransactionWriter(dir);
+
+      try {
+        writer.withExclusiveTransaction((w) => {
+          const apply = (checkpoint: TurnCheckpointV2, txId: string): void => {
+            w.applyCommittedToIndex({
+              txId,
+              createdAt: '2026-06-21T00:00:00.000Z',
+              filePath: path.join(dir, 'missing.jsonl'),
+              beginOffset: 0,
+              endOffset: 0,
+              payloadDigest: `digest-${txId}`,
+              payloads: [{ v: 2, type: 'turn_checkpoint', txId, ...checkpoint }],
+            });
+          };
+
+          apply(
+            makeCheckpoint({
+              turnKey: 'tk-monotonic',
+              revision: 2,
+              contentHash: 'revision-2',
+              observedThrough: { kind: 'source_offset', generation: 0, offset: 200 },
+            }),
+            'tx-revision-2'
+          );
+          apply(
+            makeCheckpoint({
+              turnKey: 'tk-monotonic',
+              revision: 1,
+              contentHash: 'revision-1',
+              observedThrough: { kind: 'source_offset', generation: 0, offset: 100 },
+            }),
+            'tx-revision-1'
+          );
+          expect(w.getTurnHead('sess-1', 'tk-monotonic')).toMatchObject({
+            revision: 2,
+            contentHash: 'revision-2',
+          });
+
+          apply(
+            makeCheckpoint({
+              turnKey: 'tk-monotonic',
+              revision: 2,
+              contentHash: 'revision-2',
+              sourceOrder: '99999999999999999999',
+              observedThrough: { kind: 'source_offset', generation: 0, offset: 999 },
+            }),
+            'tx-identical-revision-content'
+          );
+          expect(w.getTurnHead('sess-1', 'tk-monotonic')).toMatchObject({
+            sourceOrder: '00000000000000000001',
+            observedThrough: { kind: 'source_offset', generation: 0, offset: 200 },
+          });
+
+          expect(() =>
+            apply(
+              makeCheckpoint({
+                turnKey: 'tk-monotonic',
+                revision: 2,
+                contentHash: 'conflict',
+                observedThrough: { kind: 'source_offset', generation: 0, offset: 200 },
+              }),
+              'tx-conflict'
+            )
+          ).toThrow(/conflicting content/);
+          expect(() =>
+            apply(
+              makeCheckpoint({
+                turnKey: 'tk-monotonic',
+                revision: 3,
+                contentHash: 'older-boundary',
+                observedThrough: { kind: 'source_offset', generation: 0, offset: 100 },
+              }),
+              'tx-older-boundary'
+            )
+          ).toThrow(/non-monotonic observation boundary/);
+
+          apply(
+            makeCheckpoint({
+              turnKey: 'tk-monotonic',
+              revision: 3,
+              contentHash: 'revision-3',
+              observedThrough: { kind: 'source_offset', generation: 0, offset: 200 },
+            }),
+            'tx-revision-3'
+          );
+          apply(
+            makeCheckpoint({
+              turnKey: 'tk-monotonic',
+              historyEpoch: 1,
+              revision: 1,
+              contentHash: 'new-epoch',
+              observedThrough: { kind: 'source_offset', generation: 1, offset: 1 },
+            }),
+            'tx-new-epoch'
+          );
+          expect(w.getTurnHead('sess-1', 'tk-monotonic')).toMatchObject({
+            historyEpoch: 1,
+            revision: 1,
+            contentHash: 'new-epoch',
+          });
+
+          apply(
+            makeCheckpoint({
+              turnKey: 'tk-monotonic',
+              historyEpoch: 0,
+              revision: 99,
+              contentHash: 'old-epoch',
+              observedThrough: { kind: 'source_offset', generation: 9, offset: 999 },
+            }),
+            'tx-old-epoch'
+          );
+          expect(w.getTurnHead('sess-1', 'tk-monotonic')).toMatchObject({
+            historyEpoch: 1,
+            revision: 1,
+            contentHash: 'new-epoch',
+          });
+        });
+      } finally {
+        writer.close();
+      }
+    });
   });
 
   describe('session epochs', () => {
@@ -304,6 +840,58 @@ describe('JsonlTransactionWriter', () => {
           expect(w.getSessionEpoch('sess-1')).toBe(0);
           expect(w.allocateSessionEpoch('sess-1')).toBe(1);
           expect(w.allocateSessionEpoch('sess-1')).toBe(2);
+          expect(w.getSessionEpoch('sess-1')).toBe(2);
+        });
+      } finally {
+        writer.close();
+      }
+    });
+
+    it('restores reset epochs from committed payloads without decreasing the current epoch', () => {
+      const dir = makeTmpDir();
+      const writer = new JsonlTransactionWriter(dir);
+
+      try {
+        const targetPath = path.join(dir, 'test.jsonl');
+        writer.withExclusiveTransaction((w) => {
+          const newer = serializeV2Transaction(
+            [
+              {
+                v: 2,
+                type: 'session_reset',
+                txId: 'tx-reset-2',
+                sessionId: 'sess-1',
+                historyEpoch: 2,
+                reason: 'legacy_mismatch',
+              },
+            ],
+            {
+              txId: 'tx-reset-2',
+              createdAt: '2026-06-21T00:00:00.000Z',
+              targetPath,
+            }
+          );
+          w.applyCommittedToIndex(w.appendPrepared(newer).transaction);
+          expect(w.getSessionEpoch('sess-1')).toBe(2);
+
+          const older = serializeV2Transaction(
+            [
+              {
+                v: 2,
+                type: 'session_reset',
+                txId: 'tx-reset-1',
+                sessionId: 'sess-1',
+                historyEpoch: 1,
+                reason: 'legacy_mismatch',
+              },
+            ],
+            {
+              txId: 'tx-reset-1',
+              createdAt: '2026-06-20T00:00:00.000Z',
+              targetPath,
+            }
+          );
+          w.applyCommittedToIndex(w.appendPrepared(older).transaction);
           expect(w.getSessionEpoch('sess-1')).toBe(2);
         });
       } finally {
