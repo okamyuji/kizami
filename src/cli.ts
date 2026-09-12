@@ -26,6 +26,7 @@ import type { RecoverResult } from '@/hooks/recover';
 import { backfillEmbeddings } from '@/hooks/embed';
 import type { BackfillResult } from '@/hooks/embed';
 import { VERSION } from '@/version';
+import { recoverPreparedCheckpoints } from '@/checkpoint/coordinator';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -100,6 +101,15 @@ export async function cmdInject(
     console.log('  Injects recent project Q&A into session context.');
     return;
   }
+  // Clear finalized receipts and finish any that were prepared but never committed.
+  // Writes nothing to stdout, so the injected context is unaffected, and never
+  // blocks the session on failure.
+  try {
+    await recoverPreparedCheckpoints(loadConfig(configPath), runtime);
+  } catch {
+    /* best effort */
+  }
+
   await runInject(configPath, projectPath, runtime);
 }
 
