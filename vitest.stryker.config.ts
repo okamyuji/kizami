@@ -22,6 +22,7 @@ export default defineConfig({
       'tests/schema.test.ts',
       'tests/maintenance/auto.test.ts',
       'tests/parser/transcript.test.ts',
+      'tests/cli.test.ts',
     ],
   },
 });

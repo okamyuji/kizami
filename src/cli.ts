@@ -156,11 +156,17 @@ export function cmdSearch(
     const projectPath = options.project ? path.resolve(options.project) : process.cwd();
     const config = loadConfig(options.config);
 
+    // recall hookと同じくconfig.search.projectScopeをデフォルトの挙動として尊重する。
+    // --all-projectsが明示されればそれを優先する。
+    const isTiered = config.search.projectScope === 'tiered';
+    const allProjects = options.allProjects ?? config.search.projectScope === false;
+
     const results = searchFts(store, {
       query,
       projectPath,
       limit: 50,
-      allProjects: options.allProjects ?? false,
+      allProjects,
+      tiered: isTiered && !allProjects,
     });
 
     if (results.length === 0) {
@@ -168,7 +174,13 @@ export function cmdSearch(
       return [];
     }
 
-    const ranked = rankResults(results, config.search.timeDecayHalfLifeDays, query);
+    const ranked = rankResults(
+      results,
+      config.search.timeDecayHalfLifeDays,
+      query,
+      projectPath,
+      isTiered && !allProjects ? config.search.crossProjectPenalty : undefined
+    );
     const output = formatResults(ranked, config.search.defaultLimit);
     console.log(output);
     return ranked;
