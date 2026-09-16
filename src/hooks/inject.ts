@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import { loadConfig } from '@/config';
+import { loadConfig, applyProjectAlias } from '@/config';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
 import { Store } from '@/db/store';
@@ -49,6 +49,7 @@ export async function handleInject(
     } catch {
       projectPath = rawPath;
     }
+    projectPath = applyProjectAlias(config.storage.projectAliases, projectPath);
 
     const limit = Math.max(1, config.hooks.injectRecentCount);
 

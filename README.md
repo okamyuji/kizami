@@ -1001,7 +1001,8 @@ Kizamiは全履歴をコンテキストに入れるのではなく、関連度�
   },
   "storage": {
     "jsonlDir": "/Users/you/.local/share/kizami/jsonl",
-    "selfHealTailLines": 100
+    "selfHealTailLines": 100,
+    "projectAliases": {}
   },
   "search": {
     "mode": "core",
@@ -1040,31 +1041,32 @@ maintenanceセクションは自動メンテナンスの設定です。embedding
 
 各設定項目の意味は以下のとおりです。
 
-| セクション  | キー                        | デフォルト                        | 説明                                                                                                                 |
-| ----------- | --------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| database    | path                        | `~/.local/share/kizami/memory.db` | データベースファイル（キャッシュ層）のパスです                                                                       |
-| storage     | jsonlDir                    | `~/.local/share/kizami/jsonl`     | JSONL正本のディレクトリです。環境変数 `KIZAMI_JSONL_DIR` で上書き可能 (v0.2.0〜)                                     |
-| storage     | selfHealTailLines           | 100                               | save時の self-heal が走査する JSONL 末尾行数 (v0.2.0〜)                                                              |
-| search      | mode                        | `core`                            | 検索モードを指定します(`core`または`hybrid`)                                                                         |
-| search      | timeDecayHalfLifeDays       | 30                                | 時間減衰の半減期(日数)です                                                                                           |
-| search      | defaultLimit                | 5                                 | 検索結果のデフォルト件数です                                                                                         |
-| search      | projectScope                | true                              | `true`: 現プロジェクトのみ、`false`: 全プロジェクト、`"tiered"`: 現プロジェクト優先+クロスプロジェクトフォールバック |
-| search      | crossProjectPenalty         | 0.3                               | tieredモードでクロスプロジェクト結果に適用するスコア倍率(0-1)                                                        |
-| chunking    | maxTokensPerChunk           | 512                               | チャンクあたりの最大トークン数です                                                                                   |
-| chunking    | truncateToolOutputLines     | 20                                | ツール出力の先頭保持行数です                                                                                         |
-| chunking    | truncateToolOutputTailLines | 5                                 | ツール出力の末尾保持行数です                                                                                         |
-| hooks       | autoRecall                  | true                              | プロンプト送信時の自動記憶注入を有効にします                                                                         |
-| hooks       | recallLimit                 | 3                                 | 自動注入する記憶の最大件数です                                                                                       |
-| hooks       | minRelevanceScore           | 0                                 | 注入する記憶の最低関連度スコアです。0より大きい値を設定するとフォールバックカスケードが無効になります(推奨: 0.2)     |
-| hooks       | injectRecentCount           | 3                                 | SessionStart 時に冒頭注入する直近Q&Aの件数です (v0.2.0〜)                                                            |
-| maintenance | enabled                     | true                              | 自動メンテナンスを有効にします                                                                                       |
-| maintenance | intervalHours               | 24                                | メンテナンスの実行間隔(時間)です                                                                                     |
-| maintenance | maxChunkAgeDays             | 90                                | この日数を超えたチャンクを自動削除します                                                                             |
-| maintenance | maxDbSizeMB                 | 100                               | DBサイズがこの上限を超えたら古い順に削除します                                                                       |
-| embedding   | model                       | `sirasagi62/ruri-v3-30m-ONNX`     | hybridモードで使用するembeddingモデルです                                                                            |
-| embedding   | quantized                   | true                              | int8量子化モデルを使用します                                                                                         |
-| embedding   | dimensions                  | 256                               | embeddingの次元数です                                                                                                |
-| embedding   | cacheDir                    | `$XDG_CACHE_HOME/kizami/models`   | モデルのキャッシュディレクトリです                                                                                   |
+| セクション  | キー                        | デフォルト                        | 説明                                                                                                                                                                                                                                                                   |
+| ----------- | --------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| database    | path                        | `~/.local/share/kizami/memory.db` | データベースファイル（キャッシュ層）のパスです                                                                                                                                                                                                                         |
+| storage     | jsonlDir                    | `~/.local/share/kizami/jsonl`     | JSONL正本のディレクトリです。環境変数 `KIZAMI_JSONL_DIR` で上書き可能 (v0.2.0〜)                                                                                                                                                                                       |
+| storage     | selfHealTailLines           | 100                               | save時の self-heal が走査する JSONL 末尾行数 (v0.2.0〜)                                                                                                                                                                                                                |
+| storage     | projectAliases              | `{}`                              | ホストごとに異なるprojectPathを同一プロジェクトとして扱うための対応表です。キーは実行環境のパス、値は正規化後のパスです。最長一致で前方一致します（`/x/proj`は`/x/proj/sub`に一致し`/x/proj-other`には一致しません）。設定しなければ従来どおりパスはそのまま使われます |
+| search      | mode                        | `core`                            | 検索モードを指定します(`core`または`hybrid`)                                                                                                                                                                                                                           |
+| search      | timeDecayHalfLifeDays       | 30                                | 時間減衰の半減期(日数)です                                                                                                                                                                                                                                             |
+| search      | defaultLimit                | 5                                 | 検索結果のデフォルト件数です                                                                                                                                                                                                                                           |
+| search      | projectScope                | true                              | `true`: 現プロジェクトのみ、`false`: 全プロジェクト、`"tiered"`: 現プロジェクト優先+クロスプロジェクトフォールバック                                                                                                                                                   |
+| search      | crossProjectPenalty         | 0.3                               | tieredモードでクロスプロジェクト結果に適用するスコア倍率(0-1)                                                                                                                                                                                                          |
+| chunking    | maxTokensPerChunk           | 512                               | チャンクあたりの最大トークン数です                                                                                                                                                                                                                                     |
+| chunking    | truncateToolOutputLines     | 20                                | ツール出力の先頭保持行数です                                                                                                                                                                                                                                           |
+| chunking    | truncateToolOutputTailLines | 5                                 | ツール出力の末尾保持行数です                                                                                                                                                                                                                                           |
+| hooks       | autoRecall                  | true                              | プロンプト送信時の自動記憶注入を有効にします                                                                                                                                                                                                                           |
+| hooks       | recallLimit                 | 3                                 | 自動注入する記憶の最大件数です                                                                                                                                                                                                                                         |
+| hooks       | minRelevanceScore           | 0                                 | 注入する記憶の最低関連度スコアです。0より大きい値を設定するとフォールバックカスケードが無効になります(推奨: 0.2)                                                                                                                                                       |
+| hooks       | injectRecentCount           | 3                                 | SessionStart 時に冒頭注入する直近Q&Aの件数です (v0.2.0〜)                                                                                                                                                                                                              |
+| maintenance | enabled                     | true                              | 自動メンテナンスを有効にします                                                                                                                                                                                                                                         |
+| maintenance | intervalHours               | 24                                | メンテナンスの実行間隔(時間)です                                                                                                                                                                                                                                       |
+| maintenance | maxChunkAgeDays             | 90                                | この日数を超えたチャンクを自動削除します                                                                                                                                                                                                                               |
+| maintenance | maxDbSizeMB                 | 100                               | DBサイズがこの上限を超えたら古い順に削除します                                                                                                                                                                                                                         |
+| embedding   | model                       | `sirasagi62/ruri-v3-30m-ONNX`     | hybridモードで使用するembeddingモデルです                                                                                                                                                                                                                              |
+| embedding   | quantized                   | true                              | int8量子化モデルを使用します                                                                                                                                                                                                                                           |
+| embedding   | dimensions                  | 256                               | embeddingの次元数です                                                                                                                                                                                                                                                  |
+| embedding   | cacheDir                    | `$XDG_CACHE_HOME/kizami/models`   | モデルのキャッシュディレクトリです                                                                                                                                                                                                                                     |
 
 ### 推奨設定
 

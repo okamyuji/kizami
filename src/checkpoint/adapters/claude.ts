@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { applyProjectAlias } from '@/config';
 import { parseTranscript } from '@/parser/transcript';
 import type { TranscriptMessage } from '@/parser/transcript';
 import type {
@@ -170,6 +171,7 @@ async function extractTurns(
   } catch {
     projectPath = payload.cwd || process.cwd();
   }
+  projectPath = applyProjectAlias(env.config.storage.projectAliases, projectPath);
 
   const candidate: TurnCheckpointCandidate = {
     runtime: 'claude',

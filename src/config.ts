@@ -7,6 +7,7 @@ export interface EngramConfig {
   storage: {
     jsonlDir: string;
     selfHealTailLines: number;
+    projectAliases: Record<string, string>;
   };
   search: {
     mode: 'core' | 'hybrid';
@@ -72,6 +73,7 @@ export function getDefaultConfig(): EngramConfig {
     storage: {
       jsonlDir: getDefaultJsonlDir(),
       selfHealTailLines: 100,
+      projectAliases: {},
     },
     search: {
       mode: 'core',
@@ -133,6 +135,48 @@ function deepMerge(
   return result;
 }
 
+function stripTrailingSeparator(value: string): string {
+  return value.replace(/[/\\]+$/, '');
+}
+
+export function validateProjectAliases(value: unknown): Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  const result: Record<string, string> = {};
+  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof val !== 'string' || key.length === 0 || val.length === 0) continue;
+    result[stripTrailingSeparator(key)] = stripTrailingSeparator(val);
+  }
+  return result;
+}
+
+/**
+ * ホスト間で projectPath が異なる同一論理プロジェクトを紐付けるための対応表を適用する。
+ * 最長一致のキーを、区切り文字境界を確認したうえで前方一致で探す
+ * (`/x/proj` は `/x/proj/sub` に一致するが `/x/proj-other` には一致しない)。
+ * サブパス部分の区切り文字は value 側の区切り文字に揃える。key と value がそれぞれ
+ * 異なるOS由来のパス表記(`\` と `/`)になり得るため。
+ */
+export function applyProjectAlias(aliases: Record<string, string>, rawPath: string): string {
+  let bestKey = '';
+  for (const key of Object.keys(aliases)) {
+    // Stryker disable next-line EqualityOperator: two distinct keys can never both be a
+    // prefix-match of the same rawPath at equal length (a fixed-length prefix is unique),
+    // so <= vs < is unobservable here.
+    if (key.length <= bestKey.length) continue;
+    if (rawPath === key || rawPath.startsWith(key + '/') || rawPath.startsWith(key + '\\')) {
+      bestKey = key;
+    }
+  }
+  if (!bestKey) return rawPath;
+
+  const value = aliases[bestKey];
+  const suffix = rawPath.slice(bestKey.length);
+  if (suffix.length === 0) return value;
+  const valueSep = value.includes('\\') ? '\\' : '/';
+  const normalizedSuffix = suffix.slice(1).replace(/[/\\]/g, valueSep);
+  return `${value}${valueSep}${normalizedSuffix}`;
+}
+
 function validateConfig(config: EngramConfig): EngramConfig {
   const ps = config.search.projectScope;
   const validProjectScope = ps === true || ps === false || ps === 'tiered' ? ps : true;
@@ -144,6 +188,10 @@ function validateConfig(config: EngramConfig): EngramConfig {
       ...config.search,
       projectScope: validProjectScope,
       crossProjectPenalty: clampedPenalty,
+    },
+    storage: {
+      ...config.storage,
+      projectAliases: validateProjectAliases(config.storage.projectAliases),
     },
   };
 }

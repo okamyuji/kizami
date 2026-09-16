@@ -1,7 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { loadConfig } from '@/config';
+import { loadConfig, applyProjectAlias } from '@/config';
+import type { EngramConfig } from '@/config';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema, initializeHybridSchema } from '@/db/schema';
 import { Store } from '@/db/store';
@@ -57,6 +58,7 @@ export async function handleSave(
     } catch {
       projectPath = input.cwd || process.cwd();
     }
+    projectPath = applyProjectAlias(config.storage.projectAliases, projectPath);
     const chunks = buildChunks(messages, input.session_id, projectPath);
 
     if (chunks.length === 0) return;
@@ -166,12 +168,14 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-function resolveProjectPath(rawPath: string): string {
+function resolveProjectPath(config: EngramConfig, rawPath: string): string {
+  let resolved: string;
   try {
-    return fs.realpathSync(rawPath);
+    resolved = fs.realpathSync(rawPath);
   } catch {
-    return rawPath;
+    resolved = rawPath;
   }
+  return applyProjectAlias(config.storage.projectAliases, resolved);
 }
 
 export async function handleKimiSessionEnd(raw: string, configPath?: string): Promise<void> {
@@ -186,7 +190,7 @@ export async function handleKimiSessionEnd(raw: string, configPath?: string): Pr
   const wirePath = findWireJsonlPath(parsed.session_id);
   const assistantText = wirePath ? extractAssistantFromWireJsonl(wirePath) : '';
 
-  const projectPath = resolveProjectPath(parsed.cwd ?? turns[0].projectPath);
+  const projectPath = resolveProjectPath(config, parsed.cwd ?? turns[0].projectPath);
   const allPrompts = turns.map((t) => t.prompt).join('\n\n');
   const content = assistantText
     ? `[User]\n${allPrompts}\n\n[Assistant]\n${assistantText}`

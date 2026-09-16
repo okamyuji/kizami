@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import { loadConfig } from '@/config';
+import { loadConfig, applyProjectAlias } from '@/config';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
 import type { SearchResult } from '@/db/store';
@@ -44,6 +44,7 @@ export async function handleRecall(
     } catch {
       projectPath = rawPath;
     }
+    projectPath = applyProjectAlias(config.storage.projectAliases, projectPath);
     const isTiered = config.search.projectScope === 'tiered';
     const allProjects = config.search.projectScope === false;
     const scopedOnly = config.search.projectScope === true;

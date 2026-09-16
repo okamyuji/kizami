@@ -101,6 +101,36 @@ describe('handleSave', () => {
     db.close();
   });
 
+  it('should map projectPath through storage.projectAliases when configured', async () => {
+    const resolvedTmp = fs.realpathSync(tmpDir);
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        database: { path: dbPath },
+        storage: { projectAliases: { [resolvedTmp]: '/shared/project' } },
+      }),
+      'utf-8'
+    );
+
+    await handleSave(
+      {
+        session_id: 'test-session-alias',
+        transcript_path: fixtureTranscript,
+        cwd: tmpDir,
+      },
+      configPath
+    );
+
+    const db = getDatabase(dbPath);
+    initializeSchema(db);
+    const store = new Store(db);
+
+    const sessions = store.getSessionList();
+    expect(sessions[0].projectPath).toBe('/shared/project');
+
+    db.close();
+  });
+
   it('should handle missing cwd by falling back to process.cwd()', async () => {
     await handleSave(
       {

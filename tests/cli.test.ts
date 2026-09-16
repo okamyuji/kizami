@@ -107,6 +107,32 @@ describe('cli commands', () => {
       });
       expect(results).toEqual([]);
     });
+
+    it('should find results scoped through a configured project alias', () => {
+      store.insertChunks([
+        makeChunk({
+          projectPath: '/host-a/project',
+          content: 'React Hook Form validation patterns and best practices',
+        }),
+      ]);
+
+      const aliasConfigPath = path.join(tmpDir, 'alias-config.json');
+      fs.writeFileSync(
+        aliasConfigPath,
+        JSON.stringify({
+          database: { path: dbPath },
+          storage: { projectAliases: { '/host-b/project': '/host-a/project' } },
+        })
+      );
+
+      const results = cmdSearch('React Hook', {
+        project: '/host-b/project',
+        config: aliasConfigPath,
+      });
+
+      expect(results.length).toBeGreaterThanOrEqual(1);
+      expect(results[0].content).toContain('React');
+    });
   });
 
   describe('list', () => {

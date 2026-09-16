@@ -138,4 +138,50 @@ describe('claudeAdapter', () => {
       },
     ]);
   });
+
+  it('maps projectPath through storage.projectAliases', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-claude-adapter-alias-'));
+    tempDirs.push(root);
+    const transcriptPath = path.join(root, 'transcript.jsonl');
+    const records = [
+      {
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'text', text: 'Hello' }] },
+        sessionId: 's1',
+      },
+      {
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Hi' }] },
+        sessionId: 's1',
+      },
+    ];
+    fs.writeFileSync(
+      transcriptPath,
+      `${records.map((record) => JSON.stringify(record)).join('\n')}\n`
+    );
+
+    const resolvedRoot = fs.realpathSync(root);
+    const config = getDefaultConfig();
+    config.storage.projectAliases = { [resolvedRoot]: '/shared/project' };
+
+    const result = await claudeAdapter.extractStop(
+      {
+        session_id: 's1',
+        transcript_path: transcriptPath,
+        cwd: root,
+        last_assistant_message: 'Hi',
+      },
+      {
+        config,
+        stateRoot: root,
+        now: () => new Date('2026-08-08T00:00:00Z'),
+        getOrCreateTurnSequence: () => 1,
+        allocateTurnSequenceRange: () => [1],
+        reserveObservationSequence: () => 1,
+        log: () => undefined,
+      }
+    );
+
+    expect(result.candidates[0].projectPath).toBe('/shared/project');
+  });
 });
