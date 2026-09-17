@@ -26,7 +26,7 @@ export default {
     'src/db/store.ts:558-561',
     'src/db/store.ts:620-690',
     'src/config.ts:138-184',
-    'src/cli.ts:159-199',
+    'src/cli.ts:159-195',
   ],
   reporters: ['clear-text', 'progress'],
   thresholds: { high: 100, low: 100, break: 100 },
