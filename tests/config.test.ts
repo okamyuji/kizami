@@ -184,6 +184,23 @@ describe('config', () => {
 
       fs.rmSync(tmpDir, { recursive: true });
     });
+
+    it('should drop entries whose key or value is separators only (normalizes to empty)', () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-test-'));
+      const configPath = path.join(tmpDir, 'config.json');
+
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          storage: {
+            projectAliases: { '/': '/mapped', '/x/proj': '/', '/y/proj': '/w/proj' },
+          },
+        })
+      );
+      expect(loadConfig(configPath).storage.projectAliases).toEqual({ '/y/proj': '/w/proj' });
+
+      fs.rmSync(tmpDir, { recursive: true });
+    });
   });
 
   describe('applyProjectAlias', () => {

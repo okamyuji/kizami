@@ -143,8 +143,14 @@ export function validateProjectAliases(value: unknown): Record<string, string> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
   const result: Record<string, string> = {};
   for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof val !== 'string' || key.length === 0 || val.length === 0) continue;
-    result[stripTrailingSeparator(key)] = stripTrailingSeparator(val);
+    if (typeof val !== 'string') continue;
+    const normalizedKey = stripTrailingSeparator(key);
+    const normalizedValue = stripTrailingSeparator(val);
+    // 区切り文字だけのkey/valueは正規化後に空文字になる（例: "/" -> ""）。
+    // 空文字keyは常にbestKeyの初期値と同長で選ばれないため実害は無いが、
+    // 空文字valueは projectPath として "" を保存/検索してしまうため拒否する。
+    if (normalizedKey.length === 0 || normalizedValue.length === 0) continue;
+    result[normalizedKey] = normalizedValue;
   }
   return result;
 }
