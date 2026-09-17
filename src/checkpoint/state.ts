@@ -128,11 +128,15 @@ function fsyncAndClose(adapter: DurableFsAdapter, fd: number): void {
 
 function fsyncParentDir(adapter: DurableFsAdapter, filePath: string): void {
   const dir = path.dirname(filePath);
-  const dirFd = adapter.openSync(dir, 'r');
   try {
-    adapter.fsyncSync(dirFd);
-  } finally {
-    adapter.closeSync(dirFd);
+    const dirFd = adapter.openSync(dir, 'r');
+    try {
+      adapter.fsyncSync(dirFd);
+    } finally {
+      adapter.closeSync(dirFd);
+    }
+  } catch {
+    /* ignore on platforms without directory fsync */
   }
 }
 

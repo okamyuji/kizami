@@ -23,9 +23,22 @@ function getClaudeProjectsDir(): string {
 
 /**
  * プロジェクトディレクトリ名からプロジェクトパスを復元する。
- * 例: "-Users-yujiokamoto-devs-claude" → "/Users/yujiokamoto/devs/claude"
+ * POSIX:   "-Users-yujiokamoto-devs-claude" → "/Users/yujiokamoto/devs/claude"
+ * Windows: "C--Users-me-proj"               → "C:\\Users\\me\\proj"
+ *
+ * 注意: この復号は不可逆である。"-" を無条件に区切りへ戻すため、ディレクトリ名に
+ * 元から含まれる "-" と "." も潰れる (".claude" → "/claude")。
  */
+const WINDOWS_PROJECT_DIR_RE = /^([A-Za-z])--(.*)$/;
+
 export function projectDirToPath(dirName: string): string {
+  // Windows: ディレクトリ名はドライブレターで始まる ("C--Users-me-proj")。
+  // POSIX と同じ解釈をすると slice(1) がドライブレターを食ってしまう。
+  const windows = WINDOWS_PROJECT_DIR_RE.exec(dirName);
+  if (windows) {
+    const [, drive, rest] = windows;
+    return `${drive.toUpperCase()}:\\${rest.replace(/-/g, '\\')}`;
+  }
   // 先頭の "-" はルートの "/" に対応
   // 残りの "-" はパスの "/" に対応
   return '/' + dirName.slice(1).replace(/-/g, '/');

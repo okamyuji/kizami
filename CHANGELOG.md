@@ -1,3 +1,23 @@
+## [0.6.5](https://github.com/okamyuji/kizami/compare/v0.6.4...v0.6.5) (2026-09-17)
+
+### Bug Fixes
+
+- **cli:** make search respect config.search.projectScope ([#31](https://github.com/okamyuji/kizami/issues/31)) ([b8e16ab](https://github.com/okamyuji/kizami/commit/b8e16abf0414400e3b0dd5b6c643409ab0005947))
+
+## [0.6.4](https://github.com/okamyuji/kizami/compare/v0.6.3...v0.6.4) (2026-09-15)
+
+### Bug Fixes
+
+- **checkpoint:** guard directory fsync so Windows does not abort the commit ([#26](https://github.com/okamyuji/kizami/issues/26)) ([eefaeeb](https://github.com/okamyuji/kizami/commit/eefaeeba09eecae902fec90e9971d355ee965f57))
+- **cli:** call recoverPreparedCheckpoints() at SessionStart ([#28](https://github.com/okamyuji/kizami/issues/28)) ([0fb5631](https://github.com/okamyuji/kizami/commit/0fb5631720fc410a9e5647fa391a524eeba21c17))
+- **recover:** decode Windows project directory names ([#27](https://github.com/okamyuji/kizami/issues/27)) ([577b385](https://github.com/okamyuji/kizami/commit/577b38539b059d7af754c0a5dd15d5fa5f8e230a))
+
+## [0.6.3](https://github.com/okamyuji/kizami/compare/v0.6.2...v0.6.3) (2026-09-12)
+
+### Bug Fixes
+
+- **deps:** bump sharp to 0.35.4 and js-yaml to 4.3.2 (Dependabot [#69](https://github.com/okamyuji/kizami/issues/69), [#70](https://github.com/okamyuji/kizami/issues/70)) ([#24](https://github.com/okamyuji/kizami/issues/24)) ([3bee159](https://github.com/okamyuji/kizami/commit/3bee1599ce05535ca0c65718fe894f2184fcfb11))
+
 ## [0.6.2](https://github.com/okamyuji/kizami/compare/v0.6.1...v0.6.2) (2026-09-12)
 
 ### Bug Fixes

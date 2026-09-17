@@ -101,11 +101,191 @@ describe('cli commands', () => {
     });
 
     it('should return empty array when no results', () => {
+      const logSpy = vi.spyOn(console, 'log');
       const results = cmdSearch('nonexistent query xyz', {
         project: '/test/project',
         config: configPath,
       });
       expect(results).toEqual([]);
+      expect(logSpy).toHaveBeenCalledWith('No results found.');
+    });
+
+    it('should scope to the current project only when projectScope is true (default)', () => {
+      store.insertChunks([
+        makeChunk({
+          projectPath: '/test/project',
+          content: 'React Hook Form validation patterns and best practices',
+        }),
+        makeChunk({
+          chunkIndex: 1,
+          projectPath: '/other/project',
+          content: 'React Hook Form validation in another project',
+        }),
+      ]);
+
+      const results = cmdSearch('React Hook', { project: '/test/project', config: configPath });
+
+      expect(results.every((r) => r.projectPath === '/test/project')).toBe(true);
+    });
+
+    it('should search across all projects when config.search.projectScope is false, without --all-projects', () => {
+      const noScopeConfigPath = path.join(tmpDir, 'no-scope-config.json');
+      fs.writeFileSync(
+        noScopeConfigPath,
+        JSON.stringify({
+          database: { path: dbPath },
+          search: {
+            mode: 'core',
+            timeDecayHalfLifeDays: 30,
+            defaultLimit: 10,
+            projectScope: false,
+          },
+        })
+      );
+      store.insertChunks([
+        makeChunk({
+          projectPath: '/other/project',
+          content: 'React Hook Form validation patterns and best practices',
+        }),
+      ]);
+
+      const results = cmdSearch('React Hook', {
+        project: '/test/project',
+        config: noScopeConfigPath,
+      });
+
+      expect(results.length).toBeGreaterThanOrEqual(1);
+      expect(results.some((r) => r.projectPath === '/other/project')).toBe(true);
+    });
+
+    it('should let --all-projects override a scoped config default', () => {
+      store.insertChunks([
+        makeChunk({
+          projectPath: '/other/project',
+          content: 'React Hook Form validation patterns and best practices',
+        }),
+      ]);
+
+      const results = cmdSearch('React Hook', {
+        project: '/test/project',
+        allProjects: true,
+        config: configPath,
+      });
+
+      expect(results.some((r) => r.projectPath === '/other/project')).toBe(true);
+    });
+
+    it('should not apply crossProjectPenalty for an explicit --all-projects search (not tiered)', () => {
+      const penaltyConfigPath = path.join(tmpDir, 'penalty-config.json');
+      fs.writeFileSync(
+        penaltyConfigPath,
+        JSON.stringify({
+          database: { path: dbPath },
+          search: {
+            mode: 'core',
+            timeDecayHalfLifeDays: 30,
+            defaultLimit: 10,
+            projectScope: true,
+            crossProjectPenalty: 0.3,
+          },
+        })
+      );
+      store.insertChunks([
+        makeChunk({ projectPath: '/test/project', content: 'React Hook Form validation' }),
+        makeChunk({
+          chunkIndex: 1,
+          projectPath: '/other/project',
+          content: 'React Hook Form validation',
+        }),
+      ]);
+
+      const results = cmdSearch('React Hook', {
+        project: '/test/project',
+        allProjects: true,
+        config: penaltyConfigPath,
+      });
+
+      const local = results.find((r) => r.projectPath === '/test/project');
+      const other = results.find((r) => r.projectPath === '/other/project');
+      expect(local).toBeDefined();
+      expect(other).toBeDefined();
+      expect(other!.score).toBe(local!.score);
+    });
+
+    it('should not apply crossProjectPenalty when tiered but --all-projects is explicit', () => {
+      const tieredAllConfigPath = path.join(tmpDir, 'tiered-all-config.json');
+      fs.writeFileSync(
+        tieredAllConfigPath,
+        JSON.stringify({
+          database: { path: dbPath },
+          search: {
+            mode: 'core',
+            timeDecayHalfLifeDays: 30,
+            defaultLimit: 10,
+            projectScope: 'tiered',
+            crossProjectPenalty: 0.3,
+          },
+        })
+      );
+      store.insertChunks([
+        makeChunk({ projectPath: '/test/project', content: 'React Hook Form validation' }),
+        makeChunk({
+          chunkIndex: 1,
+          projectPath: '/other/project',
+          content: 'React Hook Form validation',
+        }),
+      ]);
+
+      const results = cmdSearch('React Hook', {
+        project: '/test/project',
+        allProjects: true,
+        config: tieredAllConfigPath,
+      });
+
+      const local = results.find((r) => r.projectPath === '/test/project');
+      const other = results.find((r) => r.projectPath === '/other/project');
+      expect(local).toBeDefined();
+      expect(other).toBeDefined();
+      expect(other!.score).toBe(local!.score);
+    });
+
+    it('should include cross-project results with a lower score when projectScope is tiered', () => {
+      const tieredConfigPath = path.join(tmpDir, 'tiered-config.json');
+      fs.writeFileSync(
+        tieredConfigPath,
+        JSON.stringify({
+          database: { path: dbPath },
+          search: {
+            mode: 'core',
+            timeDecayHalfLifeDays: 30,
+            defaultLimit: 10,
+            projectScope: 'tiered',
+            crossProjectPenalty: 0.3,
+          },
+        })
+      );
+      store.insertChunks([
+        makeChunk({
+          projectPath: '/test/project',
+          content: 'React Hook Form validation local project',
+        }),
+        makeChunk({
+          chunkIndex: 1,
+          projectPath: '/other/project',
+          content: 'React Hook Form validation other project',
+        }),
+      ]);
+
+      const results = cmdSearch('React Hook', {
+        project: '/test/project',
+        config: tieredConfigPath,
+      });
+
+      const local = results.find((r) => r.projectPath === '/test/project');
+      const other = results.find((r) => r.projectPath === '/other/project');
+      expect(local).toBeDefined();
+      expect(other).toBeDefined();
+      expect(local!.score).toBeGreaterThan(other!.score);
     });
 
     it('should find results scoped through a configured project alias', () => {

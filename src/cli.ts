@@ -27,6 +27,7 @@ import type { RecoverResult } from '@/hooks/recover';
 import { backfillEmbeddings } from '@/hooks/embed';
 import type { BackfillResult } from '@/hooks/embed';
 import { VERSION } from '@/version';
+import { recoverPreparedCheckpoints } from '@/checkpoint/coordinator';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -109,6 +110,15 @@ export async function cmdInject(
     console.log('  Injects recent project Q&A into session context.');
     return;
   }
+  // Clear finalized receipts and finish any that were prepared but never committed.
+  // Writes nothing to stdout, so the injected context is unaffected, and never
+  // blocks the session on failure.
+  try {
+    await recoverPreparedCheckpoints(loadConfig(configPath), runtime);
+  } catch {
+    /* best effort */
+  }
+
   await runInject(configPath, projectPath, runtime);
 }
 
@@ -155,11 +165,17 @@ export function cmdSearch(
     const rawProjectPath = options.project ? path.resolve(options.project) : process.cwd();
     const projectPath = resolveScopedProjectPath(config, rawProjectPath);
 
+    // recall hookと同じくconfig.search.projectScopeをデフォルトの挙動として尊重する。
+    // --all-projectsが明示されればそれを優先する。
+    const isTiered = config.search.projectScope === 'tiered';
+    const allProjects = options.allProjects ?? config.search.projectScope === false;
+
     const results = searchFts(store, {
       query,
       projectPath,
       limit: 50,
-      allProjects: options.allProjects ?? false,
+      allProjects,
+      tiered: isTiered && !allProjects,
     });
 
     if (results.length === 0) {
@@ -167,7 +183,13 @@ export function cmdSearch(
       return [];
     }
 
-    const ranked = rankResults(results, config.search.timeDecayHalfLifeDays, query);
+    const ranked = rankResults(
+      results,
+      config.search.timeDecayHalfLifeDays,
+      query,
+      projectPath,
+      isTiered && !allProjects ? config.search.crossProjectPenalty : undefined
+    );
     const output = formatResults(ranked, config.search.defaultLimit);
     console.log(output);
     return ranked;
