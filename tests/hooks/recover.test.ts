@@ -75,6 +75,63 @@ describe('recoverTranscripts', () => {
     db.close();
   });
 
+  it('should apply storage.projectAliases to the recovered projectPath', async () => {
+    // 共有JSONLを複数ホストで同期していると、同じ論理プロジェクトでも
+    // ホストごとにプロジェクトディレクトリ名が変わる。save / recall / inject と同じく
+    // 取り込み経路でも対応表を通さないと、このホストの分だけ別プロジェクトになる。
+    const aliasConfig = path.join(tmpDir, 'config-alias.json');
+    fs.writeFileSync(
+      aliasConfig,
+      JSON.stringify({
+        database: { path: dbPath },
+        storage: { jsonlDir, projectAliases: { '/tmp/testproject': '/canonical/project' } },
+      }),
+      'utf-8'
+    );
+
+    const projectDir = path.join(fakeProjectsDir, '-tmp-testproject');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.copyFileSync(fixtureTranscript, path.join(projectDir, 'aliased-session.jsonl'));
+
+    const result = await recoverTranscripts(aliasConfig, fakeProjectsDir);
+    expect(result.recovered).toBe(1);
+
+    const db = getDatabase(dbPath);
+    initializeSchema(db);
+    const store = new Store(db);
+    const sessions = store.getSessionList();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].projectPath).toBe('/canonical/project');
+    db.close();
+  });
+
+  it('should leave the projectPath untouched when no alias matches', async () => {
+    const aliasConfig = path.join(tmpDir, 'config-noalias.json');
+    fs.writeFileSync(
+      aliasConfig,
+      JSON.stringify({
+        database: { path: dbPath },
+        storage: { jsonlDir, projectAliases: { '/tmp/other': '/canonical/other' } },
+      }),
+      'utf-8'
+    );
+
+    const projectDir = path.join(fakeProjectsDir, '-tmp-testproject');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.copyFileSync(fixtureTranscript, path.join(projectDir, 'unaliased-session.jsonl'));
+
+    const result = await recoverTranscripts(aliasConfig, fakeProjectsDir);
+    expect(result.recovered).toBe(1);
+
+    const db = getDatabase(dbPath);
+    initializeSchema(db);
+    const store = new Store(db);
+    const sessions = store.getSessionList();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].projectPath).toBe('/tmp/testproject');
+    db.close();
+  });
+
   it('should skip already saved sessions', async () => {
     // 先にDBにセッションを保存
     const db = getDatabase(dbPath);

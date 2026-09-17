@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { loadConfig } from '@/config';
+import { loadConfig, applyProjectAlias } from '@/config';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
 import { Store } from '@/db/store';
@@ -77,7 +77,10 @@ export async function recoverTranscripts(
       if (!dirent.isDirectory()) continue;
 
       const projectDir = path.join(projectsDir, dirent.name);
-      const projectPath = projectDirToPath(dirent.name);
+      const projectPath = applyProjectAlias(
+        config.storage.projectAliases,
+        projectDirToPath(dirent.name)
+      );
 
       let entries: fs.Dirent[];
       try {
