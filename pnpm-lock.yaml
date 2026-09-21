@@ -12,7 +12,7 @@ overrides:
   brace-expansion@>=5.0.0 <5.0.9: 5.0.9
   brace-expansion@<1.1.18: 1.1.18
   undici@<8.9.0: ^8.9.0
-  adm-zip@<0.6.0: ^0.6.0
+  adm-zip@<0.6.1: ^0.6.1
   fast-uri@<3.1.6: ^3.1.6
   js-yaml@>=4.0.0 <4.3.2: 4.3.2
   nanoid@<3.3.17: ^3.3.17
@@ -2156,10 +2156,10 @@ packages:
     engines: { node: '>=0.4.0' }
     hasBin: true
 
-  adm-zip@0.6.0:
+  adm-zip@0.6.1:
     resolution:
       {
-        integrity: sha512-XleryMhbuksdKtofnWZ9Sk+4CUTbms4Mb/EU32SZwToAyZ5RgVos/ki8n+yr0LWHOGKuakbXTuuYNHLQjhddgg==,
+        integrity: sha512-Xwrja8nx9e5o2N1my4DsKCeKpdrnACyr1wtbPxBDgGzKzKyE9kRtBFA8mWldI+RVlD7CBZNWY/wQ2+ydwOR6kQ==,
       }
     engines: { node: '>=14.0' }
 
@@ -7326,7 +7326,7 @@ snapshots:
 
   acorn@8.17.0: {}
 
-  adm-zip@0.6.0: {}
+  adm-zip@0.6.1: {}
 
   agent-base@9.0.0: {}
 
@@ -8501,7 +8501,7 @@ snapshots:
 
   onnxruntime-node@1.24.3:
     dependencies:
-      adm-zip: 0.6.0
+      adm-zip: 0.6.1
       global-agent: 3.0.0
       onnxruntime-common: 1.24.3
 
