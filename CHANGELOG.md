@@ -1,3 +1,9 @@
+## [0.7.2](https://github.com/okamyuji/kizami/compare/v0.7.1...v0.7.2) (2026-09-21)
+
+### Bug Fixes
+
+- **deps:** update adm-zip to 0.6.1 ([#33](https://github.com/okamyuji/kizami/issues/33)) ([76a1782](https://github.com/okamyuji/kizami/commit/76a1782c1b35ee052c35d417beaed9b1d45349be))
+
 ## [0.7.1](https://github.com/okamyuji/kizami/compare/v0.7.0...v0.7.1) (2026-09-17)
 
 ### Bug Fixes
