@@ -1,3 +1,9 @@
+## [0.7.4](https://github.com/okamyuji/kizami/compare/v0.7.3...v0.7.4) (2026-10-01)
+
+### Bug Fixes
+
+- **deps:** bump brace-expansion to 5.0.12 (Dependabot [#85](https://github.com/okamyuji/kizami/issues/85)) ([#35](https://github.com/okamyuji/kizami/issues/35)) ([2e415e2](https://github.com/okamyuji/kizami/commit/2e415e24688a787539689579b63d56902771554d))
+
 ## [0.7.3](https://github.com/okamyuji/kizami/compare/v0.7.2...v0.7.3) (2026-10-01)
 
 ### Bug Fixes
