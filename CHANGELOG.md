@@ -1,3 +1,9 @@
+## [0.7.3](https://github.com/okamyuji/kizami/compare/v0.7.2...v0.7.3) (2026-10-01)
+
+### Bug Fixes
+
+- **deps:** bump undici to 8.11.0 and fast-uri to 3.1.8 (Dependabot [#73](https://github.com/okamyuji/kizami/issues/73)-[#80](https://github.com/okamyuji/kizami/issues/80)) ([#34](https://github.com/okamyuji/kizami/issues/34)) ([8164397](https://github.com/okamyuji/kizami/commit/81643977f252c28706617e8b3ae655d99c0a015d))
+
 ## [0.7.2](https://github.com/okamyuji/kizami/compare/v0.7.1...v0.7.2) (2026-09-21)
 
 ### Bug Fixes
