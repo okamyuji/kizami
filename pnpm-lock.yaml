@@ -9,8 +9,8 @@ overrides:
   '@protobufjs/utf8@<1.1.1': ^1.1.1
   postcss@<8.5.23: 8.5.23
   esbuild@<0.28.1: 0.28.1
-  brace-expansion@>=5.0.0 <5.0.9: 5.0.9
-  brace-expansion@<1.1.18: 1.1.18
+  brace-expansion@>=5.0.0 <5.0.12: 5.0.12
+  brace-expansion@<1.1.21: 1.1.21
   undici@<8.10.2: ^8.10.2
   adm-zip@<0.6.1: ^0.6.1
   fast-uri@<3.1.7: ^3.1.7
@@ -2361,10 +2361,10 @@ packages:
         integrity: sha512-rJKn5ooC9u8q13IMCrW0RSp31pxBCHE3y9V/tp3TdWSLf8Em3p6Di4NBpfzbJge9YjjFEsD0RtFEjtvHL5VyEA==,
       }
 
-  brace-expansion@5.0.9:
+  brace-expansion@5.0.12:
     resolution:
       {
-        integrity: sha512-ScQ4IuvIEF1TMlP7Zt+vjJ//9zlPb2SDcxWxM3bk8s6t6GGdJ7KO1dCcTidOPJKePW30LE/2cT7wCyPho9/Wxg==,
+        integrity: sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==,
       }
     engines: { node: 20 || >=22 }
 
@@ -7426,7 +7426,7 @@ snapshots:
 
   boundary@2.0.0: {}
 
-  brace-expansion@5.0.9:
+  brace-expansion@5.0.12:
     dependencies:
       balanced-match: 4.0.4
 
@@ -8391,7 +8391,7 @@ snapshots:
 
   minimatch@10.2.5:
     dependencies:
-      brace-expansion: 5.0.9
+      brace-expansion: 5.0.12
 
   minimist@1.2.8: {}
 
