@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
@@ -51,10 +51,18 @@ describe('handleSave', () => {
     const transcript = path.join(projDir, 'ffff6666.jsonl');
     fs.copyFileSync(fixtureTranscript, transcript);
 
-    await handleSave(
-      { session_id: 'ffff6666', transcript_path: transcript, cwd: tmpDir },
-      configPath
-    );
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await handleSave(
+        { session_id: 'ffff6666', transcript_path: transcript, cwd: tmpDir },
+        configPath
+      );
+      expect(spy.mock.calls.map((c) => String(c[0]))).toContainEqual(
+        expect.stringMatching(/^kizami archive error \(skipped\): .*ENOTDIR/)
+      );
+    } finally {
+      spy.mockRestore();
+    }
 
     const db = getDatabase(dbPath);
     const count = (

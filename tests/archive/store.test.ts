@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -68,11 +68,26 @@ describe('archiveTranscript', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.chmodSync(dir, 0o500);
     try {
-      expect(() => archiveTranscript(src, archive)).toThrow();
+      expect(() => archiveTranscript(src, archive)).toThrow(/EACCES/);
     } finally {
       fs.chmodSync(dir, 0o700);
     }
     expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it('recopies a same-size source that is newer than the archived copy', () => {
+    archiveTranscript(src, archive);
+    fs.writeFileSync(src, '{"type":"USER"}\n');
+    fs.utimesSync(src, new Date('2026-03-01'), new Date('2026-03-01'));
+    expect(archiveTranscript(src, archive)).toBe('copied');
+    expect(fs.readFileSync(dest(), 'utf-8')).toBe('{"type":"USER"}\n');
+  });
+
+  it('sets both atime and mtime of the copy from the source mtime', () => {
+    archiveTranscript(src, archive);
+    const st = fs.statSync(dest());
+    expect(Math.floor(st.atimeMs)).toBe(Math.floor(st.mtimeMs));
+    expect(Math.floor(st.mtimeMs)).toBe(Math.floor(fs.statSync(src).mtimeMs));
   });
 
   it('skips a missing file and a non-jsonl file', () => {
@@ -154,14 +169,45 @@ describe('archiveAll', () => {
     fs.mkdirSync(path.join(projects, '-good'), { recursive: true });
     fs.writeFileSync(path.join(projects, '-good', 'eeee5555.jsonl'), '{}\n');
     fs.chmodSync(bad, 0o000);
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
       expect(archiveAll(projects, path.join(tmp, 'archive'))).toEqual({
         copied: 1,
         current: 0,
         failed: 1,
       });
+      expect(String(spy.mock.calls[0][0])).toMatch(/^kizami archive: -bad: .*EACCES/);
     } finally {
+      spy.mockRestore();
       fs.chmodSync(bad, 0o700);
+    }
+  });
+
+  it('ignores stray files and non-jsonl entries without counting them', () => {
+    const projects = path.join(tmp, 'projects');
+    const dir = path.join(projects, '-p');
+    fs.mkdirSync(path.join(dir, 'folder.jsonl'), { recursive: true });
+    fs.writeFileSync(path.join(projects, 'stray.txt'), 'x');
+    fs.writeFileSync(path.join(dir, 'note.txt'), 'x');
+
+    expect(archiveAll(projects, path.join(tmp, 'archive'))).toEqual({
+      copied: 0,
+      current: 0,
+      failed: 0,
+    });
+  });
+
+  it('writes the file name to stderr when a copy fails', () => {
+    const projects = path.join(tmp, 'projects');
+    fs.mkdirSync(path.join(projects, '-p'), { recursive: true });
+    fs.writeFileSync(path.join(projects, '-p', 'ffff.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(tmp, 'archive'), 'blocker');
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      archiveAll(projects, path.join(tmp, 'archive'));
+      expect(String(spy.mock.calls[0][0])).toMatch(/^kizami archive: ffff\.jsonl: .*ENOTDIR/);
+    } finally {
+      spy.mockRestore();
     }
   });
 

@@ -17,6 +17,7 @@ import {
   cmdPrune,
   cmdExport,
   cmdEmbed,
+  cmdArchive,
 } from '../src/cli';
 
 describe('cli commands', () => {
@@ -564,6 +565,62 @@ describe('cli commands', () => {
 
     it('should report error when not in hybrid mode', async () => {
       await expect(cmdEmbed({ backfill: true, config: configPath })).rejects.toThrow('hybrid mode');
+    });
+  });
+
+  describe('cmdArchive', () => {
+    let root: string;
+    let prevClaude: string | undefined;
+    let prevArchive: string | undefined;
+    let logSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-cli-archive-'));
+      prevClaude = process.env.CLAUDE_CONFIG_DIR;
+      prevArchive = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude');
+      process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = path.join(root, 'archive');
+      fs.mkdirSync(path.join(root, 'claude', 'projects', '-p'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'claude', 'projects', '-p', 'aaaa.jsonl'), '{}\n');
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.exitCode = undefined;
+    });
+
+    afterEach(() => {
+      logSpy.mockRestore();
+      process.exitCode = undefined;
+      if (prevClaude === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prevClaude;
+      if (prevArchive === undefined) delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      else process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = prevArchive;
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it('archives transcripts and reports counts without failing', () => {
+      cmdArchive({ config: path.join(root, 'none.json') });
+      expect(fs.existsSync(path.join(root, 'archive', '-p', 'aaaa.jsonl'))).toBe(true);
+      const lines = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(lines[0]).toBe(`[kizami archive] ${path.join(root, 'archive')}`);
+      expect(lines[1]).toMatch(/^ {2}copied=1 current=0 failed=0 \(\d+ ms\)$/);
+    });
+
+    it('reports the elapsed milliseconds', () => {
+      const now = vi.spyOn(Date, 'now').mockReturnValueOnce(1000).mockReturnValueOnce(1042);
+      try {
+        cmdArchive({ config: path.join(root, 'none.json') });
+      } finally {
+        now.mockRestore();
+      }
+      expect(String(logSpy.mock.calls[1][0])).toContain('(42 ms)');
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('sets exit code 1 when a copy fails', () => {
+      fs.writeFileSync(path.join(root, 'archive'), 'blocker');
+      cmdArchive({ config: path.join(root, 'none.json') });
+      expect(process.exitCode).toBe(1);
+      const lines = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(lines[1]).toContain('failed=1');
     });
   });
 });

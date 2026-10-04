@@ -231,7 +231,7 @@ export function loadConfig(configPath?: string): EngramConfig {
     resolved = { ...resolved, storage: { ...resolved.storage, jsonlDir: envJsonlDir } };
   }
   const envArchiveDir = process.env['KIZAMI_TRANSCRIPT_ARCHIVE_DIR'];
-  if (envArchiveDir && envArchiveDir.length > 0) {
+  if (envArchiveDir) {
     resolved = {
       ...resolved,
       storage: { ...resolved.storage, transcriptArchiveDir: envArchiveDir },

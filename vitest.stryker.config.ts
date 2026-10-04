@@ -1,9 +1,11 @@
 import { defineConfig } from 'vitest/config';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 export default defineConfig({
   resolve: { alias: { '@': resolve(__dirname, 'src') } },
   test: {
+    env: { KIZAMI_TRANSCRIPT_ARCHIVE_DIR: join(tmpdir(), 'kizami-test-transcripts') },
     include: [
       'tests/execution/**/*.test.ts',
       'tests/checkpoint/identity.test.ts',
@@ -24,6 +26,8 @@ export default defineConfig({
       'tests/parser/transcript.test.ts',
       'tests/config.test.ts',
       'tests/cli.test.ts',
+      'tests/archive/store.test.ts',
+      'tests/hooks/save.test.ts',
     ],
   },
 });

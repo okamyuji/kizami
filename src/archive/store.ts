@@ -95,11 +95,13 @@ export function archiveAll(
       continue;
     }
     for (const file of files) {
+      // Stryker disable next-line StringLiteral: 拡張子判定を外しても archiveTranscript が .jsonl 以外を skipped にするため観測できない
       if (!file.isFile() || !file.name.endsWith('.jsonl')) continue;
       try {
         const outcome = archiveTranscript(path.join(dirPath, file.name), archiveDir);
         if (outcome === 'copied') counts.copied++;
-        else if (outcome === 'current') counts.current++;
+        // Stryker disable next-line ConditionalExpression: 'skipped' は readdir 後に stat が失敗した時だけ返る。競合なしでは再現できない
+        if (outcome === 'current') counts.current++;
       } catch (err) {
         counts.failed++;
         process.stderr.write(`kizami archive: ${file.name}: ${String(err)}\n`);
