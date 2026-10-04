@@ -6,6 +6,7 @@ import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
 import { getConfigFilePath, getDefaultConfig } from '@/config';
 import { loadConfig } from '@/config';
+import type { EngramConfig } from '@/config';
 import { Store } from '@/db/store';
 import { ensureJsonlDir } from '@/jsonl/path';
 import {
@@ -17,6 +18,7 @@ import {
 import type { TomlHook } from '@/hooks/toml';
 import { installRecallSkill, removeRecallSkill, RECALL_SKILL_NAME } from '@/hooks/skill';
 import { recoverTranscripts } from '@/hooks/recover';
+import { archiveAll, getClaudeProjectsDir } from '@/archive/store';
 
 interface HookEntry {
   type: string;
@@ -257,8 +259,9 @@ function setupClaudeHooks(options?: SetupOptions): void {
     settings.hooks['SessionStart'] = mergeHooks(settings.hooks['SessionStart'], injectHook);
   }
 
-  writeSettings(settingsPath, settings);
+  // 利用者のスキルと衝突したら、hook を書き込む前に止める。
   installRecallSkill(getSkillsDir(options), kizamiCommand);
+  writeSettings(settingsPath, settings);
 }
 
 function setupCodexHooks(options?: SetupOptions): void {
@@ -328,7 +331,7 @@ function setupKimiHooks(options?: SetupOptions): void {
   writeKizamiTomlHooks(kimiConfigPath, hooks);
 }
 
-function initializeKizamiStorage(options?: SetupOptions): void {
+function initializeKizamiStorage(options?: SetupOptions): EngramConfig {
   const hybrid = options?.hybrid ?? false;
   writeEngramConfig(hybrid ? 'hybrid' : 'core', options?.configPath);
   let config = loadConfig(options?.configPath);
@@ -407,6 +410,7 @@ function initializeKizamiStorage(options?: SetupOptions): void {
   console.log(`  Database: ${dbPath}`);
   console.log(`  JSONL dir: ${jsonlDir}`);
   console.log(`  Error log: ${errorLogPath}`);
+  return config;
 }
 
 export async function setupHooks(options?: SetupOptions): Promise<void> {
@@ -435,11 +439,14 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
     console.log(`  Kimi config: ${kimiPath}`);
   }
 
-  initializeKizamiStorage(options);
+  const config = initializeKizamiStorage(options);
   if (target === 'claude' || target === 'all') {
     // hook 導入前の会話は DB に無く、検索も「あれ思い出して」も空振りするので取り込む。
-    const { recovered } = await recoverTranscripts(options?.configPath);
+    const { recovered } = await recoverTranscripts(options?.configPath, undefined, config);
     console.log(`  Imported past sessions: ${recovered}`);
+    // Claude Code が後で生ログを消しても show と resume で読めるよう、同じ会話を保管する。
+    const { copied } = archiveAll(getClaudeProjectsDir(), config.storage.transcriptArchiveDir);
+    console.log(`  Archived transcripts: ${copied}`);
   }
 }
 

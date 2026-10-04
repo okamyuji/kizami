@@ -41,6 +41,18 @@ describe('resolveSession', () => {
     });
   });
 
+  // root は chmod 000 でも読めるので、この失敗を起こせない。
+  it.skipIf(process.getuid?.() === 0)('skips a project directory it cannot read', async () => {
+    put(projectsDir, '-locked', 'abcdef02-2222', line({ cwd: '/x' }));
+    put(projectsDir, '-p', 'abcdef01-1111', line({ cwd: '/w' }));
+    fs.chmodSync(path.join(projectsDir, '-locked'), 0o000);
+    try {
+      expect((await resolveSession('abcdef', roots())).sessionId).toBe('abcdef01-1111');
+    } finally {
+      fs.chmodSync(path.join(projectsDir, '-locked'), 0o700);
+    }
+  });
+
   it('prefers the archived copy when both exist', async () => {
     put(projectsDir, '-p', 'abcdef01-1111', line({ cwd: '/live' }));
     put(archiveDir, '-p', 'abcdef01-1111', line({ cwd: '/archived' }));

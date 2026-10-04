@@ -171,6 +171,25 @@ describe('scanArchive', () => {
     expect(scanArchive('needle', tmp, 0, NOW)).toEqual([]);
   });
 
+  it('skips an entry it cannot stat and keeps scanning', () => {
+    fs.mkdirSync(path.join(tmp, '-a'));
+    fs.symlinkSync(path.join(tmp, 'missing'), path.join(tmp, '-a', 'dangling.jsonl'));
+    put('-b', 'o1', [user('needle here')], 100);
+    expect(scanArchive('needle', tmp, 90 * DAY, NOW).map((h) => h.sessionId)).toEqual(['o1']);
+  });
+
+  // root は chmod 000 でも読めるので、この失敗を起こせない。
+  it.skipIf(process.getuid?.() === 0)('skips a directory it cannot read', () => {
+    put('-locked', 'o2', [user('needle there')], 100);
+    put('-b', 'o1', [user('needle here')], 100);
+    fs.chmodSync(path.join(tmp, '-locked'), 0o000);
+    try {
+      expect(scanArchive('needle', tmp, 90 * DAY, NOW).map((h) => h.sessionId)).toEqual(['o1']);
+    } finally {
+      fs.chmodSync(path.join(tmp, '-locked'), 0o700);
+    }
+  });
+
   it('requires the whole term, not just its letters', () => {
     put('-a', 'o1', [user('lend me a hand')], 100);
     expect(scanArchive('needle', tmp, 90 * DAY, NOW)).toEqual([]);

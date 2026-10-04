@@ -64,7 +64,8 @@ describe('archiveTranscript', () => {
     expect(fs.readFileSync(dest(), 'utf-8')).toContain('assistant');
   });
 
-  it('throws and leaves no temp file when the copy fails', () => {
+  // root は chmod 000 でも読めるので、この失敗を起こせない。
+  it.skipIf(process.getuid?.() === 0)('throws and leaves no temp file when the copy fails', () => {
     fs.chmodSync(src, 0o000);
     try {
       expect(() => archiveTranscript(src, archive)).toThrow(/EACCES/);
@@ -178,26 +179,30 @@ describe('archiveAll', () => {
     expect(fs.existsSync(path.join(archive, '-p', 'bbbb2222', 'subagents'))).toBe(false);
   });
 
-  it('counts an unreadable project directory as failed and continues', () => {
-    const projects = path.join(tmp, 'projects');
-    const bad = path.join(projects, '-bad');
-    fs.mkdirSync(bad, { recursive: true });
-    fs.mkdirSync(path.join(projects, '-good'), { recursive: true });
-    fs.writeFileSync(path.join(projects, '-good', 'eeee5555.jsonl'), '{}\n');
-    fs.chmodSync(bad, 0o000);
-    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    try {
-      expect(archiveAll(projects, path.join(tmp, 'archive'))).toEqual({
-        copied: 1,
-        current: 0,
-        failed: 1,
-      });
-      expect(String(spy.mock.calls[0][0])).toMatch(/^kizami archive: -bad: .*EACCES/);
-    } finally {
-      spy.mockRestore();
-      fs.chmodSync(bad, 0o700);
+  // root は chmod 000 でも読めるので、この失敗を起こせない。
+  it.skipIf(process.getuid?.() === 0)(
+    'counts an unreadable project directory as failed and continues',
+    () => {
+      const projects = path.join(tmp, 'projects');
+      const bad = path.join(projects, '-bad');
+      fs.mkdirSync(bad, { recursive: true });
+      fs.mkdirSync(path.join(projects, '-good'), { recursive: true });
+      fs.writeFileSync(path.join(projects, '-good', 'eeee5555.jsonl'), '{}\n');
+      fs.chmodSync(bad, 0o000);
+      const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        expect(archiveAll(projects, path.join(tmp, 'archive'))).toEqual({
+          copied: 1,
+          current: 0,
+          failed: 1,
+        });
+        expect(String(spy.mock.calls[0][0])).toMatch(/^kizami archive: -bad: .*EACCES/);
+      } finally {
+        spy.mockRestore();
+        fs.chmodSync(bad, 0o700);
+      }
     }
-  });
+  );
 
   it('ignores stray files and non-jsonl entries without counting them', () => {
     const projects = path.join(tmp, 'projects');

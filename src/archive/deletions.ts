@@ -40,7 +40,10 @@ export function loadDeletions(file: string): Deletions {
 function save(file: string, d: Deletions): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const body = { sessions: [...d.sessions], chunkDigests: [...d.chunkDigests] };
-  fs.writeFileSync(file, JSON.stringify(body, null, 2));
+  // 途中で切れたファイルは loadDeletions が拒むので、書き終えてから置き換える。
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(body, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, file);
 }
 
 export function recordSessionDeletion(file: string, sessionId: string): void {

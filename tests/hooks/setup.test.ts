@@ -25,7 +25,14 @@ describe('setupHooks', () => {
   let jsonlDir: string;
   // パスを渡し忘れたテストが実際の ~/.codex や ~/.kimi-code を書き換えないよう、
   // setup が既定パスの算出に使う環境変数をすべて一時ディレクトリへ向ける。
-  const ISOLATED_ENV = ['HOME', 'KIMI_CODE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME'] as const;
+  const ISOLATED_ENV = [
+    'HOME',
+    'KIMI_CODE_HOME',
+    'XDG_DATA_HOME',
+    'XDG_CONFIG_HOME',
+    'CLAUDE_CONFIG_DIR',
+    'KIZAMI_TRANSCRIPT_ARCHIVE_DIR',
+  ] as const;
   const savedEnv: Partial<Record<(typeof ISOLATED_ENV)[number], string | undefined>> = {};
 
   beforeEach(() => {
@@ -37,6 +44,7 @@ describe('setupHooks', () => {
       savedEnv[key] = process.env[key];
       process.env[key] = path.join(tmpDir, `env-${key}`);
     }
+    process.env['CLAUDE_CONFIG_DIR'] = path.join(process.env['HOME'] as string, '.claude');
     settingsPath = path.join(tmpDir, '.claude', 'settings.json');
     codexHooksPath = path.join(tmpDir, '.codex', 'hooks.json');
     kimiConfigPath = path.join(tmpDir, '.kimi-code', 'config.toml');
@@ -187,8 +195,7 @@ describe('setupHooks', () => {
   }
 
   function storedSessionIds(): string[] {
-    const dbFile = path.join(process.env['XDG_DATA_HOME'] as string, 'kizami', 'memory.db');
-    const db = getDatabase(dbFile);
+    const db = getDatabase(dbPath);
     try {
       initializeSchema(db);
       return new Store(db).getSessionList().map((s) => s.sessionId);
@@ -207,8 +214,26 @@ describe('setupHooks', () => {
 
       expect(storedSessionIds()).toEqual(['past-0001']);
       expect(log).toHaveBeenCalledWith('  Imported past sessions: 1');
+      const archived = path.join(
+        process.env['KIZAMI_TRANSCRIPT_ARCHIVE_DIR'] as string,
+        '-w-proj',
+        'past-0001.jsonl'
+      );
+      expect(fs.existsSync(archived)).toBe(true);
+      expect(log).toHaveBeenCalledWith('  Archived transcripts: 1');
     }
   );
+
+  it('rejects a user-authored skill before touching settings.json', async () => {
+    fs.mkdirSync(path.dirname(skillFile()), { recursive: true });
+    fs.writeFileSync(skillFile(), 'mine');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await expect(setupHooks(setupOptions())).rejects.toThrow('is not managed by kizami');
+
+    expect(fs.existsSync(settingsPath)).toBe(false);
+    expect(fs.readFileSync(skillFile(), 'utf-8')).toBe('mine');
+  });
 
   it('does not import sessions for a codex-only setup', async () => {
     putPastSession('past-0002');

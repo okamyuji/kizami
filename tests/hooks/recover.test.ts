@@ -504,31 +504,35 @@ describe('recoverTranscripts refreshes grown legacy sessions', () => {
     expect(rows().every((row) => row.turn_key !== null)).toBe(true);
   });
 
-  it('keeps importing other sessions when refreshing one session fails', async () => {
-    await recoverTranscripts(configPath, projectsDir);
-    appendTurn();
-    fs.chmodSync(file, 0o000);
-    const other = path.join(projectsDir, '-w-proj', 'other-0002.jsonl');
-    fs.writeFileSync(
-      other,
-      [
-        user('other question', '2026-09-05T00:00:00Z'),
-        asst('other answer', '2026-09-05T00:01:00Z'),
-      ].join('\n') + '\n'
-    );
+  // root は chmod 000 でも読めるので、この失敗を起こせない。
+  it.skipIf(process.getuid?.() === 0)(
+    'keeps importing other sessions when refreshing one session fails',
+    async () => {
+      await recoverTranscripts(configPath, projectsDir);
+      appendTurn();
+      fs.chmodSync(file, 0o000);
+      const other = path.join(projectsDir, '-w-proj', 'other-0002.jsonl');
+      fs.writeFileSync(
+        other,
+        [
+          user('other question', '2026-09-05T00:00:00Z'),
+          asst('other answer', '2026-09-05T00:01:00Z'),
+        ].join('\n') + '\n'
+      );
 
-    try {
-      const result = await recoverTranscripts(configPath, projectsDir);
+      try {
+        const result = await recoverTranscripts(configPath, projectsDir);
 
-      expect(result.recovered).toBe(1);
-      expect(result.errors).toBe(1);
-      expect(result.details).toContainEqual(expect.stringMatching(/^grow-000: error - .*EACCES/));
-      const marks = JSON.parse(fs.readFileSync(path.join(tmpDir, 'recover-state.json'), 'utf-8'));
-      expect(marks.sizes['other-0002']).toBe(fs.statSync(other).size);
-    } finally {
-      fs.chmodSync(file, 0o644);
+        expect(result.recovered).toBe(1);
+        expect(result.errors).toBe(1);
+        expect(result.details).toContainEqual(expect.stringMatching(/^grow-000: error - .*EACCES/));
+        const marks = JSON.parse(fs.readFileSync(path.join(tmpDir, 'recover-state.json'), 'utf-8'));
+        expect(marks.sizes['other-0002']).toBe(fs.statSync(other).size);
+      } finally {
+        fs.chmodSync(file, 0o644);
+      }
     }
-  });
+  );
 
   it('retries a refresh on the next run when writing it failed', async () => {
     await recoverTranscripts(configPath, projectsDir);

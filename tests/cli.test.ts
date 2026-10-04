@@ -1087,9 +1087,14 @@ describe('cli commands', () => {
 
   describe('cmdRecover', () => {
     const prevHome = process.env['HOME'];
+    const prevClaude = process.env['CLAUDE_CONFIG_DIR'];
+    // 取り込み元を HOME/.claude/projects にするため、テスト環境の上書きを外す。
+    beforeEach(() => delete process.env['CLAUDE_CONFIG_DIR']);
     afterEach(() => {
       if (prevHome === undefined) delete process.env['HOME'];
       else process.env['HOME'] = prevHome;
+      if (prevClaude === undefined) delete process.env['CLAUDE_CONFIG_DIR'];
+      else process.env['CLAUDE_CONFIG_DIR'] = prevClaude;
     });
 
     it('says there is nothing to do when no transcript exists', async () => {
@@ -1100,23 +1105,27 @@ describe('cli commands', () => {
       log.mockRestore();
     });
 
-    it('prints the counts when a transcript fails to import', async () => {
-      process.env['HOME'] = path.join(tmpDir, 'home-err');
-      const dir = path.join(tmpDir, 'home-err', '.claude', 'projects', '-p');
-      fs.mkdirSync(dir, { recursive: true });
-      const bad = path.join(dir, 'bad-0001.jsonl');
-      fs.writeFileSync(bad, '{}\n');
-      fs.chmodSync(bad, 0o000);
-      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-      try {
-        await cmdRecover({ config: configPath });
-      } finally {
-        fs.chmodSync(bad, 0o600);
+    // root は chmod 000 でも読めるので、この失敗を起こせない。
+    it.skipIf(process.getuid?.() === 0)(
+      'prints the counts when a transcript fails to import',
+      async () => {
+        process.env['HOME'] = path.join(tmpDir, 'home-err');
+        const dir = path.join(tmpDir, 'home-err', '.claude', 'projects', '-p');
+        fs.mkdirSync(dir, { recursive: true });
+        const bad = path.join(dir, 'bad-0001.jsonl');
+        fs.writeFileSync(bad, '{}\n');
+        fs.chmodSync(bad, 0o000);
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+          await cmdRecover({ config: configPath });
+        } finally {
+          fs.chmodSync(bad, 0o600);
+        }
+        expect(log).toHaveBeenCalledWith('Errors:    1');
+        expect(log).not.toHaveBeenCalledWith('No unsaved transcripts found.');
+        log.mockRestore();
       }
-      expect(log).toHaveBeenCalledWith('Errors:    1');
-      expect(log).not.toHaveBeenCalledWith('No unsaved transcripts found.');
-      log.mockRestore();
-    });
+    );
 
     it('reports refreshed sessions even when nothing new was imported', async () => {
       process.env['HOME'] = path.join(tmpDir, 'home');
@@ -1154,7 +1163,7 @@ describe('cli commands', () => {
   });
 
   describe('cmdSearchFresh', () => {
-    const ENV_KEYS = ['HOME', 'XDG_DATA_HOME', 'KIZAMI_JSONL_DIR'] as const;
+    const ENV_KEYS = ['HOME', 'XDG_DATA_HOME', 'KIZAMI_JSONL_DIR', 'CLAUDE_CONFIG_DIR'] as const;
     const saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 
     beforeEach(() => {
@@ -1162,6 +1171,7 @@ describe('cli commands', () => {
         saved[key] = process.env[key];
         process.env[key] = path.join(tmpDir, key);
       }
+      process.env['CLAUDE_CONFIG_DIR'] = path.join(tmpDir, 'HOME', '.claude');
       const projectDir = path.join(tmpDir, 'HOME', '.claude', 'projects', '-test-project');
       fs.mkdirSync(projectDir, { recursive: true });
       fs.copyFileSync(

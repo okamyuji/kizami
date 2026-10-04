@@ -28,8 +28,13 @@ function collect(
     return;
   }
   for (const dir of dirs) {
-    if (!dir.isDirectory()) continue;
-    for (const name of fs.readdirSync(path.join(root, dir.name))) {
+    let names: string[];
+    try {
+      names = fs.readdirSync(path.join(root, dir.name));
+    } catch {
+      continue; // 読めないプロジェクトが 1 つあっても、ほかのセッションは引けるようにする
+    }
+    for (const name of names) {
       if (!name.startsWith(prefix) || !name.endsWith('.jsonl')) continue;
       const id = name.slice(0, -'.jsonl'.length);
       if (!found.has(id))

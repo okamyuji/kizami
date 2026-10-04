@@ -1,7 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import { loadConfig, applyProjectAlias } from '@/config';
+import type { EngramConfig } from '@/config';
+import { getClaudeProjectsDir } from '@/archive/store';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
 import { Store } from '@/db/store';
@@ -18,10 +19,6 @@ export interface RecoverResult {
   skipped: number;
   errors: number;
   details: string[];
-}
-
-function getClaudeProjectsDir(): string {
-  return path.join(os.homedir(), '.claude', 'projects');
 }
 
 /**
@@ -53,9 +50,9 @@ export function projectDirToPath(dirName: string): string {
  */
 export async function recoverTranscripts(
   configPath?: string,
-  claudeProjectsDir?: string
+  claudeProjectsDir?: string,
+  config: EngramConfig = loadConfig(configPath)
 ): Promise<RecoverResult> {
-  const config = loadConfig(configPath);
   const db = getDatabase(config.database.path);
 
   const result: RecoverResult = {

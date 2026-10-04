@@ -33,6 +33,12 @@ describe('deletions', () => {
     expect([...loadDeletions(file).sessions]).toEqual(['aaaa0001', 'bbbb0002']);
   });
 
+  it('writes the file owner-only and leaves no temporary file', () => {
+    recordSessionDeletion(file, 'aaaa0001');
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(fs.readdirSync(path.dirname(file))).toEqual(['deletions.json']);
+  });
+
   it('records a deleted chunk by digest, never by its text', () => {
     recordChunkDeletion(file, 'secret token ABC');
     recordChunkDeletion(file, 'secret token ABC');

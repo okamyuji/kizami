@@ -52,14 +52,25 @@ export function scanArchive(
   }
   const hits: ArchiveHit[] = [];
   for (const dir of dirs) {
-    if (!dir.isDirectory()) continue;
-    for (const name of fs.readdirSync(path.join(archiveDir, dir.name))) {
+    let names: string[];
+    try {
+      names = fs.readdirSync(path.join(archiveDir, dir.name));
+    } catch {
+      continue; // 読めない項目は飛ばし、残りの保管ファイルで検索を続ける
+    }
+    for (const name of names) {
       const sessionId = name.slice(0, -'.jsonl'.length);
       if (!name.endsWith('.jsonl') || deletedSessions.has(sessionId)) continue;
       const file = path.join(archiveDir, dir.name, name);
-      const { mtimeMs } = fs.statSync(file);
-      if (now - mtimeMs <= olderThanMs) continue;
-      const raw = fs.readFileSync(file, 'utf-8');
+      let mtimeMs: number;
+      let raw: string;
+      try {
+        ({ mtimeMs } = fs.statSync(file));
+        if (now - mtimeMs <= olderThanMs) continue;
+        raw = fs.readFileSync(file, 'utf-8');
+      } catch {
+        continue;
+      }
       const lower = raw.toLowerCase();
       // 結果は keptSnippet の照合と同じ。全文を解析する前に、語の無いファイルを安く落とすためだけにある。
       // Stryker disable next-line ConditionalExpression,MethodExpression: 上記の理由で結果が変わらない
