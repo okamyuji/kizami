@@ -30,6 +30,8 @@ export default {
     'src/config.ts:233-240',
     'src/cli.ts:165-226',
     'src/search/archive-scan.ts',
+    'src/search/fts.ts:66-68',
+    'src/search/fts.ts:115-118',
     'src/cli.ts:572-581',
     'src/archive/store.ts',
     'src/archive/resolve.ts',

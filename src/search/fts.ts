@@ -59,6 +59,14 @@ function extractKeywords(text: string): string[] {
   return keywords;
 }
 
+/**
+ * キーワードは FTS5 のクエリ構文として解釈される。"-" "/" "." や NOT などを含む語は
+ * 構文エラーか演算子になって一致しないため、文字列リテラルとして渡す。
+ */
+function toFtsPhrase(keyword: string): string {
+  return `"${keyword.replace(/"/g, '""')}"`;
+}
+
 function deduplicateResults(results: SearchResult[]): SearchResult[] {
   const seen = new Set<number>();
   const unique: SearchResult[] = [];
@@ -104,9 +112,10 @@ export function searchFts(store: Store, options: FtsSearchOptions): SearchResult
   const allResults: SearchResult[] = [];
   for (const keyword of keywords) {
     try {
+      const phrase = toFtsPhrase(keyword);
       const results = useAll
-        ? store.searchFTSAll(keyword, limit)
-        : store.searchFTS(keyword, projectPath, limit);
+        ? store.searchFTSAll(phrase, limit)
+        : store.searchFTS(phrase, projectPath, limit);
       allResults.push(...results);
     } catch {
       // FTS5 MATCH でエラーが出るクエリ(特殊文字など)はスキップ

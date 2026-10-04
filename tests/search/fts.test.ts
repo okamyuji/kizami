@@ -56,6 +56,35 @@ describe('searchFts', () => {
     expect(results[0].rank).toBeDefined();
   });
 
+  it.each([
+    ['a hyphen', 'better-sqlite3', 'install better-sqlite3 with node 24'],
+    ['a hyphen and digits', 'KIWI-4417', '合言葉はKIWI-4417です'],
+    ['a path with slash and dot', 'src/cli.ts', 'edit src/cli.ts first'],
+    ['a double quote', 'say"hi', 'then say"hi to all'],
+    ['FTS5 operator words', 'NOT', 'NOT a keyword here'],
+  ])('finds a keyword containing %s', (_label, query, content) => {
+    store.insertChunks([
+      makeChunk({ content }),
+      makeChunk({ chunkIndex: 1, content: 'unrelated text only' }),
+    ]);
+
+    const results = searchFts(store, { query, projectPath: '/test/project' });
+
+    expect(results.map((r) => r.content)).toEqual([content]);
+  });
+
+  it('finds a hyphenated keyword across all projects', () => {
+    store.insertChunks([makeChunk({ projectPath: '/other', content: 'use better-sqlite3' })]);
+
+    const results = searchFts(store, {
+      query: 'better-sqlite3',
+      projectPath: '/test/project',
+      allProjects: true,
+    });
+
+    expect(results.map((r) => r.content)).toEqual(['use better-sqlite3']);
+  });
+
   it('should use LIKE for queries with 2 or fewer characters', () => {
     store.insertChunks([makeChunk({ content: 'Using JS and TS for development' })]);
 
