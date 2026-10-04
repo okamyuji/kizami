@@ -40,7 +40,9 @@ export function installRecallSkill(skillsDir: string, kizamiCommand: string): st
 
 export function removeRecallSkill(skillsDir: string): boolean {
   const dir = path.join(skillsDir, RECALL_SKILL_NAME);
-  if (!isManaged(path.join(dir, 'SKILL.md'))) return false;
-  fs.rmSync(dir, { recursive: true });
+  const file = path.join(dir, 'SKILL.md');
+  if (!isManaged(file)) return false;
+  fs.rmSync(file);
+  if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
   return true;
 }

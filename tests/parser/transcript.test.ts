@@ -140,4 +140,15 @@ describe('parseTranscriptText', () => {
     const line = JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } });
     expect(parseTranscriptText(`\n{oops\n${line}\r\n`).map((m) => m.kind)).toEqual(['user']);
   });
+
+  it('skips JSON lines that are not objects and compaction summaries that carry a message', () => {
+    const summary = JSON.stringify({
+      isCompactSummary: true,
+      message: { role: 'user', content: 'summary text' },
+    });
+    const line = JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } });
+    expect(parseTranscriptText(`null\n42\n${summary}\n${line}`)).toEqual([
+      expect.objectContaining({ kind: 'user', text: 'hi' }),
+    ]);
+  });
 });

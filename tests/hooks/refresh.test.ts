@@ -52,6 +52,16 @@ describe('recover marks', () => {
     fs.writeFileSync(path.join(tmp, 'recover-state.json'), '{}');
     expect([...loadRecoverMarks(config)]).toEqual([]);
   });
+
+  it('starts from empty marks when the state file is truncated', () => {
+    fs.writeFileSync(path.join(tmp, 'recover-state.json'), '{"sizes":{"x":1');
+    expect([...loadRecoverMarks(config)]).toEqual([]);
+  });
+
+  it('leaves no temporary file next to the state file after saving', () => {
+    saveRecoverMarks(config, new Map([['s1', 1]]));
+    expect(fs.readdirSync(tmp)).toEqual(['recover-state.json']);
+  });
 });
 
 describe('refreshIfGrown outcomes', () => {
@@ -131,15 +141,17 @@ describe('refreshIfGrown outcomes', () => {
 
   it('returns skipped when the transcript holds a deleted chunk', async () => {
     legacySession(0);
+    const marks = new Map<string, number>();
     const outcome = await refreshIfGrown({
       config,
       store,
       sessionId: 's1',
       transcriptPath: transcript,
-      marks: new Map(),
+      marks,
       deletedChunkDigests: new Set([contentDigest('[User]\nq\n\n[Assistant]\na')]),
     });
     expect(outcome).toBe('skipped');
+    expect(marks.get('s1')).toBe(fs.statSync(transcript).size);
   });
 
   it('refreshes a grown session through a claude receipt and updates the session row', async () => {
@@ -154,15 +166,25 @@ describe('refreshIfGrown outcomes', () => {
           type: 'assistant',
           timestamp: '2026-09-01T00:01:00Z',
           message: { role: 'assistant', content: [{ type: 'text', text: 'a' }] },
+        }) +
+        line({
+          type: 'user',
+          timestamp: '2026-09-01T00:02:00Z',
+          message: { role: 'user', content: 'q2' },
+        }) +
+        line({
+          type: 'assistant',
+          timestamp: '2026-09-01T00:03:00Z',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'a2' }] },
         })
     );
-    legacySession(0);
+    legacySession(5);
 
     expect(await run()).toBe('refreshed');
     expect(fs.readdirSync(path.join(tmp, 'prepared', 'claude'))).toHaveLength(1);
     expect(store.getSession('s1')).toMatchObject({
-      endedAt: '2026-09-01T00:01:00Z',
-      chunkCount: 1,
+      endedAt: '2026-09-01T00:03:00Z',
+      chunkCount: 2,
     });
   });
 
@@ -240,7 +262,7 @@ describe('refreshIfGrown outcomes', () => {
     v2Session('pending-derived-key');
     const marks = new Map<string, number>();
     expect(await run(marks)).toBe('skipped');
-    expect(marks.has('s1')).toBe(false);
+    expect(marks.get('s1')).toBe(fs.statSync(transcript).size);
   });
 
   it('returns skipped when legacy rows exist but the session row is missing', async () => {

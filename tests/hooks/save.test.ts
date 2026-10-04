@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { getDatabase } from '../../src/db/connection';
 import { initializeSchema } from '../../src/db/schema';
 import { Store } from '../../src/db/store';
-import { handleSave } from '../../src/hooks/save';
+import { handleSave, archiveHookTranscript } from '../../src/hooks/save';
 
 describe('handleSave', () => {
   let tmpDir: string;
@@ -72,6 +72,49 @@ describe('handleSave', () => {
     ).n;
     db.close();
     expect(count).toBeGreaterThan(0);
+  });
+
+  it('archives the transcript named by a claude hook payload', () => {
+    const projDir = path.join(tmpDir, 'projects', '-proj');
+    fs.mkdirSync(projDir, { recursive: true });
+    const transcript = path.join(projDir, 'dddd4444.jsonl');
+    fs.copyFileSync(fixtureTranscript, transcript);
+
+    archiveHookTranscript(JSON.stringify({ transcript_path: transcript }), 'claude', configPath);
+
+    expect(fs.existsSync(path.join(tmpDir, 'archive', '-proj', 'dddd4444.jsonl'))).toBe(true);
+  });
+
+  it('does not archive for other runtimes or when the payload names no existing file', () => {
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const projDir = path.join(tmpDir, 'projects', '-proj');
+    fs.mkdirSync(projDir, { recursive: true });
+    const transcript = path.join(projDir, 'eeee5555.jsonl');
+    fs.copyFileSync(fixtureTranscript, transcript);
+
+    archiveHookTranscript(JSON.stringify({ transcript_path: transcript }), 'codex', configPath);
+    archiveHookTranscript(JSON.stringify({ transcript_path: 42 }), 'claude', configPath);
+    archiveHookTranscript(
+      JSON.stringify({ transcript_path: path.join(projDir, 'missing.jsonl') }),
+      'claude',
+      configPath
+    );
+
+    expect(fs.existsSync(path.join(tmpDir, 'archive'))).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('reports an archive failure on stderr without throwing', () => {
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(() => archiveHookTranscript('not json', 'claude', configPath)).not.toThrow();
+      expect(spy.mock.calls.map((c) => String(c[0]))).toContainEqual(
+        expect.stringMatching(/^kizami archive error \(skipped\): SyntaxError/)
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('archives the raw transcript before chunking', async () => {

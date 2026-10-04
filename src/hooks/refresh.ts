@@ -19,8 +19,13 @@ function marksFile(config: EngramConfig): string {
 
 export function loadRecoverMarks(config: EngramConfig): RecoverMarks {
   const file = marksFile(config);
-  if (!fs.existsSync(file)) return new Map();
-  const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as { sizes?: Record<string, unknown> };
+  let raw: { sizes?: Record<string, unknown> };
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as { sizes?: Record<string, unknown> };
+  } catch {
+    // 目印は解析を省くためだけのもの。無い・壊れているときは全件を解析し直せば済み、検索を止める理由にならない。
+    return new Map();
+  }
   const entries = Object.entries(raw.sizes ?? {}).filter(
     (entry): entry is [string, number] => typeof entry[1] === 'number'
   );
@@ -28,7 +33,10 @@ export function loadRecoverMarks(config: EngramConfig): RecoverMarks {
 }
 
 export function saveRecoverMarks(config: EngramConfig, marks: RecoverMarks): void {
-  fs.writeFileSync(marksFile(config), JSON.stringify({ sizes: Object.fromEntries(marks) }));
+  const file = marksFile(config);
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ sizes: Object.fromEntries(marks) }));
+  fs.renameSync(tmp, file);
 }
 
 export type RefreshOutcome = 'refreshed' | 'unchanged' | 'skipped';
@@ -80,6 +88,8 @@ export async function refreshIfGrown(ctx: RefreshContext): Promise<RefreshOutcom
 
   const messages = await parseTranscript(transcriptPath);
   const chunks = buildChunks(messages, sessionId, session.projectPath);
+  // 解析した時点のサイズを残し、変わらない生ログを次の検索で解析し直さない。
+  marks.set(sessionId, size);
   if (chunks.some((c) => ctx.deletedChunkDigests.has(contentDigest(c.content)))) return 'skipped';
   const candidates = buildClaudeTurnCandidates(
     messages,
@@ -89,22 +99,21 @@ export async function refreshIfGrown(ctx: RefreshContext): Promise<RefreshOutcom
     new Date().toISOString()
   );
 
-  const outcome = store.hasLegacyRows(sessionId)
-    ? await replaceLegacy(ctx, chunks.length, session.chunkCount ?? 0, candidates)
-    : await appendMissingTurns(ctx, candidates);
+  // hook が後から足した v2 の行は数えない。混在していれば v1 より生ログのチャンクが多くなり、置き換わる。
+  const legacyRows = store.countLegacyRows(sessionId);
   // セッション行は checkpoint の反映時に recomputeSessionMetadata が集計し直す。
-  if (outcome === 'skipped') return outcome;
-  marks.set(sessionId, size);
-  return outcome;
+  return legacyRows > 0
+    ? replaceLegacy(ctx, chunks.length, legacyRows, candidates)
+    : appendMissingTurns(ctx, candidates);
 }
 
 async function replaceLegacy(
   ctx: RefreshContext,
   chunkCount: number,
-  storedChunkCount: number,
+  legacyRows: number,
   candidates: TurnCheckpointCandidate[]
 ): Promise<RefreshOutcome> {
-  if (chunkCount <= storedChunkCount) return 'unchanged';
+  if (chunkCount <= legacyRows) return 'unchanged';
   await commit(ctx.config, ctx.sessionId, candidates, true);
   return 'refreshed';
 }

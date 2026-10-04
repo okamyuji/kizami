@@ -38,6 +38,17 @@ describe('recall skill', () => {
     expect(removeRecallSkill(tmp)).toBe(false);
   });
 
+  it('keeps other files the user put in the skill directory on uninstall', () => {
+    installRecallSkill(tmp, 'kizami');
+    const extra = path.join(tmp, 'kizami-recall', 'notes.md');
+    fs.writeFileSync(extra, 'mine');
+
+    expect(removeRecallSkill(tmp)).toBe(true);
+
+    expect(fs.existsSync(path.join(tmp, 'kizami-recall', 'SKILL.md'))).toBe(false);
+    expect(fs.readFileSync(extra, 'utf-8')).toBe('mine');
+  });
+
   it('overwrites its own earlier file when the command changes', () => {
     installRecallSkill(tmp, 'kizami');
     const file = installRecallSkill(tmp, '/new/kizami');

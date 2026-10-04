@@ -402,8 +402,8 @@ export function cmdDelete(options: {
           `Chunk ${id} has no external id, so its deletion is not recorded in the JSONL store. Run kizami migrate-to-jsonl to assign ids.`
         );
       }
-      if (chunk) recordChunkDeletion(deletionsFile(config.database.path), chunk.content);
       store.deleteChunk(id);
+      if (chunk) recordChunkDeletion(deletionsFile(config.database.path), chunk.content);
       console.log(`Chunk ${id} deleted.`);
     } else {
       console.log('Usage: kizami delete --session <id> | --before <date> | --chunk <id>');

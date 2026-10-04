@@ -147,11 +147,11 @@ export class Store {
   }
 
   /** recover が取り込んだまま、hook の checkpoint に置き換わっていない行があるか。 */
-  hasLegacyRows(sessionId: string): boolean {
+  countLegacyRows(sessionId: string): number {
     const row = this.db
-      .prepare('SELECT 1 FROM chunks WHERE session_id = ? AND turn_key IS NULL LIMIT 1')
-      .get(sessionId);
-    return row !== undefined;
+      .prepare('SELECT COUNT(*) AS n FROM chunks WHERE session_id = ? AND turn_key IS NULL')
+      .get(sessionId) as { n: number };
+    return row.n;
   }
 
   getSessionTurnKeys(sessionId: string): string[] {

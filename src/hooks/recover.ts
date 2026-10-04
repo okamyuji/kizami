@@ -9,7 +9,7 @@ import { parseTranscript } from '@/parser/transcript';
 import { buildChunks } from '@/parser/chunker';
 import { JsonlWriter } from '@/jsonl/writer';
 import { chunksToJsonlRecords } from '@/jsonl/converter';
-import { loadDeletions, deletionsFile } from '@/archive/deletions';
+import { loadDeletions, deletionsFile, contentDigest } from '@/archive/deletions';
 import { loadRecoverMarks, saveRecoverMarks, refreshIfGrown } from '@/hooks/refresh';
 
 export interface RecoverResult {
@@ -105,25 +105,27 @@ export async function recoverTranscripts(
           result.skipped++;
           continue;
         }
-        if (store.hasSession(sessionId)) {
-          const outcome = await refreshIfGrown({
-            config,
-            store,
-            sessionId,
-            transcriptPath,
-            marks,
-            deletedChunkDigests: deleted.chunkDigests,
-          });
-          if (outcome === 'refreshed') {
-            result.refreshed++;
-            result.details.push(`${sessionId.slice(0, 8)} (refreshed)`);
-          } else {
-            result.skipped++;
-          }
-          continue;
-        }
-
         try {
+          if (store.hasSession(sessionId)) {
+            const outcome = await refreshIfGrown({
+              config,
+              store,
+              sessionId,
+              transcriptPath,
+              marks,
+              deletedChunkDigests: deleted.chunkDigests,
+            });
+            if (outcome === 'refreshed') {
+              result.refreshed++;
+              result.details.push(`${sessionId.slice(0, 8)} (refreshed)`);
+            } else {
+              result.skipped++;
+            }
+            continue;
+          }
+
+          // 解析より先に測る。解析中に追記された分を、取り込み済みとして記録しないため。
+          const size = fs.statSync(transcriptPath).size;
           const messages = await parseTranscript(transcriptPath);
           if (messages.length === 0) {
             result.skipped++;
@@ -131,7 +133,11 @@ export async function recoverTranscripts(
           }
 
           const chunks = buildChunks(messages, sessionId, projectPath);
-          if (chunks.length === 0) {
+          // rebuild で全チャンクを消したセッションは行ごと無くなる。取り込み直すと削除した本文が戻る。
+          if (
+            chunks.length === 0 ||
+            chunks.some((c) => deleted.chunkDigests.has(contentDigest(c.content)))
+          ) {
             result.skipped++;
             continue;
           }
@@ -153,7 +159,7 @@ export async function recoverTranscripts(
             lastMessage: lastHuman?.kind === 'user' ? lastHuman.text.slice(0, 200) : undefined,
           });
 
-          marks.set(sessionId, fs.statSync(transcriptPath).size);
+          marks.set(sessionId, size);
           result.recovered++;
           result.details.push(`${sessionId.slice(0, 8)} (${chunks.length} chunks)`);
         } catch (err) {

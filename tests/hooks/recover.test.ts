@@ -14,6 +14,7 @@ import {
 import { writePendingPrompt } from '../../src/checkpoint/state';
 import { foldCanonicalHistory } from '../../src/jsonl/fold';
 import { listJsonlFiles } from '../../src/jsonl/path';
+import { checkpointStop } from '../../src/checkpoint/service';
 
 describe('projectDirToPath', () => {
   it('should convert project dir name to filesystem path', () => {
@@ -429,6 +430,104 @@ describe('recoverTranscripts refreshes grown legacy sessions', () => {
     const result = await recoverTranscripts(configPath, projectsDir);
 
     expect(result.refreshed).toBe(0);
+  });
+
+  it('does not import a session again when one of its chunks was deleted and the row is gone', async () => {
+    await recoverTranscripts(configPath, projectsDir);
+    recordChunkDeletion(deletionsFile(dbPath), rows()[0].content);
+    const db = getDatabase(dbPath);
+    initializeSchema(db);
+    new Store(db).deleteSession(SID);
+    db.close();
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.recovered).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(rows()).toEqual([]);
+  });
+
+  it('does not import a session again when only one of its chunks was deleted', async () => {
+    appendTurn();
+    await recoverTranscripts(configPath, projectsDir);
+    recordChunkDeletion(deletionsFile(dbPath), rows()[0].content);
+    const db = getDatabase(dbPath);
+    initializeSchema(db);
+    new Store(db).deleteSession(SID);
+    db.close();
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.recovered).toBe(0);
+    expect(rows()).toEqual([]);
+  });
+
+  it('skips a transcript whose messages produce no chunks', async () => {
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: SID,
+        timestamp: '2026-09-01T00:00:00Z',
+        message: { role: 'assistant', content: [] },
+      }) + '\n'
+    );
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.recovered).toBe(0);
+    expect(result.skipped).toBe(1);
+  });
+
+  it('replaces legacy rows that a Stop hook later mixed with turn rows', async () => {
+    const stop = () =>
+      checkpointStop(
+        'claude',
+        JSON.stringify({
+          session_id: SID,
+          transcript_path: file,
+          cwd: '/w/proj',
+          hook_event_name: 'Stop',
+        }),
+        configPath
+      );
+    await recoverTranscripts(configPath, projectsDir);
+    await stop();
+    appendTurn();
+    await stop();
+    expect(rows().filter((row) => row.turn_key === null)).toHaveLength(1);
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.refreshed).toBe(1);
+    expect(rows()).toHaveLength(2);
+    expect(rows().every((row) => row.turn_key !== null)).toBe(true);
+  });
+
+  it('keeps importing other sessions when refreshing one session fails', async () => {
+    await recoverTranscripts(configPath, projectsDir);
+    appendTurn();
+    fs.chmodSync(file, 0o000);
+    const other = path.join(projectsDir, '-w-proj', 'other-0002.jsonl');
+    fs.writeFileSync(
+      other,
+      [
+        user('other question', '2026-09-05T00:00:00Z'),
+        asst('other answer', '2026-09-05T00:01:00Z'),
+      ].join('\n') + '\n'
+    );
+
+    try {
+      const result = await recoverTranscripts(configPath, projectsDir);
+
+      expect(result.recovered).toBe(1);
+      expect(result.errors).toBe(1);
+      expect(result.details).toContainEqual(expect.stringMatching(/^grow-000: error - .*EACCES/));
+      const marks = JSON.parse(fs.readFileSync(path.join(tmpDir, 'recover-state.json'), 'utf-8'));
+      expect(marks.sizes['other-0002']).toBe(fs.statSync(other).size);
+    } finally {
+      fs.chmodSync(file, 0o644);
+    }
   });
 
   it('adds turns appended after a refresh without resetting the session again', async () => {

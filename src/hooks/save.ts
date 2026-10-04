@@ -140,6 +140,23 @@ export async function handleSave(
   }
 }
 
+/** Claude Code が生ログを消す前に保管する。保管に失敗しても hook の保存は続ける。 */
+export function archiveHookTranscript(
+  raw: string,
+  runtime: HookRuntime,
+  configPath?: string
+): void {
+  if (runtime !== 'claude') return;
+  try {
+    const { transcript_path: file } = JSON.parse(raw) as { transcript_path: string };
+    // 欠けた値・文字列でない値・無いパスのどれにも fs.existsSync は false を返す。
+    if (!fs.existsSync(file)) return;
+    archiveTranscript(file, loadConfig(configPath).storage.transcriptArchiveDir);
+  } catch (err) {
+    process.stderr.write(`kizami archive error (skipped): ${String(err)}\n`);
+  }
+}
+
 export async function runSave(configPath?: string, runtime: HookRuntime = 'claude'): Promise<void> {
   process.on('SIGINT', () => {});
   process.on('SIGTERM', () => {});
@@ -156,6 +173,7 @@ export async function runSave(configPath?: string, runtime: HookRuntime = 'claud
       /* malformed input handled below */
     }
 
+    archiveHookTranscript(raw, runtime, configPath);
     const { checkpointStop, checkpointSessionEnd } = await import('@/checkpoint/service');
 
     if (eventName === 'Stop' || (!eventName && runtime !== 'kimi')) {
