@@ -14,6 +14,8 @@ import { formatResults } from '@/search/formatter';
 import { archiveAll, getClaudeProjectsDir } from '@/archive/store';
 import { resolveSession, SessionLookupError } from '@/archive/resolve';
 import { renderSession } from '@/archive/show';
+import { resumeSession } from '@/archive/resume';
+import type { spawnSync } from 'node:child_process';
 import { runSave } from '@/hooks/save';
 import { runRecall } from '@/hooks/recall';
 import { runInject } from '@/hooks/inject';
@@ -586,6 +588,28 @@ export async function cmdShow(
   }
 }
 
+export async function cmdResume(
+  idPrefix: string,
+  passthrough: string[],
+  options: { config?: string; spawn?: typeof spawnSync }
+): Promise<void> {
+  const config = loadConfig(options.config);
+  try {
+    const session = await resolveSession(idPrefix, {
+      archiveDir: config.storage.transcriptArchiveDir,
+      projectsDir: getClaudeProjectsDir(),
+    });
+    process.exitCode = resumeSession(session, passthrough, {
+      projectsDir: getClaudeProjectsDir(),
+      spawn: options.spawn,
+    });
+  } catch (err) {
+    if (!(err instanceof SessionLookupError)) throw err;
+    console.error(err.message);
+    process.exitCode = 1;
+  }
+}
+
 export async function cmdRecover(options: { config?: string }): Promise<RecoverResult> {
   const result = await recoverTranscripts(options.config);
   if (result.recovered === 0 && result.errors === 0) {
@@ -657,6 +681,7 @@ Commands:
   embed             Generate embeddings for hybrid mode (--backfill)
   archive           Copy raw transcripts from ~/.claude/projects into the kizami archive
   show <id>         Print a past session transcript (--max-chars N, 0 = all)
+  resume <id>       Resume a past session with claude -r (pass claude args after --)
   recover           Recover unsaved transcripts from ~/.claude/projects/
   import-claude-mem Import from claude-mem database
   inject            SessionStart hook: inject recent project Q&A
@@ -901,6 +926,18 @@ async function main(): Promise<void> {
         config: sharedOpts.config,
         maxChars: values['max-chars'] as string | undefined,
       });
+      break;
+    }
+
+    case 'resume': {
+      const id = positionals[1];
+      if (!id) {
+        console.error('Usage: kizami resume <session-id> [-- <claude args>]');
+        process.exitCode = 1;
+        return;
+      }
+      // parseArgs は "--" 以降を positionals に入れる。
+      await cmdResume(id, positionals.slice(2), { config: sharedOpts.config });
       break;
     }
 

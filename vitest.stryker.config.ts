@@ -29,6 +29,7 @@ export default defineConfig({
       'tests/archive/store.test.ts',
       'tests/archive/resolve.test.ts',
       'tests/archive/show.test.ts',
+      'tests/archive/resume.test.ts',
       'tests/hooks/save.test.ts',
     ],
   },

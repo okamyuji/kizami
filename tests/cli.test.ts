@@ -19,6 +19,7 @@ import {
   cmdEmbed,
   cmdArchive,
   cmdShow,
+  cmdResume,
 } from '../src/cli';
 
 describe('cli commands', () => {
@@ -711,6 +712,67 @@ describe('cli commands', () => {
     it('rethrows errors that are not lookup failures', async () => {
       fs.mkdirSync(path.join(root, 'claude', 'projects', '-p', 'beef0001.jsonl'));
       await expect(cmdShow('beef', { config: none() })).rejects.toThrow();
+      expect(process.exitCode).toBeUndefined();
+    });
+  });
+
+  describe('cmdResume', () => {
+    let root: string;
+    let work: string;
+    let prevClaude: string | undefined;
+    let prevArchive: string | undefined;
+    let errSpy: ReturnType<typeof vi.spyOn>;
+    const none = () => path.join(root, 'none.json');
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-cli-resume-'));
+      work = path.join(root, 'work');
+      fs.mkdirSync(work);
+      prevClaude = process.env.CLAUDE_CONFIG_DIR;
+      prevArchive = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude');
+      process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = path.join(root, 'archive');
+      fs.mkdirSync(path.join(root, 'claude', 'projects', '-p'), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, 'claude', 'projects', '-p', 'abcd1.jsonl'),
+        JSON.stringify({ type: 'user', sessionId: 'abcd1', cwd: work }) + '\n'
+      );
+      errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      errSpy.mockRestore();
+      process.exitCode = undefined;
+      if (prevClaude === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prevClaude;
+      if (prevArchive === undefined) delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      else process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = prevArchive;
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it('spawns claude -r with passthrough args and sets the exit code', async () => {
+      const spawn = vi.fn(() => ({
+        status: 4,
+      })) as unknown as typeof import('node:child_process').spawnSync;
+      await cmdResume('abcd', ['-p', 'ok'], { config: none(), spawn });
+      expect(spawn).toHaveBeenCalledWith('claude', ['-r', 'abcd1', '-p', 'ok'], {
+        cwd: work,
+        stdio: 'inherit',
+      });
+      expect(process.exitCode).toBe(4);
+    });
+
+    it('reports a lookup failure on stderr with exit code 1', async () => {
+      const spawn = vi.fn() as unknown as typeof import('node:child_process').spawnSync;
+      await cmdResume('ffff', [], { config: none(), spawn });
+      expect(errSpy).toHaveBeenCalledWith('No session matches "ffff".');
+      expect(process.exitCode).toBe(1);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('rethrows errors that are not lookup failures', async () => {
+      fs.mkdirSync(path.join(root, 'claude', 'projects', '-p', 'beef0001.jsonl'));
+      await expect(cmdResume('beef', [], { config: none() })).rejects.toThrow();
       expect(process.exitCode).toBeUndefined();
     });
   });

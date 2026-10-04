@@ -34,6 +34,8 @@ export default {
     'src/archive/resolve.ts',
     'src/archive/show.ts',
     'src/cli.ts:563-587',
+    'src/cli.ts:591-611',
+    'src/archive/resume.ts',
     'src/hooks/save.ts:53-57',
   ],
   reporters: ['clear-text', 'progress'],
