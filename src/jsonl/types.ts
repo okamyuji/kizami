@@ -31,8 +31,9 @@ export type JsonlV2Payload =
       txId: string;
       sessionId: string;
       historyEpoch: number;
-      reason: 'legacy_mismatch';
+      reason: 'legacy_mismatch' | 'deleted';
     }
+  | { v: 2; type: 'chunk_delete'; txId: string; sessionId: string; externalId: string }
   | ({ v: 2; type: 'turn_checkpoint'; txId: string } & TurnCheckpointV2);
 
 export type JsonlV2Record =

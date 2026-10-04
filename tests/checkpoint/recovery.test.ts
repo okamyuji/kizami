@@ -12,6 +12,8 @@ import { initializeSchema } from '@/db/schema';
 import { Store } from '@/db/store';
 import { updatePreparedPhase } from '@/checkpoint/state';
 import type { PreparedCheckpointV2 } from '@/checkpoint/state';
+import { serializeV2Transaction } from '@/jsonl/transaction';
+import type { JsonlV2Payload } from '@/jsonl/types';
 
 const tmpDirs: string[] = [];
 function makeTmpDir(): string {
@@ -297,6 +299,61 @@ describe('recoverPreparedCheckpoints', () => {
       await expect(recoverPreparedCheckpoints(config, 'claude')).rejects.toThrow(/symlink/);
     }
   );
+
+  async function receiptWith(
+    candidates: TurnCheckpointCandidate[],
+    edit: (payloads: JsonlV2Payload[]) => JsonlV2Payload[]
+  ): Promise<{ config: EngramConfig; receiptPath: string }> {
+    const dir = makeTmpDir();
+    const config = makeConfig(dir);
+    await commitCheckpointBatch(
+      { runtime: 'claude', sessionId: 'sess-1', candidates, finalization: { pendingPaths: [] } },
+      config
+    );
+    const preparedDir = path.join(dir, 'prepared', 'claude');
+    const receiptPath = path.join(preparedDir, fs.readdirSync(preparedDir)[0]);
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf-8')) as PreparedCheckpointV2;
+    const payloads = receipt.allLines.slice(1, -1).map((l) => JSON.parse(l) as JsonlV2Payload);
+    const tx = serializeV2Transaction(edit(payloads), {
+      txId: receipt.txId,
+      createdAt: (JSON.parse(receipt.allLines[0]) as { createdAt: string }).createdAt,
+      targetPath: receipt.targetPath,
+    });
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({ ...receipt, allLines: tx.allLines, payloadDigest: tx.payloadDigest })
+    );
+    return { config, receiptPath };
+  }
+
+  it('rejects a receipt that contains a chunk_delete payload', async () => {
+    const { config, receiptPath } = await receiptWith([makeCandidate()], (payloads) => [
+      ...payloads,
+      { v: 2, type: 'chunk_delete', txId: '', sessionId: 'sess-1', externalId: 'x' },
+    ]);
+    expect(await recoverPreparedCheckpoints(config, 'claude')).toEqual({
+      finalized: 0,
+      superseded: 0,
+      failed: 1,
+    });
+    expect(fs.existsSync(receiptPath)).toBe(true);
+  });
+
+  it('rejects a receipt whose payloads disagree on the history epoch', async () => {
+    const { config } = await receiptWith(
+      [makeCandidate(), makeCandidate({ turnKey: 'tk-2', sourceOrder: '00000000000000000002' })],
+      (payloads) =>
+        payloads.map((p, i) =>
+          i === 1 && p.type === 'turn_checkpoint' ? { ...p, historyEpoch: p.historyEpoch + 1 } : p
+        )
+    );
+    expect((await recoverPreparedCheckpoints(config, 'claude')).failed).toBe(1);
+  });
+
+  it('rejects a receipt without payloads', async () => {
+    const { config } = await receiptWith([makeCandidate()], () => []);
+    expect((await recoverPreparedCheckpoints(config, 'claude')).failed).toBe(1);
+  });
 
   it('rejects a receipt stored under a different runtime directory', async () => {
     const dir = makeTmpDir();

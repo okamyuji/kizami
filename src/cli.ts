@@ -33,6 +33,7 @@ import type { RecoverResult } from '@/hooks/recover';
 import { backfillEmbeddings } from '@/hooks/embed';
 import type { BackfillResult } from '@/hooks/embed';
 import { VERSION } from '@/version';
+import { appendSessionDeletion, appendChunkDeletion } from '@/jsonl/deletion';
 import {
   loadDeletions,
   deletionsFile,
@@ -376,6 +377,8 @@ export function cmdDelete(options: {
   const { store, close, config } = createStore(options.config);
   try {
     if (options.session) {
+      // 正本を先に書く。失敗したら何も消さずに終わり、成功後の中断は rebuild で直る。
+      appendSessionDeletion(config.storage.jsonlDir, options.session);
       store.deleteSession(options.session);
       recordSessionDeletion(deletionsFile(config.database.path), options.session);
       removeArchivedTranscript(config.storage.transcriptArchiveDir, options.session);
@@ -392,6 +395,13 @@ export function cmdDelete(options: {
         return;
       }
       const chunk = store.getChunk(id);
+      if (chunk?.externalId) {
+        appendChunkDeletion(config.storage.jsonlDir, chunk.sessionId, chunk.externalId);
+      } else if (chunk) {
+        console.error(
+          `Chunk ${id} has no external id, so its deletion is not recorded in the JSONL store. Run kizami migrate-to-jsonl to assign ids.`
+        );
+      }
       if (chunk) recordChunkDeletion(deletionsFile(config.database.path), chunk.content);
       store.deleteChunk(id);
       console.log(`Chunk ${id} deleted.`);

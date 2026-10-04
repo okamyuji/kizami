@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 export default defineConfig({
   resolve: { alias: { '@': resolve(__dirname, 'src') } },
   test: {
-    env: { KIZAMI_TRANSCRIPT_ARCHIVE_DIR: join(tmpdir(), 'kizami-test-transcripts') },
+    env: {
+      KIZAMI_TRANSCRIPT_ARCHIVE_DIR: join(tmpdir(), 'kizami-test-transcripts'),
+    },
     include: [
       'tests/execution/**/*.test.ts',
       'tests/checkpoint/identity.test.ts',
@@ -33,6 +35,9 @@ export default defineConfig({
       'tests/hooks/save.test.ts',
       'tests/search/archive-scan.test.ts',
       'tests/archive/deletions.test.ts',
+      'tests/jsonl/deletion.test.ts',
+      'tests/jsonl/self_heal.test.ts',
+      'tests/jsonl/transaction.test.ts',
       'tests/hooks/recover.test.ts',
       'tests/search/fts.test.ts',
       'tests/hooks/skill.test.ts',

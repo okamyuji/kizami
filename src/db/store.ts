@@ -136,7 +136,7 @@ export class Store {
     const row = this.db
       .prepare(
         `
-      SELECT id, session_id, project_path, chunk_index, content, role, metadata, created_at, token_count
+      SELECT id, external_id, session_id, project_path, chunk_index, content, role, metadata, created_at, token_count
       FROM chunks WHERE id = ?
     `
       )
@@ -592,6 +592,7 @@ export class Store {
 
     return {
       id: row['id'] as number,
+      externalId: (row['external_id'] as string | null | undefined) ?? undefined,
       sessionId: row['session_id'] as string,
       projectPath: row['project_path'] as string,
       chunkIndex: row['chunk_index'] as number,

@@ -159,10 +159,15 @@ function parseRecoveryReceipt(filePath: string): ValidatedRecoveryReceipt {
   ) {
     throw new Error('Prepared receipt does not match its validated transaction');
   }
-  const historyEpoch = frame.payloads[0]?.historyEpoch;
+  // chunk_delete は historyEpoch を持たないので、受領記録に混ざっていればこの検査で拒否される。
+  const epochs = frame.payloads.map(
+    (payload) => (payload as { historyEpoch?: number }).historyEpoch
+  );
+  const historyEpoch = epochs[0];
   if (
+    // Stryker disable next-line ConditionalExpression: payload が空の受領記録は、この検査を抜けても後段の検証で failed になる
     historyEpoch === undefined ||
-    frame.payloads.some((payload) => payload.historyEpoch !== historyEpoch)
+    epochs.some((epoch) => epoch !== historyEpoch)
   ) {
     throw new Error('Prepared receipt contains inconsistent history epochs');
   }

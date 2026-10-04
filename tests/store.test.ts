@@ -220,3 +220,27 @@ describe('store', () => {
     });
   });
 });
+
+describe('getChunk', () => {
+  it('returns the external id', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-getchunk-'));
+    const db = getDatabase(path.join(dir, 't.db'));
+    initializeSchema(db);
+    const store = new Store(db);
+    store.insertChunks([
+      {
+        sessionId: 's',
+        projectPath: '/p',
+        chunkIndex: 0,
+        content: 'c',
+        role: 'human',
+        metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+        tokenCount: 1,
+        externalId: 'ext-1',
+      },
+    ]);
+    expect(store.getChunk(1)?.externalId).toBe('ext-1');
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

@@ -1,6 +1,6 @@
 import type { Store } from '@/db/store';
 import { listJsonlFiles } from '@/jsonl/path';
-import { readTailRecords } from '@/jsonl/reader';
+import { readTailRecords, readTailDeletions } from '@/jsonl/reader';
 import { jsonlRecordToChunk } from '@/jsonl/converter';
 
 export interface SelfHealResult {
@@ -25,7 +25,10 @@ export function selfHealFromJsonl(
 
   // 最新月のファイルだけを対象にする（古い月の不整合は手動 rebuild で対処）
   const latest = files[files.length - 1];
-  const records = readTailRecords(latest, tailLines);
+  const deleted = readTailDeletions(latest, tailLines);
+  const records = readTailRecords(latest, tailLines).filter(
+    (r) => !deleted.chunkIds.has(r.id) && !deleted.sessions.has(r.sessionId)
+  );
   if (records.length === 0) return { scanned: 0, reinserted: 0 };
 
   const externalIds = records.map((r) => r.id);

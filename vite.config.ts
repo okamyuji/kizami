@@ -49,7 +49,9 @@ export default defineConfig({
   },
   test: {
     globals: true,
-    env: { KIZAMI_TRANSCRIPT_ARCHIVE_DIR: join(tmpdir(), 'kizami-test-transcripts') },
+    env: {
+      KIZAMI_TRANSCRIPT_ARCHIVE_DIR: join(tmpdir(), 'kizami-test-transcripts'),
+    },
     exclude: [...configDefaults.exclude, '.stryker-tmp/**'],
   },
 });

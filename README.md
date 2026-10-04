@@ -286,7 +286,9 @@ kizami delete --chunk 42
 
 `--session`と`--chunk`による削除は、DBと同じディレクトリの`deletions.json`に記録します。セッションはIDを、チャンクは本文のSHA-256を記録し、本文そのものは残しません。削除したセッションは、`kizami show`、`kizami resume`、保管済み生ログの検索、会話の取り込み（`kizami recover`）の対象から外れ、保管済みの生ログも削除されます。削除したチャンクは、`kizami show`の表示で`[deleted]`に置き換わります。`--before`による削除は保存期間の整理として扱い、生ログの表示には反映しません。
 
-JSONL正本には削除が記録されません。そのため`kizami rebuild`を実行すると、削除したチャンクが検索結果に戻ります。`kizami show`と`kizami resume`は`deletions.json`を参照するので、rebuildの後も削除した内容を表示しません。
+`--session`と`--chunk`による削除は、JSONL正本にも記録されます。セッションの削除は中身の無い`session_reset`として、チャンクの削除は`chunk_delete`として書くので、`kizami rebuild`で作り直したDBにも削除したものは戻りません。正本への書き込みに失敗した場合、kizamiはDBも生ログも消さずに終了します。削除したセッションをClaude Codeで続けると、削除の後に保存されたターンだけが記録として残ります。
+
+この記録を含むJSONLは、この機能より前の版のkizamiでは`kizami rebuild`できません。古い版は`unknown record version/type`で処理を止めます。保存は古い版でも続くため、Gitで正本を同期している場合は、すべてのマシンのkizamiを更新してから削除してください。`external_id`を持たない古いチャンクは正本に記録できないので、先に`kizami migrate-to-jsonl`で付与しておく必要があります。
 
 ### 古いメモリの一括削除
 

@@ -3,6 +3,8 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import Database from 'better-sqlite3';
+import { foldCanonicalHistory } from '../src/jsonl/fold';
+import { listJsonlFiles } from '../src/jsonl/path';
 import {
   loadDeletions,
   deletionsFile,
@@ -58,6 +60,7 @@ describe('cli commands', () => {
       configPath,
       JSON.stringify({
         database: { path: dbPath },
+        storage: { jsonlDir: path.join(tmpDir, 'jsonl') },
         search: {
           mode: 'core',
           timeDecayHalfLifeDays: 30,
@@ -652,6 +655,42 @@ describe('cli commands', () => {
       expect(fs.existsSync(archived)).toBe(false);
     });
 
+    it('records a session deletion in the JSONL store so rebuild keeps it deleted', async () => {
+      {
+        store.insertChunks([makeChunk()]);
+        store.insertSession(makeSession());
+        cmdDelete({ session: 'session-1', config: configPath });
+        const history = await foldCanonicalHistory(listJsonlFiles(path.join(tmpDir, 'jsonl')));
+        expect([...history.resetSessions]).toEqual(['session-1']);
+      }
+    });
+
+    it('records a chunk deletion in the JSONL store by external id', async () => {
+      {
+        store.insertChunks([makeChunk({ externalId: 'ext-del-1' })]);
+        cmdDelete({ chunk: '1', config: configPath });
+        const lines = fs
+          .readdirSync(path.join(tmpDir, 'jsonl'))
+          .filter((f) => f.endsWith('.jsonl'))
+          .flatMap((f) => fs.readFileSync(path.join(tmpDir, 'jsonl', f), 'utf-8').split('\n'))
+          .filter((l) => l.includes('"chunk_delete"'))
+          .map((l) => JSON.parse(l) as { sessionId: string; externalId: string });
+        expect(lines.map((l) => [l.sessionId, l.externalId])).toEqual([['session-1', 'ext-del-1']]);
+        expect(store.getChunk(1)).toBeUndefined();
+      }
+    });
+
+    it('warns and still deletes locally when a chunk has no external id', () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      store.insertChunks([makeChunk()]);
+      cmdDelete({ chunk: '1', config: configPath });
+      expect(errSpy).toHaveBeenCalledWith(
+        'Chunk 1 has no external id, so its deletion is not recorded in the JSONL store. Run kizami migrate-to-jsonl to assign ids.'
+      );
+      expect(store.getChunk(1)).toBeUndefined();
+      errSpy.mockRestore();
+    });
+
     it('records a deleted chunk by digest', () => {
       store.insertChunks([makeChunk({ content: 'private words' })]);
       cmdDelete({ chunk: '1', config: configPath });
@@ -661,7 +700,10 @@ describe('cli commands', () => {
     });
 
     it('records nothing for a chunk id that does not exist', () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       cmdDelete({ chunk: '99', config: configPath });
+      expect(errSpy).not.toHaveBeenCalled();
+      errSpy.mockRestore();
       expect(fs.existsSync(deletionsFile(dbPath))).toBe(false);
     });
 
