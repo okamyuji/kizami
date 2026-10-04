@@ -1,8 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import { setupHooks, uninstallHooks, getSetupStatus } from '../../src/hooks/setup';
+import { getDatabase } from '../../src/db/connection';
+import { initializeSchema } from '../../src/db/schema';
+import { Store } from '../../src/db/store';
+
+// worker スレッドでは process.env.HOME を変えても os.homedir() に届かない。
+// 既定パスが実ホームを指さないよう、homedir() を process.env.HOME に従わせる。
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  const homedir = (): string => process.env['HOME'] ?? actual.homedir();
+  return { ...actual, homedir, default: { ...actual, homedir } };
+});
 
 describe('setupHooks', () => {
   let tmpDir: string;
@@ -10,24 +21,64 @@ describe('setupHooks', () => {
   let codexHooksPath: string;
   let dbPath: string;
   let configPath: string;
+  let kimiConfigPath: string;
   let jsonlDir: string;
+  // パスを渡し忘れたテストが実際の ~/.codex や ~/.kimi-code を書き換えないよう、
+  // setup が既定パスの算出に使う環境変数をすべて一時ディレクトリへ向ける。
+  const ISOLATED_ENV = [
+    'HOME',
+    'KIMI_CODE_HOME',
+    'XDG_DATA_HOME',
+    'XDG_CONFIG_HOME',
+    'CLAUDE_CONFIG_DIR',
+    'KIZAMI_TRANSCRIPT_ARCHIVE_DIR',
+  ] as const;
+  const savedEnv: Partial<Record<(typeof ISOLATED_ENV)[number], string | undefined>> = {};
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-setup-'));
+    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-setup-')));
+    // --scope project の既定パスは cwd 基準なので、リポジトリ直下に書かせない。
+    // Stryker の worker では process.chdir() が使えないため cwd を差し替える。
+    vi.spyOn(process, 'cwd').mockReturnValue(tmpDir);
+    for (const key of ISOLATED_ENV) {
+      savedEnv[key] = process.env[key];
+      process.env[key] = path.join(tmpDir, `env-${key}`);
+    }
+    process.env['CLAUDE_CONFIG_DIR'] = path.join(process.env['HOME'] as string, '.claude');
     settingsPath = path.join(tmpDir, '.claude', 'settings.json');
     codexHooksPath = path.join(tmpDir, '.codex', 'hooks.json');
+    kimiConfigPath = path.join(tmpDir, '.kimi-code', 'config.toml');
     dbPath = path.join(tmpDir, 'kizami', 'memory.db');
     configPath = path.join(tmpDir, 'kizami', 'config.json');
     jsonlDir = path.join(tmpDir, 'kizami', 'jsonl');
   });
 
   afterEach(() => {
+    for (const key of ISOLATED_ENV) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+    vi.restoreAllMocks();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   function setupOptions() {
-    return { settingsPath, dbPath, configPath, jsonlDir, binPath: 'kizami' };
+    return {
+      settingsPath,
+      codexHooksPath,
+      kimiConfigPath,
+      dbPath,
+      configPath,
+      jsonlDir,
+      binPath: 'kizami',
+    };
   }
+
+  it('resolves every default config path inside the test directory', () => {
+    const paths = getSetupStatus({ target: 'all' }).map((s) => s.path);
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.filter((p) => !p.startsWith(tmpDir + path.sep))).toEqual([]);
+  });
 
   it('should create settings.json with hook entries', async () => {
     await setupHooks(setupOptions());
@@ -116,6 +167,166 @@ describe('setupHooks', () => {
     await setupHooks(setupOptions());
 
     expect(fs.existsSync(dbPath)).toBe(true);
+  });
+
+  const skillFile = () => path.join(tmpDir, '.claude', 'skills', 'kizami-recall', 'SKILL.md');
+
+  it('installs the recall skill next to settings.json with the kizami command', async () => {
+    await setupHooks(setupOptions());
+    expect(fs.readFileSync(skillFile(), 'utf-8')).toContain('allowed-tools: Bash(kizami search:*)');
+  });
+
+  it('works without options, using default paths under HOME', async () => {
+    const home = process.env['HOME'] as string;
+    await setupHooks();
+    expect(fs.existsSync(path.join(home, '.claude', 'settings.json'))).toBe(true);
+    expect(fs.existsSync(path.join(home, '.claude', 'skills', 'kizami-recall', 'SKILL.md'))).toBe(
+      true
+    );
+  });
+
+  function putPastSession(id: string): void {
+    const dir = path.join(process.env['HOME'] as string, '.claude', 'projects', '-w-proj');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(
+      path.resolve(__dirname, '../fixtures/sample-transcript.jsonl'),
+      path.join(dir, `${id}.jsonl`)
+    );
+  }
+
+  function storedSessionIds(): string[] {
+    const db = getDatabase(dbPath);
+    try {
+      initializeSchema(db);
+      return new Store(db).getSessionList().map((s) => s.sessionId);
+    } finally {
+      db.close();
+    }
+  }
+
+  it.each([{ recallOnly: false }, { recallOnly: true }, { target: 'all' as const }])(
+    'imports existing Claude Code sessions on setup (%o)',
+    async (extra) => {
+      putPastSession('past-0001');
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await setupHooks({ ...setupOptions(), ...extra });
+
+      expect(storedSessionIds()).toEqual(['past-0001']);
+      expect(log).toHaveBeenCalledWith('  Imported past sessions: 1');
+      const archived = path.join(
+        process.env['KIZAMI_TRANSCRIPT_ARCHIVE_DIR'] as string,
+        '-w-proj',
+        'past-0001.jsonl'
+      );
+      expect(fs.existsSync(archived)).toBe(true);
+      expect(log).toHaveBeenCalledWith('  Archived transcripts: 1');
+    }
+  );
+
+  it('rejects a user-authored skill before touching settings.json', async () => {
+    fs.mkdirSync(path.dirname(skillFile()), { recursive: true });
+    fs.writeFileSync(skillFile(), 'mine');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await expect(setupHooks(setupOptions())).rejects.toThrow('is not managed by kizami');
+
+    expect(fs.existsSync(settingsPath)).toBe(false);
+    expect(fs.readFileSync(skillFile(), 'utf-8')).toBe('mine');
+  });
+
+  it('does not import sessions for a codex-only setup', async () => {
+    putPastSession('past-0002');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await setupHooks({ ...setupOptions(), target: 'codex' });
+
+    expect(storedSessionIds()).toEqual([]);
+  });
+
+  it('prints the skill path, and the recall-only mode only when requested', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await setupHooks(setupOptions());
+    expect(log).toHaveBeenCalledWith(`  Recall skill: ${skillFile()}`);
+    expect(log).not.toHaveBeenCalledWith('  Mode: recall-only (no automatic injection)');
+
+    log.mockClear();
+    await setupHooks({ ...setupOptions(), recallOnly: true });
+    expect(log).toHaveBeenCalledWith('  Mode: recall-only (no automatic injection)');
+  });
+
+  it('keeps foreign UserPromptSubmit and SessionStart hooks on a normal setup', async () => {
+    const foreign = { hooks: [{ type: 'command', command: 'echo mine' }] };
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({ hooks: { UserPromptSubmit: [foreign], SessionStart: [foreign] } })
+    );
+
+    await setupHooks(setupOptions());
+
+    const s = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    expect(s.hooks.UserPromptSubmit[0]).toEqual(foreign);
+    expect(s.hooks.UserPromptSubmit[1].hooks[0].command).toContain('kizami recall');
+    expect(s.hooks.SessionStart[0]).toEqual(foreign);
+    expect(s.hooks.SessionStart[1].hooks[0].command).toContain('kizami inject');
+  });
+
+  it('recallOnly keeps save hooks, drops injection hooks, and preserves foreign hooks', async () => {
+    await setupHooks(setupOptions());
+    const withForeign = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    withForeign.hooks.UserPromptSubmit.push({ hooks: [{ type: 'command', command: 'echo mine' }] });
+    fs.writeFileSync(settingsPath, JSON.stringify(withForeign));
+
+    await setupHooks({ ...setupOptions(), recallOnly: true });
+
+    const s = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    expect(s.hooks.SessionEnd).toHaveLength(1);
+    expect(s.hooks.SessionEnd[0].hooks[0].command).toContain('kizami save');
+    expect(s.hooks.Stop).toHaveLength(1);
+    expect(s.hooks.Stop[0].hooks[0].command).toContain('kizami save');
+    expect(s.hooks.SessionStart).toBeUndefined();
+    expect(s.hooks.UserPromptSubmit).toEqual([
+      { hooks: [{ type: 'command', command: 'echo mine' }] },
+    ]);
+    expect(fs.existsSync(skillFile())).toBe(true);
+  });
+
+  it('re-running setup without recallOnly restores the injection hooks', async () => {
+    await setupHooks({ ...setupOptions(), recallOnly: true });
+    await setupHooks(setupOptions());
+    const s = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    expect(s.hooks.UserPromptSubmit).toHaveLength(1);
+    expect(s.hooks.UserPromptSubmit[0].hooks[0].command).toContain('kizami recall');
+    expect(s.hooks.SessionStart).toHaveLength(1);
+    expect(s.hooks.SessionStart[0].hooks[0].command).toContain('kizami inject');
+  });
+
+  it('recallOnly on a fresh settings file writes only save hooks', async () => {
+    await setupHooks({ ...setupOptions(), recallOnly: true });
+    const s = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    expect(Object.keys(s.hooks).sort()).toEqual(['SessionEnd', 'Stop']);
+  });
+
+  it.each(['codex', 'kimi', 'all'] as const)('recallOnly rejects target %s', async (target) => {
+    await expect(
+      setupHooks({ ...setupOptions(), recallOnly: true, target, codexHooksPath, kimiConfigPath })
+    ).rejects.toThrow('--recall-only supports only --target claude.');
+    expect(fs.existsSync(settingsPath)).toBe(false);
+    expect(fs.existsSync(codexHooksPath)).toBe(false);
+    expect(fs.existsSync(kimiConfigPath)).toBe(false);
+  });
+
+  it('uninstall removes the recall skill', async () => {
+    await setupHooks(setupOptions());
+    uninstallHooks({ settingsPath, target: 'claude' });
+    expect(fs.existsSync(path.dirname(skillFile()))).toBe(false);
+  });
+
+  it('uninstall of the codex target leaves the recall skill alone', async () => {
+    await setupHooks(setupOptions());
+    uninstallHooks({ settingsPath, target: 'codex', codexHooksPath });
+    expect(fs.existsSync(skillFile())).toBe(true);
   });
 
   it('should install Codex hooks when target is codex', async () => {
@@ -244,36 +455,28 @@ describe('setupHooks', () => {
   });
 
   it('should report read-only Codex config sources as not removed on uninstall', () => {
-    const oldCwd = process.cwd();
-    process.chdir(tmpDir);
     const codexConfigPath = path.join(tmpDir, '.codex', 'config.toml');
-    try {
-      fs.mkdirSync(path.dirname(codexHooksPath), { recursive: true });
-      fs.writeFileSync(
-        codexHooksPath,
-        JSON.stringify({
-          hooks: {
-            Stop: [
-              { hooks: [{ type: 'command', command: 'kizami save --stdin # kizami-managed' }] },
-            ],
-          },
-        }),
-        'utf-8'
-      );
-      fs.writeFileSync(
-        codexConfigPath,
-        '[[hooks.Stop]]\ncommand = "kizami save --stdin # kizami-managed"\n',
-        'utf-8'
-      );
+    fs.mkdirSync(path.dirname(codexHooksPath), { recursive: true });
+    fs.writeFileSync(
+      codexHooksPath,
+      JSON.stringify({
+        hooks: {
+          Stop: [{ hooks: [{ type: 'command', command: 'kizami save --stdin # kizami-managed' }] }],
+        },
+      }),
+      'utf-8'
+    );
+    fs.writeFileSync(
+      codexConfigPath,
+      '[[hooks.Stop]]\ncommand = "kizami save --stdin # kizami-managed"\n',
+      'utf-8'
+    );
 
-      const status = uninstallHooks({ target: 'codex', scope: 'project' });
-      const hooksJson = status.find((s) => s.writable);
-      const configToml = status.find((s) => !s.writable);
+    const status = uninstallHooks({ target: 'codex', scope: 'project' });
+    const hooksJson = status.find((s) => s.writable);
+    const configToml = status.find((s) => !s.writable);
 
-      expect(hooksJson?.removed).toBe(true);
-      expect(configToml?.removed).toBe(false);
-    } finally {
-      process.chdir(oldCwd);
-    }
+    expect(hooksJson?.removed).toBe(true);
+    expect(configToml?.removed).toBe(false);
   });
 });

@@ -11,6 +11,12 @@ import { searchFts } from '@/search/fts';
 import { rankResults } from '@/search/hybrid';
 import type { ScoredResult } from '@/search/hybrid';
 import { formatResults } from '@/search/formatter';
+import { scanArchive, formatArchiveHits } from '@/search/archive-scan';
+import { archiveAll, getClaudeProjectsDir, removeArchivedTranscript } from '@/archive/store';
+import { resolveSession, SessionLookupError } from '@/archive/resolve';
+import { renderSession } from '@/archive/show';
+import { resumeSession } from '@/archive/resume';
+import type { spawnSync } from 'node:child_process';
 import { runSave } from '@/hooks/save';
 import { runRecall } from '@/hooks/recall';
 import { runInject } from '@/hooks/inject';
@@ -27,6 +33,13 @@ import type { RecoverResult } from '@/hooks/recover';
 import { backfillEmbeddings } from '@/hooks/embed';
 import type { BackfillResult } from '@/hooks/embed';
 import { VERSION } from '@/version';
+import { appendSessionDeletion, appendChunkDeletion } from '@/jsonl/deletion';
+import {
+  loadDeletions,
+  deletionsFile,
+  recordSessionDeletion,
+  recordChunkDeletion,
+} from '@/archive/deletions';
 import { recoverPreparedCheckpoints } from '@/checkpoint/coordinator';
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -156,6 +169,30 @@ export function cmdMigrateToJsonl(options: { config?: string }): void {
   console.log('Migration complete. Run `kizami rebuild` to verify integrity.');
 }
 
+function runFts(
+  store: Store,
+  config: EngramConfig,
+  query: string,
+  projectPath: string,
+  allProjects: boolean
+): ScoredResult[] {
+  const isTiered = config.search.projectScope === 'tiered' && !allProjects;
+  const results = searchFts(store, {
+    query,
+    projectPath,
+    limit: 50,
+    allProjects,
+    tiered: isTiered,
+  });
+  return rankResults(
+    results,
+    config.search.timeDecayHalfLifeDays,
+    query,
+    projectPath,
+    isTiered ? config.search.crossProjectPenalty : undefined
+  );
+}
+
 export function cmdSearch(
   query: string,
   options: { project?: string; allProjects?: boolean; config?: string }
@@ -164,38 +201,49 @@ export function cmdSearch(
   try {
     const rawProjectPath = options.project ? path.resolve(options.project) : process.cwd();
     const projectPath = resolveScopedProjectPath(config, rawProjectPath);
+    // parseArgs が --all-projects に default:false を入れるので、?? ではなく || で config を見る。
+    const allProjects = options.allProjects || config.search.projectScope === false;
 
-    // recall hookと同じくconfig.search.projectScopeをデフォルトの挙動として尊重する。
-    // --all-projectsが明示されればそれを優先する。
-    const isTiered = config.search.projectScope === 'tiered';
-    const allProjects = options.allProjects ?? config.search.projectScope === false;
-
-    const results = searchFts(store, {
-      query,
-      projectPath,
-      limit: 50,
-      allProjects,
-      tiered: isTiered && !allProjects,
-    });
-
-    if (results.length === 0) {
-      console.log('No results found.');
-      return [];
+    let ranked = runFts(store, config, query, projectPath, allProjects);
+    if (ranked.length === 0 && !allProjects) {
+      ranked = runFts(store, config, query, projectPath, true);
+      if (ranked.length > 0)
+        console.log('No results in this project. Results from other projects:');
+    }
+    if (ranked.length > 0) {
+      console.log(formatResults(ranked, config.search.defaultLimit));
+      return ranked;
     }
 
-    const ranked = rankResults(
-      results,
-      config.search.timeDecayHalfLifeDays,
+    const deleted = loadDeletions(deletionsFile(config.database.path));
+    const hits = scanArchive(
       query,
-      projectPath,
-      isTiered && !allProjects ? config.search.crossProjectPenalty : undefined
+      config.storage.transcriptArchiveDir,
+      config.maintenance.maxChunkAgeDays * 86400000,
+      Date.now(),
+      10,
+      deleted.sessions,
+      deleted.chunkDigests
     );
-    const output = formatResults(ranked, config.search.defaultLimit);
-    console.log(output);
-    return ranked;
+    if (hits.length > 0) {
+      console.log('No indexed results. Matches in archived transcripts:');
+      console.log(formatArchiveHits(hits));
+    } else {
+      console.log('No results found.');
+    }
+    return [];
   } finally {
     close();
   }
+}
+
+/** スキル経由の検索でも、hook 未導入の期間や他プロセスの会話を拾えるよう先に取り込む。 */
+export async function cmdSearchFresh(
+  query: string,
+  options: { project?: string; allProjects?: boolean; config?: string }
+): Promise<ScoredResult[]> {
+  await recoverTranscripts(options.config);
+  return cmdSearch(query, options);
 }
 
 function maskCredentials(value: string): string {
@@ -326,10 +374,14 @@ export function cmdDelete(options: {
   chunk?: string;
   config?: string;
 }): void {
-  const { store, close } = createStore(options.config);
+  const { store, close, config } = createStore(options.config);
   try {
     if (options.session) {
+      // 正本を先に書く。失敗したら何も消さずに終わり、成功後の中断は rebuild で直る。
+      appendSessionDeletion(config.storage.jsonlDir, options.session);
       store.deleteSession(options.session);
+      recordSessionDeletion(deletionsFile(config.database.path), options.session);
+      removeArchivedTranscript(config.storage.transcriptArchiveDir, options.session);
       console.log(`Session ${options.session} deleted.`);
     } else if (options.before) {
       const date = new Date(options.before).toISOString();
@@ -342,7 +394,16 @@ export function cmdDelete(options: {
         process.exitCode = 1;
         return;
       }
+      const chunk = store.getChunk(id);
+      if (chunk?.externalId) {
+        appendChunkDeletion(config.storage.jsonlDir, chunk.sessionId, chunk.externalId);
+      } else if (chunk) {
+        console.error(
+          `Chunk ${id} has no external id, so its deletion is not recorded in the JSONL store. Run kizami migrate-to-jsonl to assign ids.`
+        );
+      }
       store.deleteChunk(id);
+      if (chunk) recordChunkDeletion(deletionsFile(config.database.path), chunk.content);
       console.log(`Chunk ${id} deleted.`);
     } else {
       console.log('Usage: kizami delete --session <id> | --before <date> | --chunk <id>');
@@ -415,6 +476,7 @@ export async function cmdSetup(options: {
   target?: SetupTarget;
   scope?: SetupScope;
   configPath?: string;
+  recallOnly?: boolean;
 }): Promise<void> {
   await setupHooks({ ...options, configPath: options.configPath });
 }
@@ -469,7 +531,7 @@ export function cmdExport(options: {
     const sessions = store.getSessionList(projectPath);
 
     if (fmt === 'markdown') {
-      const lines: string[] = ['# Engram Memory Export\n'];
+      const lines: string[] = ['# Kizami Memory Export\n'];
       for (const s of sessions) {
         lines.push(`## Session ${s.sessionId.slice(0, 8)}`);
         lines.push(`- Project: ${s.projectPath}`);
@@ -546,12 +608,76 @@ export function cmdMerge(options: {
   }
 }
 
+export function cmdArchive(options: { config?: string }): void {
+  const config = loadConfig(options.config);
+  const started = Date.now();
+  const result = archiveAll(getClaudeProjectsDir(), config.storage.transcriptArchiveDir);
+  console.log(`[kizami archive] ${config.storage.transcriptArchiveDir}`);
+  console.log(
+    `  copied=${result.copied} current=${result.current} failed=${result.failed} (${Date.now() - started} ms)`
+  );
+  if (result.failed > 0) process.exitCode = 1;
+}
+
+export async function cmdShow(
+  idPrefix: string,
+  options: { config?: string; maxChars?: string }
+): Promise<void> {
+  const config = loadConfig(options.config);
+  const raw = options.maxChars ?? '30000';
+  const maxChars = Number(raw);
+  // Number('') は 0 になり「無制限」と誤解されるので、数字だけの文字列に限る
+  if (!/^\d+$/.test(raw)) {
+    console.error('--max-chars must be a non-negative integer.');
+    process.exitCode = 1;
+    return;
+  }
+  const deleted = loadDeletions(deletionsFile(config.database.path));
+  try {
+    const session = await resolveSession(
+      idPrefix,
+      { archiveDir: config.storage.transcriptArchiveDir, projectsDir: getClaudeProjectsDir() },
+      deleted.sessions
+    );
+    process.stdout.write(await renderSession(session, maxChars, deleted.chunkDigests));
+  } catch (err) {
+    if (!(err instanceof SessionLookupError)) throw err;
+    console.error(err.message);
+    process.exitCode = 1;
+  }
+}
+
+export async function cmdResume(
+  idPrefix: string,
+  passthrough: string[],
+  options: { config?: string; spawn?: typeof spawnSync }
+): Promise<void> {
+  const config = loadConfig(options.config);
+  const deleted = loadDeletions(deletionsFile(config.database.path));
+  try {
+    const session = await resolveSession(
+      idPrefix,
+      { archiveDir: config.storage.transcriptArchiveDir, projectsDir: getClaudeProjectsDir() },
+      deleted.sessions
+    );
+    process.exitCode = resumeSession(session, passthrough, {
+      projectsDir: getClaudeProjectsDir(),
+      spawn: options.spawn,
+    });
+  } catch (err) {
+    if (!(err instanceof SessionLookupError)) throw err;
+    console.error(err.message);
+    process.exitCode = 1;
+  }
+}
+
 export async function cmdRecover(options: { config?: string }): Promise<RecoverResult> {
   const result = await recoverTranscripts(options.config);
-  if (result.recovered === 0 && result.errors === 0) {
+  if (result.recovered === 0 && result.refreshed === 0 && result.errors === 0) {
     console.log('No unsaved transcripts found.');
   } else {
     console.log(`Recovered: ${result.recovered}`);
+    console.log(`Refreshed: ${result.refreshed}`);
     console.log(`Skipped:   ${result.skipped}`);
     console.log(`Errors:    ${result.errors}`);
     if (result.details.length > 0) {
@@ -611,10 +737,14 @@ Commands:
   setup             Auto-configure Claude Code hooks
                     --target claude|codex|kimi|all (default: claude)
                     setup status|uninstall for diagnostics/removal
+                    --recall-only: save hooks and the kizami-recall skill only (no auto-injection)
   prune             Bulk delete old memories
   export            Export as JSON/Markdown
   merge             Merge similar chunks
   embed             Generate embeddings for hybrid mode (--backfill)
+  archive           Copy raw transcripts from ~/.claude/projects into the kizami archive
+  show <id>         Print a past session transcript (--max-chars N, 0 = all)
+  resume <id>       Resume a past session with claude -r (pass claude args after --)
   recover           Recover unsaved transcripts from ~/.claude/projects/
   import-claude-mem Import from claude-mem database
   inject            SessionStart hook: inject recent project Q&A
@@ -660,6 +790,8 @@ async function main(): Promise<void> {
       scope: { type: 'string' },
       backfill: { type: 'boolean', default: false },
       'from-month': { type: 'string' },
+      'recall-only': { type: 'boolean', default: false },
+      'max-chars': { type: 'string' },
       version: { type: 'boolean', short: 'v', default: false },
     },
   });
@@ -743,7 +875,7 @@ async function main(): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      cmdSearch(query, sharedOpts);
+      await cmdSearchFresh(query, sharedOpts);
       break;
     }
 
@@ -796,6 +928,7 @@ async function main(): Promise<void> {
       } else if (positionals[1] == null || positionals[1] === 'install') {
         await cmdSetup({
           hybrid: !!values['hybrid'],
+          recallOnly: !!values['recall-only'],
           target,
           scope,
           configPath: sharedOpts.config,
@@ -842,6 +975,36 @@ async function main(): Promise<void> {
         config: sharedOpts.config,
       });
       break;
+
+    case 'archive':
+      cmdArchive({ config: sharedOpts.config });
+      break;
+
+    case 'show': {
+      const id = positionals[1];
+      if (!id) {
+        console.error('Usage: kizami show <session-id> [--max-chars N]');
+        process.exitCode = 1;
+        return;
+      }
+      await cmdShow(id, {
+        config: sharedOpts.config,
+        maxChars: values['max-chars'] as string | undefined,
+      });
+      break;
+    }
+
+    case 'resume': {
+      const id = positionals[1];
+      if (!id) {
+        console.error('Usage: kizami resume <session-id> [-- <claude args>]');
+        process.exitCode = 1;
+        return;
+      }
+      // parseArgs は "--" 以降を positionals に入れる。
+      await cmdResume(id, positionals.slice(2), { config: sharedOpts.config });
+      break;
+    }
 
     case 'recover':
       await cmdRecover({ config: sharedOpts.config });

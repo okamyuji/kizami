@@ -1,7 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import { loadConfig, applyProjectAlias } from '@/config';
+import type { EngramConfig } from '@/config';
+import { getClaudeProjectsDir } from '@/archive/store';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
 import { Store } from '@/db/store';
@@ -9,16 +10,15 @@ import { parseTranscript } from '@/parser/transcript';
 import { buildChunks } from '@/parser/chunker';
 import { JsonlWriter } from '@/jsonl/writer';
 import { chunksToJsonlRecords } from '@/jsonl/converter';
+import { loadDeletions, deletionsFile, contentDigest } from '@/archive/deletions';
+import { loadRecoverMarks, saveRecoverMarks, refreshIfGrown } from '@/hooks/refresh';
 
 export interface RecoverResult {
   recovered: number;
+  refreshed: number;
   skipped: number;
   errors: number;
   details: string[];
-}
-
-function getClaudeProjectsDir(): string {
-  return path.join(os.homedir(), '.claude', 'projects');
 }
 
 /**
@@ -50,13 +50,14 @@ export function projectDirToPath(dirName: string): string {
  */
 export async function recoverTranscripts(
   configPath?: string,
-  claudeProjectsDir?: string
+  claudeProjectsDir?: string,
+  config: EngramConfig = loadConfig(configPath)
 ): Promise<RecoverResult> {
-  const config = loadConfig(configPath);
   const db = getDatabase(config.database.path);
 
   const result: RecoverResult = {
     recovered: 0,
+    refreshed: 0,
     skipped: 0,
     errors: 0,
     details: [],
@@ -65,6 +66,8 @@ export async function recoverTranscripts(
   try {
     initializeSchema(db);
     const store = new Store(db);
+    const deleted = loadDeletions(deletionsFile(config.database.path));
+    const marks = loadRecoverMarks(config);
 
     const projectsDir = claudeProjectsDir ?? getClaudeProjectsDir();
     if (!fs.existsSync(projectsDir)) {
@@ -95,12 +98,31 @@ export async function recoverTranscripts(
         const sessionId = entry.name.replace(/\.jsonl$/, '');
         const transcriptPath = path.join(projectDir, entry.name);
 
-        if (store.hasSession(sessionId)) {
+        if (deleted.sessions.has(sessionId)) {
           result.skipped++;
           continue;
         }
-
         try {
+          if (store.hasSession(sessionId)) {
+            const outcome = await refreshIfGrown({
+              config,
+              store,
+              sessionId,
+              transcriptPath,
+              marks,
+              deletedChunkDigests: deleted.chunkDigests,
+            });
+            if (outcome === 'refreshed') {
+              result.refreshed++;
+              result.details.push(`${sessionId.slice(0, 8)} (refreshed)`);
+            } else {
+              result.skipped++;
+            }
+            continue;
+          }
+
+          // 解析より先に測る。解析中に追記された分を、取り込み済みとして記録しないため。
+          const size = fs.statSync(transcriptPath).size;
           const messages = await parseTranscript(transcriptPath);
           if (messages.length === 0) {
             result.skipped++;
@@ -108,7 +130,11 @@ export async function recoverTranscripts(
           }
 
           const chunks = buildChunks(messages, sessionId, projectPath);
-          if (chunks.length === 0) {
+          // rebuild で全チャンクを消したセッションは行ごと無くなる。取り込み直すと削除した本文が戻る。
+          if (
+            chunks.length === 0 ||
+            chunks.some((c) => deleted.chunkDigests.has(contentDigest(c.content)))
+          ) {
             result.skipped++;
             continue;
           }
@@ -130,15 +156,19 @@ export async function recoverTranscripts(
             lastMessage: lastHuman?.kind === 'user' ? lastHuman.text.slice(0, 200) : undefined,
           });
 
+          marks.set(sessionId, size);
           result.recovered++;
           result.details.push(`${sessionId.slice(0, 8)} (${chunks.length} chunks)`);
         } catch (err) {
+          // refresh は解析した時点で目印を立てる。反映に失敗したら外し、次の実行で再試行させる。
+          marks.delete(sessionId);
           result.errors++;
           result.details.push(`${sessionId.slice(0, 8)}: error - ${String(err)}`);
         }
       }
     }
 
+    saveRecoverMarks(config, marks);
     return result;
   } finally {
     db.close();

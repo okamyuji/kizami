@@ -2,7 +2,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
-import type Database from 'better-sqlite3';
+import Database from 'better-sqlite3';
+import { foldCanonicalHistory } from '../src/jsonl/fold';
+import { listJsonlFiles } from '../src/jsonl/path';
+import {
+  loadDeletions,
+  deletionsFile,
+  contentDigest,
+  recordSessionDeletion,
+} from '../src/archive/deletions';
 import { getDatabase } from '../src/db/connection';
 import { initializeSchema } from '../src/db/schema';
 import { Store } from '../src/db/store';
@@ -17,7 +25,21 @@ import {
   cmdPrune,
   cmdExport,
   cmdEmbed,
+  cmdArchive,
+  cmdShow,
+  cmdResume,
+  cmdSetup,
+  cmdSearchFresh,
+  cmdRecover,
 } from '../src/cli';
+
+// worker スレッドでは process.env.HOME を変えても os.homedir() に届かない。
+// 既定パスが実ホームを指さないよう、homedir() を process.env.HOME に従わせる。
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  const homedir = (): string => process.env['HOME'] ?? actual.homedir();
+  return { ...actual, homedir, default: { ...actual, homedir } };
+});
 
 describe('cli commands', () => {
   let db: Database.Database;
@@ -39,6 +61,7 @@ describe('cli commands', () => {
       configPath,
       JSON.stringify({
         database: { path: dbPath },
+        storage: { jsonlDir: path.join(tmpDir, 'jsonl') },
         search: {
           mode: 'core',
           timeDecayHalfLifeDays: 30,
@@ -108,6 +131,138 @@ describe('cli commands', () => {
       });
       expect(results).toEqual([]);
       expect(logSpy).toHaveBeenCalledWith('No results found.');
+      expect(logSpy).not.toHaveBeenCalledWith(
+        'No results in this project. Results from other projects:'
+      );
+    });
+
+    it('closes the database even when the search finishes', () => {
+      const closeSpy = vi.spyOn(Database.prototype, 'close');
+      cmdSearch('anything', { project: '/test/project', config: configPath });
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to other projects only when the current project has no hit', () => {
+      store.insertChunks([
+        makeChunk({ projectPath: '/other/project', content: 'Kubernetes ingress setup' }),
+      ]);
+      const logSpy = vi.spyOn(console, 'log');
+      const results = cmdSearch('Kubernetes', { project: '/test/project', config: configPath });
+      expect(results.length).toBeGreaterThanOrEqual(1);
+      expect(logSpy).toHaveBeenCalledWith(
+        'No results in this project. Results from other projects:'
+      );
+      expect(logSpy.mock.calls.flat().join('\n')).toContain('from=project');
+    });
+
+    it('does not print the fallback heading when --all-projects is given', () => {
+      store.insertChunks([
+        makeChunk({ projectPath: '/other/project', content: 'Kubernetes ingress setup' }),
+      ]);
+      const logSpy = vi.spyOn(console, 'log');
+      cmdSearch('Kubernetes', { project: '/test/project', config: configPath, allProjects: true });
+      expect(logSpy).not.toHaveBeenCalledWith(
+        'No results in this project. Results from other projects:'
+      );
+    });
+
+    it('does not print the fallback heading when the current project has a hit', () => {
+      store.insertChunks([makeChunk({ content: 'Kubernetes ingress setup' })]);
+      const logSpy = vi.spyOn(console, 'log');
+      cmdSearch('Kubernetes', { project: '/test/project', config: configPath });
+      expect(logSpy).not.toHaveBeenCalledWith(
+        'No results in this project. Results from other projects:'
+      );
+    });
+
+    it('treats allProjects:false like unset and honours projectScope:false', () => {
+      const noScope = path.join(tmpDir, 'no-scope2.json');
+      fs.writeFileSync(
+        noScope,
+        JSON.stringify({ database: { path: dbPath }, search: { projectScope: false } })
+      );
+      store.insertChunks([
+        makeChunk({ projectPath: '/other/project', content: 'Kubernetes ingress setup' }),
+      ]);
+      const logSpy = vi.spyOn(console, 'log');
+      const results = cmdSearch('Kubernetes', {
+        project: '/test/project',
+        config: noScope,
+        allProjects: false,
+      });
+      expect(results).toHaveLength(1);
+      expect(logSpy).not.toHaveBeenCalledWith(
+        'No results in this project. Results from other projects:'
+      );
+    });
+
+    describe('archived transcripts tier', () => {
+      let archiveDir: string;
+      let prevEnv: string | undefined;
+      const DAY = 86400000;
+
+      function putArchived(id: string, text: string, ageDays: number) {
+        const file = path.join(archiveDir, '-proj', `${id}.jsonl`);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(
+          file,
+          JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n'
+        );
+        const t = new Date(Date.now() - ageDays * DAY);
+        fs.utimesSync(file, t, t);
+      }
+      function archiveConfig(maxChunkAgeDays: number): string {
+        const p = path.join(tmpDir, 'archive-config.json');
+        fs.writeFileSync(
+          p,
+          JSON.stringify({
+            database: { path: dbPath },
+            search: { projectScope: true },
+            maintenance: { maxChunkAgeDays },
+          })
+        );
+        return p;
+      }
+
+      beforeEach(() => {
+        prevEnv = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+        archiveDir = path.join(tmpDir, 'archive');
+        process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = archiveDir;
+      });
+      afterEach(() => {
+        if (prevEnv === undefined) delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+        else process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = prevEnv;
+      });
+
+      it('lists archived matches older than maxChunkAgeDays when FTS has none', () => {
+        putArchived('abcdef123', 'zebra migration notes', 100);
+        const logSpy = vi.spyOn(console, 'log');
+        const results = cmdSearch('zebra', {
+          project: '/test/project',
+          config: archiveConfig(90),
+        });
+        expect(results).toEqual([]);
+        const out = logSpy.mock.calls.flat().join('\n');
+        expect(out).toContain('No indexed results. Matches in archived transcripts:');
+        expect(out).toContain('abcdef from=-proj archived');
+        expect(out).toContain('zebra migration notes');
+        expect(logSpy).not.toHaveBeenCalledWith('No results found.');
+      });
+
+      it('ignores archived files newer than maxChunkAgeDays', () => {
+        putArchived('abcdef123', 'zebra migration notes', 10);
+        const logSpy = vi.spyOn(console, 'log');
+        cmdSearch('zebra', { project: '/test/project', config: archiveConfig(90) });
+        expect(logSpy).toHaveBeenCalledWith('No results found.');
+      });
+
+      it('does not scan the archive when FTS has a hit', () => {
+        putArchived('abcdef123', 'zebra migration notes', 100);
+        store.insertChunks([makeChunk({ content: 'zebra in the index' })]);
+        const logSpy = vi.spyOn(console, 'log');
+        cmdSearch('zebra', { project: '/test/project', config: archiveConfig(90) });
+        expect(logSpy.mock.calls.flat().join('\n')).not.toContain('archived');
+      });
     });
 
     it('should scope to the current project only when projectScope is true (default)', () => {
@@ -486,6 +641,89 @@ describe('cli commands', () => {
       expect(store.getChunk(1)).toBeUndefined();
     });
 
+    it('records a deleted session and removes its archived transcript', () => {
+      store.insertChunks([makeChunk()]);
+      store.insertSession(makeSession());
+      const archived = path.join(tmpDir, 'archive', '-p', 'session-1.jsonl');
+      fs.mkdirSync(path.dirname(archived), { recursive: true });
+      fs.writeFileSync(archived, '{}\n');
+      const prev = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = path.join(tmpDir, 'archive');
+      try {
+        cmdDelete({ session: 'session-1', config: configPath });
+      } finally {
+        if (prev === undefined) delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+        else process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = prev;
+      }
+      expect([...loadDeletions(deletionsFile(dbPath)).sessions]).toEqual(['session-1']);
+      expect(fs.existsSync(archived)).toBe(false);
+    });
+
+    it('records a session deletion in the JSONL store so rebuild keeps it deleted', async () => {
+      {
+        store.insertChunks([makeChunk()]);
+        store.insertSession(makeSession());
+        cmdDelete({ session: 'session-1', config: configPath });
+        const history = await foldCanonicalHistory(listJsonlFiles(path.join(tmpDir, 'jsonl')));
+        expect([...history.resetSessions]).toEqual(['session-1']);
+      }
+    });
+
+    it('records a chunk deletion in the JSONL store by external id', async () => {
+      {
+        store.insertChunks([makeChunk({ externalId: 'ext-del-1' })]);
+        cmdDelete({ chunk: '1', config: configPath });
+        const lines = fs
+          .readdirSync(path.join(tmpDir, 'jsonl'))
+          .filter((f) => f.endsWith('.jsonl'))
+          .flatMap((f) => fs.readFileSync(path.join(tmpDir, 'jsonl', f), 'utf-8').split('\n'))
+          .filter((l) => l.includes('"chunk_delete"'))
+          .map((l) => JSON.parse(l) as { sessionId: string; externalId: string });
+        expect(lines.map((l) => [l.sessionId, l.externalId])).toEqual([['session-1', 'ext-del-1']]);
+        expect(store.getChunk(1)).toBeUndefined();
+      }
+    });
+
+    it('warns and still deletes locally when a chunk has no external id', () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      store.insertChunks([makeChunk()]);
+      cmdDelete({ chunk: '1', config: configPath });
+      expect(errSpy).toHaveBeenCalledWith(
+        'Chunk 1 has no external id, so its deletion is not recorded in the JSONL store. Run kizami migrate-to-jsonl to assign ids.'
+      );
+      expect(store.getChunk(1)).toBeUndefined();
+      errSpy.mockRestore();
+    });
+
+    it('records a deleted chunk by digest', () => {
+      store.insertChunks([makeChunk({ content: 'private words' })]);
+      cmdDelete({ chunk: '1', config: configPath });
+      expect([...loadDeletions(deletionsFile(dbPath)).chunkDigests]).toEqual([
+        contentDigest('private words'),
+      ]);
+    });
+
+    it('does not record the digest when the local chunk delete fails', () => {
+      store.insertChunks([makeChunk({ content: 'private words' })]);
+      const spy = vi.spyOn(Store.prototype, 'deleteChunk').mockImplementation(() => {
+        throw new Error('locked');
+      });
+      try {
+        expect(() => cmdDelete({ chunk: '1', config: configPath })).toThrow('locked');
+      } finally {
+        spy.mockRestore();
+      }
+      expect(fs.existsSync(deletionsFile(dbPath))).toBe(false);
+    });
+
+    it('records nothing for a chunk id that does not exist', () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      cmdDelete({ chunk: '99', config: configPath });
+      expect(errSpy).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+      expect(fs.existsSync(deletionsFile(dbPath))).toBe(false);
+    });
+
     it('should delete chunks before a date', () => {
       store.insertChunks([makeChunk()]);
 
@@ -539,7 +777,7 @@ describe('cli commands', () => {
         config: configPath,
       });
 
-      expect(output).toContain('# Engram Memory Export');
+      expect(output).toContain('# Kizami Memory Export');
       expect(output).toContain('session-');
     });
 
@@ -564,6 +802,398 @@ describe('cli commands', () => {
 
     it('should report error when not in hybrid mode', async () => {
       await expect(cmdEmbed({ backfill: true, config: configPath })).rejects.toThrow('hybrid mode');
+    });
+  });
+
+  describe('cmdArchive', () => {
+    let root: string;
+    let prevClaude: string | undefined;
+    let prevArchive: string | undefined;
+    let logSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-cli-archive-'));
+      prevClaude = process.env.CLAUDE_CONFIG_DIR;
+      prevArchive = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude');
+      process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = path.join(root, 'archive');
+      fs.mkdirSync(path.join(root, 'claude', 'projects', '-p'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'claude', 'projects', '-p', 'aaaa.jsonl'), '{}\n');
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.exitCode = undefined;
+    });
+
+    afterEach(() => {
+      logSpy.mockRestore();
+      process.exitCode = undefined;
+      if (prevClaude === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prevClaude;
+      if (prevArchive === undefined) delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      else process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = prevArchive;
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it('archives transcripts and reports counts without failing', () => {
+      cmdArchive({ config: path.join(root, 'none.json') });
+      expect(fs.existsSync(path.join(root, 'archive', '-p', 'aaaa.jsonl'))).toBe(true);
+      const lines = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(lines[0]).toBe(`[kizami archive] ${path.join(root, 'archive')}`);
+      expect(lines[1]).toMatch(/^ {2}copied=1 current=0 failed=0 \(\d+ ms\)$/);
+    });
+
+    it('reports the elapsed milliseconds', () => {
+      const now = vi.spyOn(Date, 'now').mockReturnValueOnce(1000).mockReturnValueOnce(1042);
+      try {
+        cmdArchive({ config: path.join(root, 'none.json') });
+      } finally {
+        now.mockRestore();
+      }
+      expect(String(logSpy.mock.calls[1][0])).toContain('(42 ms)');
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('sets exit code 1 when a copy fails', () => {
+      fs.writeFileSync(path.join(root, 'archive'), 'blocker');
+      cmdArchive({ config: path.join(root, 'none.json') });
+      expect(process.exitCode).toBe(1);
+      const lines = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(lines[1]).toContain('failed=1');
+    });
+  });
+
+  describe('cmdShow', () => {
+    let root: string;
+    let prevClaude: string | undefined;
+    let prevArchive: string | undefined;
+    let errSpy: ReturnType<typeof vi.spyOn>;
+    let outSpy: ReturnType<typeof vi.spyOn>;
+    const none = () => path.join(root, 'none.json');
+    const out = () => outSpy.mock.calls.map((c) => String(c[0])).join('');
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-cli-show-'));
+      prevClaude = process.env.CLAUDE_CONFIG_DIR;
+      prevArchive = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude');
+      process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = path.join(root, 'archive');
+      fs.mkdirSync(path.join(root, 'claude', 'projects', '-p'), { recursive: true });
+      const body = [
+        {
+          type: 'user',
+          sessionId: 'abcd1',
+          timestamp: '2026-09-01T00:00:00Z',
+          message: { role: 'user', content: 'hello there' },
+        },
+        {
+          type: 'assistant',
+          sessionId: 'abcd1',
+          timestamp: '2026-09-01T00:01:00Z',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'general kenobi' }] },
+        },
+      ];
+      fs.writeFileSync(
+        path.join(root, 'claude', 'projects', '-p', 'abcd1.jsonl'),
+        body.map((o) => JSON.stringify(o)).join('\n') + '\n'
+      );
+      errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      process.exitCode = undefined;
+    });
+
+    afterEach(() => {
+      errSpy.mockRestore();
+      outSpy.mockRestore();
+      process.exitCode = undefined;
+      if (prevClaude === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prevClaude;
+      if (prevArchive === undefined) delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      else process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = prevArchive;
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it.each(['-1', 'abc', '1.5', ''])('rejects --max-chars %j', async (bad) => {
+      await cmdShow('abcd', { config: none(), maxChars: bad });
+      expect(errSpy).toHaveBeenCalledWith('--max-chars must be a non-negative integer.');
+      expect(process.exitCode).toBe(1);
+      expect(outSpy).not.toHaveBeenCalled();
+    });
+
+    it('prints the session with the default limit', async () => {
+      await cmdShow('abcd', { config: none() });
+      expect(out()).toContain('Session: abcd1');
+      expect(out()).toContain('general kenobi');
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('accepts 0 as unlimited', async () => {
+      await cmdShow('abcd', { config: none(), maxChars: '0' });
+      expect(out()).toContain('general kenobi');
+      expect(out()).not.toContain('Omitted');
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('applies an explicit --max-chars', async () => {
+      await cmdShow('abcd', { config: none(), maxChars: '5' });
+      expect(out()).toContain('enobi');
+      expect(out()).not.toContain('general');
+    });
+
+    function configWithDb(): string {
+      const cfg = path.join(root, 'config.json');
+      fs.writeFileSync(
+        cfg,
+        JSON.stringify({ database: { path: path.join(root, 'db', 'memory.db') } })
+      );
+      return cfg;
+    }
+
+    it('refuses to show a deleted session', async () => {
+      const cfg = configWithDb();
+      recordSessionDeletion(deletionsFile(path.join(root, 'db', 'memory.db')), 'abcd1');
+      await cmdShow('abcd', { config: cfg });
+      expect(errSpy).toHaveBeenCalledWith('Session "abcd" was deleted.');
+      expect(out()).toBe('');
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('hides a deleted chunk in the shown session', async () => {
+      const cfg = configWithDb();
+      const dbFile = path.join(root, 'db', 'memory.db');
+      fs.mkdirSync(path.dirname(dbFile), { recursive: true });
+      fs.writeFileSync(
+        deletionsFile(dbFile),
+        JSON.stringify({
+          sessions: [],
+          chunkDigests: [contentDigest('[User]\nhello there\n\n[Assistant]\ngeneral kenobi')],
+        })
+      );
+      await cmdShow('abcd', { config: cfg });
+      expect(out()).toContain('[deleted]');
+      expect(out()).not.toContain('general kenobi');
+    });
+
+    it('reports a lookup failure on stderr with exit code 1', async () => {
+      await cmdShow('ffff', { config: none() });
+      expect(errSpy).toHaveBeenCalledWith('No session matches "ffff".');
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('rethrows errors that are not lookup failures', async () => {
+      fs.mkdirSync(path.join(root, 'claude', 'projects', '-p', 'beef0001.jsonl'));
+      await expect(cmdShow('beef', { config: none() })).rejects.toThrow();
+      expect(process.exitCode).toBeUndefined();
+    });
+  });
+
+  describe('cmdResume', () => {
+    let root: string;
+    let work: string;
+    let prevClaude: string | undefined;
+    let prevArchive: string | undefined;
+    let errSpy: ReturnType<typeof vi.spyOn>;
+    const none = () => path.join(root, 'none.json');
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-cli-resume-'));
+      work = path.join(root, 'work');
+      fs.mkdirSync(work);
+      prevClaude = process.env.CLAUDE_CONFIG_DIR;
+      prevArchive = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude');
+      process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = path.join(root, 'archive');
+      fs.mkdirSync(path.join(root, 'claude', 'projects', '-p'), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, 'claude', 'projects', '-p', 'abcd1.jsonl'),
+        JSON.stringify({ type: 'user', sessionId: 'abcd1', cwd: work }) + '\n'
+      );
+      errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      errSpy.mockRestore();
+      process.exitCode = undefined;
+      if (prevClaude === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prevClaude;
+      if (prevArchive === undefined) delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      else process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = prevArchive;
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it('spawns claude -r with passthrough args and sets the exit code', async () => {
+      const spawn = vi.fn(() => ({
+        status: 4,
+      })) as unknown as typeof import('node:child_process').spawnSync;
+      await cmdResume('abcd', ['-p', 'ok'], { config: none(), spawn });
+      expect(spawn).toHaveBeenCalledWith('claude', ['-r', 'abcd1', '-p', 'ok'], {
+        cwd: work,
+        stdio: 'inherit',
+      });
+      expect(process.exitCode).toBe(4);
+    });
+
+    it('reports a lookup failure on stderr with exit code 1', async () => {
+      const spawn = vi.fn() as unknown as typeof import('node:child_process').spawnSync;
+      await cmdResume('ffff', [], { config: none(), spawn });
+      expect(errSpy).toHaveBeenCalledWith('No session matches "ffff".');
+      expect(process.exitCode).toBe(1);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('rethrows errors that are not lookup failures', async () => {
+      fs.mkdirSync(path.join(root, 'claude', 'projects', '-p', 'beef0001.jsonl'));
+      await expect(cmdResume('beef', [], { config: none() })).rejects.toThrow();
+      expect(process.exitCode).toBeUndefined();
+    });
+  });
+
+  describe('cmdSetup', () => {
+    const ENV_KEYS = ['HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'KIMI_CODE_HOME'] as const;
+    const saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
+    let home: string;
+
+    beforeEach(() => {
+      home = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-cmdsetup-'));
+      for (const key of ENV_KEYS) {
+        saved[key] = process.env[key];
+        process.env[key] = path.join(home, key);
+      }
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      for (const key of ENV_KEYS) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+      fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('passes recallOnly through: save hooks and the skill, no injection hooks', async () => {
+      await cmdSetup({ hybrid: false, recallOnly: true });
+
+      const claudeDir = path.join(home, 'HOME', '.claude');
+      const settings = JSON.parse(fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf-8'));
+      expect(Object.keys(settings.hooks).sort()).toEqual(['SessionEnd', 'Stop']);
+      expect(fs.existsSync(path.join(claudeDir, 'skills', 'kizami-recall', 'SKILL.md'))).toBe(true);
+    });
+
+    it('rejects recallOnly with a non-claude target before writing anything', async () => {
+      await expect(cmdSetup({ hybrid: false, recallOnly: true, target: 'codex' })).rejects.toThrow(
+        '--recall-only supports only --target claude.'
+      );
+      expect(fs.existsSync(path.join(home, 'HOME'))).toBe(false);
+    });
+  });
+
+  describe('cmdRecover', () => {
+    const prevHome = process.env['HOME'];
+    const prevClaude = process.env['CLAUDE_CONFIG_DIR'];
+    // 取り込み元を HOME/.claude/projects にするため、テスト環境の上書きを外す。
+    beforeEach(() => delete process.env['CLAUDE_CONFIG_DIR']);
+    afterEach(() => {
+      if (prevHome === undefined) delete process.env['HOME'];
+      else process.env['HOME'] = prevHome;
+      if (prevClaude === undefined) delete process.env['CLAUDE_CONFIG_DIR'];
+      else process.env['CLAUDE_CONFIG_DIR'] = prevClaude;
+    });
+
+    it('says there is nothing to do when no transcript exists', async () => {
+      process.env['HOME'] = path.join(tmpDir, 'empty-home');
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      await cmdRecover({ config: configPath });
+      expect(log).toHaveBeenCalledWith('No unsaved transcripts found.');
+      log.mockRestore();
+    });
+
+    // root は chmod 000 でも読めるので、この失敗を起こせない。
+    it.skipIf(process.getuid?.() === 0)(
+      'prints the counts when a transcript fails to import',
+      async () => {
+        process.env['HOME'] = path.join(tmpDir, 'home-err');
+        const dir = path.join(tmpDir, 'home-err', '.claude', 'projects', '-p');
+        fs.mkdirSync(dir, { recursive: true });
+        const bad = path.join(dir, 'bad-0001.jsonl');
+        fs.writeFileSync(bad, '{}\n');
+        fs.chmodSync(bad, 0o000);
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+          await cmdRecover({ config: configPath });
+        } finally {
+          fs.chmodSync(bad, 0o600);
+        }
+        expect(log).toHaveBeenCalledWith('Errors:    1');
+        expect(log).not.toHaveBeenCalledWith('No unsaved transcripts found.');
+        log.mockRestore();
+      }
+    );
+
+    it('reports refreshed sessions even when nothing new was imported', async () => {
+      process.env['HOME'] = path.join(tmpDir, 'home');
+      const dir = path.join(tmpDir, 'home', '.claude', 'projects', '-p');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, 'rec-0001.jsonl');
+      const line = (o: object) => JSON.stringify(o) + '\n';
+      fs.writeFileSync(
+        file,
+        line({ type: 'user', message: { role: 'user', content: 'q1' } }) +
+          line({
+            type: 'assistant',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'a1' }] },
+          })
+      );
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      await cmdRecover({ config: configPath });
+      expect(log).toHaveBeenCalledWith('Recovered: 1');
+      fs.appendFileSync(
+        file,
+        line({ type: 'user', message: { role: 'user', content: 'q2' } }) +
+          line({
+            type: 'assistant',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'a2' }] },
+          })
+      );
+      log.mockClear();
+
+      await cmdRecover({ config: configPath });
+
+      expect(log).toHaveBeenCalledWith('Refreshed: 1');
+      expect(log).not.toHaveBeenCalledWith('No unsaved transcripts found.');
+      log.mockRestore();
+    });
+  });
+
+  describe('cmdSearchFresh', () => {
+    const ENV_KEYS = ['HOME', 'XDG_DATA_HOME', 'KIZAMI_JSONL_DIR', 'CLAUDE_CONFIG_DIR'] as const;
+    const saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
+
+    beforeEach(() => {
+      for (const key of ENV_KEYS) {
+        saved[key] = process.env[key];
+        process.env[key] = path.join(tmpDir, key);
+      }
+      process.env['CLAUDE_CONFIG_DIR'] = path.join(tmpDir, 'HOME', '.claude');
+      const projectDir = path.join(tmpDir, 'HOME', '.claude', 'projects', '-test-project');
+      fs.mkdirSync(projectDir, { recursive: true });
+      fs.copyFileSync(
+        path.resolve(__dirname, 'fixtures/sample-transcript.jsonl'),
+        path.join(projectDir, 'fresh-0001.jsonl')
+      );
+    });
+
+    afterEach(() => {
+      for (const key of ENV_KEYS) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    });
+
+    it('imports sessions that are not in the DB yet before searching', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      expect(cmdSearch('Express', { config: configPath, allProjects: true })).toEqual([]);
+
+      const results = await cmdSearchFresh('Express', { config: configPath, allProjects: true });
+
+      expect(results.map((r) => r.sessionId)).toContain('fresh-0001');
     });
   });
 });

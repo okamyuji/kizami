@@ -116,7 +116,7 @@ describe.skipIf(!transcriptExists)('integration: real transcript', () => {
 
   it('Step 7: should export as Markdown', () => {
     const md = cmdExport({ format: 'markdown', allProjects: true, config: configPath });
-    expect(md).toContain('# Engram Memory Export');
+    expect(md).toContain('# Kizami Memory Export');
     expect(md).toContain('## Session');
     console.log('  Export Markdown: OK');
   });

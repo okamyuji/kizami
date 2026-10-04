@@ -8,6 +8,7 @@ import type {
 } from '@/jsonl/types';
 import {
   computePayloadDigest,
+  isJsonlV2Payload,
   isJsonlV2Record,
   validateCommittedTransaction,
 } from '@/jsonl/transaction';
@@ -103,7 +104,7 @@ function readTailWindow(fd: number, n: number): { window: Buffer; startOffset: n
  * 末尾N行を効率的に読む（self-healing用）。
  * ファイル全体を読まず、末尾チャンクからのみパースする実装。
  */
-export function readTailRecords(filePath: string, n: number): JsonlChunkRecord[] {
+export function readTailLines(filePath: string, n: number): string[] {
   if (!fs.existsSync(filePath) || n <= 0) return [];
   assertPrivateFileTarget(filePath);
   const fd = fs.openSync(
@@ -124,17 +125,38 @@ export function readTailRecords(filePath: string, n: number): JsonlChunkRecord[]
     content = firstNewline === -1 ? '' : content.slice(firstNewline + 1);
   }
   const lines = content.split('\n').filter((l) => l.length > 0);
-  const tail = lines.slice(-n);
-  const out: JsonlChunkRecord[] = [];
-  for (const line of tail) {
-    try {
-      const parsed: unknown = JSON.parse(line);
-      if (isJsonlChunkRecord(parsed)) out.push(parsed);
-    } catch {
-      // skip malformed
-    }
+  return lines.slice(-n);
+}
+
+function parseTailLine(line: string): unknown {
+  // Stryker disable BlockStatement: catch を空にしても undefined が返り、結果は同じ
+  try {
+    return JSON.parse(line);
+  } catch {
+    return undefined;
   }
-  return out;
+  // Stryker restore BlockStatement
+}
+
+export function readTailRecords(filePath: string, n: number): JsonlChunkRecord[] {
+  return readTailLines(filePath, n)
+    .map(parseTailLine)
+    .filter((parsed): parsed is JsonlChunkRecord => isJsonlChunkRecord(parsed));
+}
+
+/** 末尾にある削除記録。self-heal が削除済みのレコードを入れ直さないために使う。 */
+export function readTailDeletions(
+  filePath: string,
+  n: number
+): { chunkIds: Set<string>; sessions: Set<string> } {
+  const chunkIds = new Set<string>();
+  const sessions = new Set<string>();
+  for (const parsed of readTailLines(filePath, n).map(parseTailLine)) {
+    if (!isJsonlV2Payload(parsed)) continue;
+    if (parsed.type === 'chunk_delete') chunkIds.add(parsed.externalId);
+    else if (parsed.type === 'session_reset') sessions.add(parsed.sessionId);
+  }
+  return { chunkIds, sessions };
 }
 
 export async function* readJsonlLines(filePath: string): AsyncGenerator<JsonlLineResult> {

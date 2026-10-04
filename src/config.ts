@@ -7,6 +7,7 @@ export interface EngramConfig {
   storage: {
     jsonlDir: string;
     selfHealTailLines: number;
+    transcriptArchiveDir: string;
     projectAliases: Record<string, string>;
   };
   search: {
@@ -61,6 +62,10 @@ export function getDefaultJsonlDir(): string {
   return path.join(getXdgDataHome(), 'kizami', 'jsonl');
 }
 
+export function getDefaultTranscriptArchiveDir(): string {
+  return path.join(getXdgDataHome(), 'kizami', 'transcripts');
+}
+
 export function getConfigFilePath(): string {
   return path.join(getXdgConfigHome(), 'kizami', 'config.json');
 }
@@ -73,6 +78,7 @@ export function getDefaultConfig(): EngramConfig {
     storage: {
       jsonlDir: getDefaultJsonlDir(),
       selfHealTailLines: 100,
+      transcriptArchiveDir: getDefaultTranscriptArchiveDir(),
       projectAliases: {},
     },
     search: {
@@ -223,6 +229,13 @@ export function loadConfig(configPath?: string): EngramConfig {
   const envJsonlDir = process.env['KIZAMI_JSONL_DIR'];
   if (envJsonlDir && envJsonlDir.length > 0) {
     resolved = { ...resolved, storage: { ...resolved.storage, jsonlDir: envJsonlDir } };
+  }
+  const envArchiveDir = process.env['KIZAMI_TRANSCRIPT_ARCHIVE_DIR'];
+  if (envArchiveDir) {
+    resolved = {
+      ...resolved,
+      storage: { ...resolved.storage, transcriptArchiveDir: envArchiveDir },
+    };
   }
   return resolved;
 }

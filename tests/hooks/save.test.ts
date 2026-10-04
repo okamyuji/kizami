@@ -1,18 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { getDatabase } from '../../src/db/connection';
 import { initializeSchema } from '../../src/db/schema';
 import { Store } from '../../src/db/store';
-import { handleSave } from '../../src/hooks/save';
+import { handleSave, archiveHookTranscript } from '../../src/hooks/save';
 
 describe('handleSave', () => {
   let tmpDir: string;
   let dbPath: string;
   let configPath: string;
   let previousJsonlDir: string | undefined;
+  let previousArchiveDir: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-save-'));
@@ -20,10 +21,17 @@ describe('handleSave', () => {
     configPath = path.join(tmpDir, 'config.json');
     previousJsonlDir = process.env.KIZAMI_JSONL_DIR;
     process.env.KIZAMI_JSONL_DIR = path.join(tmpDir, 'jsonl');
+    previousArchiveDir = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+    process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = path.join(tmpDir, 'archive');
     fs.writeFileSync(configPath, JSON.stringify({ database: { path: dbPath } }), 'utf-8');
   });
 
   afterEach(() => {
+    if (previousArchiveDir === undefined) {
+      delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+    } else {
+      process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = previousArchiveDir;
+    }
     if (previousJsonlDir === undefined) {
       delete process.env.KIZAMI_JSONL_DIR;
     } else {
@@ -33,6 +41,95 @@ describe('handleSave', () => {
   });
 
   const fixtureTranscript = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
+
+  it('still stores chunks when archiving fails', async () => {
+    const blocker = path.join(tmpDir, 'blocker');
+    fs.writeFileSync(blocker, 'x');
+    process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = path.join(blocker, 'archive');
+    const projDir = path.join(tmpDir, 'projects', '-proj');
+    fs.mkdirSync(projDir, { recursive: true });
+    const transcript = path.join(projDir, 'ffff6666.jsonl');
+    fs.copyFileSync(fixtureTranscript, transcript);
+
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await handleSave(
+        { session_id: 'ffff6666', transcript_path: transcript, cwd: tmpDir },
+        configPath
+      );
+      expect(spy.mock.calls.map((c) => String(c[0]))).toContainEqual(
+        expect.stringMatching(/^kizami archive error \(skipped\): .*ENOTDIR/)
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    const db = getDatabase(dbPath);
+    const count = (
+      db.prepare('SELECT COUNT(*) AS n FROM chunks WHERE session_id = ?').get('ffff6666') as {
+        n: number;
+      }
+    ).n;
+    db.close();
+    expect(count).toBeGreaterThan(0);
+  });
+
+  it('archives the transcript named by a claude hook payload', () => {
+    const projDir = path.join(tmpDir, 'projects', '-proj');
+    fs.mkdirSync(projDir, { recursive: true });
+    const transcript = path.join(projDir, 'dddd4444.jsonl');
+    fs.copyFileSync(fixtureTranscript, transcript);
+
+    archiveHookTranscript(JSON.stringify({ transcript_path: transcript }), 'claude', configPath);
+
+    expect(fs.existsSync(path.join(tmpDir, 'archive', '-proj', 'dddd4444.jsonl'))).toBe(true);
+  });
+
+  it('does not archive for other runtimes or when the payload names no existing file', () => {
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const projDir = path.join(tmpDir, 'projects', '-proj');
+    fs.mkdirSync(projDir, { recursive: true });
+    const transcript = path.join(projDir, 'eeee5555.jsonl');
+    fs.copyFileSync(fixtureTranscript, transcript);
+
+    archiveHookTranscript(JSON.stringify({ transcript_path: transcript }), 'codex', configPath);
+    archiveHookTranscript(JSON.stringify({ transcript_path: 42 }), 'claude', configPath);
+    archiveHookTranscript(
+      JSON.stringify({ transcript_path: path.join(projDir, 'missing.jsonl') }),
+      'claude',
+      configPath
+    );
+
+    expect(fs.existsSync(path.join(tmpDir, 'archive'))).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('reports an archive failure on stderr without throwing', () => {
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(() => archiveHookTranscript('not json', 'claude', configPath)).not.toThrow();
+      expect(spy.mock.calls.map((c) => String(c[0]))).toContainEqual(
+        expect.stringMatching(/^kizami archive error \(skipped\): SyntaxError/)
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('archives the raw transcript before chunking', async () => {
+    const projDir = path.join(tmpDir, 'projects', '-proj');
+    fs.mkdirSync(projDir, { recursive: true });
+    const transcript = path.join(projDir, 'cccc3333.jsonl');
+    fs.copyFileSync(fixtureTranscript, transcript);
+
+    await handleSave(
+      { session_id: 'cccc3333', transcript_path: transcript, cwd: tmpDir },
+      configPath
+    );
+
+    expect(fs.existsSync(path.join(tmpDir, 'archive', '-proj', 'cccc3333.jsonl'))).toBe(true);
+  });
 
   it('should parse transcript and save chunks to DB', async () => {
     await handleSave(
@@ -220,6 +317,52 @@ describe('handleSave', () => {
     const sessions = store.getSessionList();
     expect(sessions.filter((s) => s.sessionId === 'reentry')).toHaveLength(1);
     db.close();
+  });
+});
+
+describe('runSave archiving', () => {
+  it('archives the transcript when the save hook runs for claude', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-runsave-'));
+    try {
+      const cfgPath = path.join(tmpDir, 'config.json');
+      fs.writeFileSync(
+        cfgPath,
+        JSON.stringify({
+          database: { path: path.join(tmpDir, 'test.db') },
+          storage: {
+            jsonlDir: path.join(tmpDir, 'jsonl'),
+            transcriptArchiveDir: path.join(tmpDir, 'archive'),
+          },
+        })
+      );
+      const projDir = path.join(tmpDir, 'projects', '-proj');
+      fs.mkdirSync(projDir, { recursive: true });
+      const transcript = path.join(projDir, 'abab1212.jsonl');
+      fs.copyFileSync(path.resolve(__dirname, '../fixtures/sample-transcript.jsonl'), transcript);
+      const env = { ...process.env };
+      delete env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      delete env.KIZAMI_JSONL_DIR;
+
+      const result = spawnSync(
+        process.execPath,
+        ['dist/cli.js', 'save', '--stdin', '--runtime', 'claude', '--config', cfgPath],
+        {
+          cwd: path.resolve(__dirname, '../..'),
+          env,
+          input: JSON.stringify({
+            session_id: 'abab1212',
+            transcript_path: transcript,
+            cwd: tmpDir,
+            hook_event_name: 'Stop',
+          }),
+        }
+      );
+
+      expect(result.status).toBe(0);
+      expect(fs.existsSync(path.join(tmpDir, 'archive', '-proj', 'abab1212.jsonl'))).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

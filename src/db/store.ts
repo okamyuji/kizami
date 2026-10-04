@@ -136,7 +136,7 @@ export class Store {
     const row = this.db
       .prepare(
         `
-      SELECT id, session_id, project_path, chunk_index, content, role, metadata, created_at, token_count
+      SELECT id, external_id, session_id, project_path, chunk_index, content, role, metadata, created_at, token_count
       FROM chunks WHERE id = ?
     `
       )
@@ -144,6 +144,21 @@ export class Store {
 
     if (!row) return undefined;
     return this.rowToChunk(row);
+  }
+
+  /** recover が取り込んだまま、hook の checkpoint に置き換わっていない行があるか。 */
+  countLegacyRows(sessionId: string): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS n FROM chunks WHERE session_id = ? AND turn_key IS NULL')
+      .get(sessionId) as { n: number };
+    return row.n;
+  }
+
+  getSessionTurnKeys(sessionId: string): string[] {
+    const rows = this.db
+      .prepare('SELECT DISTINCT turn_key FROM chunks WHERE session_id = ? AND turn_key IS NOT NULL')
+      .all(sessionId) as Array<{ turn_key: string }>;
+    return rows.map((row) => row.turn_key);
   }
 
   getSession(sessionId: string): Session | undefined {
@@ -592,6 +607,7 @@ export class Store {
 
     return {
       id: row['id'] as number,
+      externalId: (row['external_id'] as string | null | undefined) ?? undefined,
       sessionId: row['session_id'] as string,
       projectPath: row['project_path'] as string,
       chunkIndex: row['chunk_index'] as number,

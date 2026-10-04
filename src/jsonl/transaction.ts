@@ -100,7 +100,14 @@ export function isJsonlV2Payload(value: unknown): value is JsonlV2Payload {
       typeof value.txId === 'string' &&
       typeof value.sessionId === 'string' &&
       isNonNegativeInteger(value.historyEpoch) &&
-      value.reason === 'legacy_mismatch'
+      (value.reason === 'legacy_mismatch' || value.reason === 'deleted')
+    );
+  }
+  if (value.type === 'chunk_delete') {
+    return (
+      typeof value.txId === 'string' &&
+      typeof value.sessionId === 'string' &&
+      typeof value.externalId === 'string'
     );
   }
   return value.type === 'turn_checkpoint' && isTurnCheckpointPayload(value);

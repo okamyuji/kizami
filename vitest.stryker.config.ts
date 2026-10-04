@@ -1,9 +1,20 @@
 import { defineConfig } from 'vitest/config';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 export default defineConfig({
   resolve: { alias: { '@': resolve(__dirname, 'src') } },
   test: {
+    // threads では better-sqlite3 を含む実行が SIGSEGV で止まる(2回再現)。forks では完走した
+    pool: 'forks',
+    env: {
+      KIZAMI_TRANSCRIPT_ARCHIVE_DIR: join(tmpdir(), 'kizami-test-transcripts'),
+      // 上の上書きが変異体やテストで外れても、既定パスが実ホームに落ちないようにする。
+      XDG_DATA_HOME: join(tmpdir(), 'kizami-test-xdg', 'data'),
+      XDG_CONFIG_HOME: join(tmpdir(), 'kizami-test-xdg', 'config'),
+      XDG_CACHE_HOME: join(tmpdir(), 'kizami-test-xdg', 'cache'),
+      CLAUDE_CONFIG_DIR: join(tmpdir(), 'kizami-test-claude'),
+    },
     include: [
       'tests/execution/**/*.test.ts',
       'tests/checkpoint/identity.test.ts',
@@ -24,6 +35,22 @@ export default defineConfig({
       'tests/parser/transcript.test.ts',
       'tests/config.test.ts',
       'tests/cli.test.ts',
+      'tests/archive/store.test.ts',
+      'tests/archive/resolve.test.ts',
+      'tests/archive/show.test.ts',
+      'tests/archive/resume.test.ts',
+      'tests/hooks/save.test.ts',
+      'tests/search/archive-scan.test.ts',
+      'tests/archive/deletions.test.ts',
+      'tests/jsonl/deletion.test.ts',
+      'tests/hooks/refresh.test.ts',
+      'tests/jsonl/self_heal.test.ts',
+      'tests/jsonl/transaction.test.ts',
+      'tests/hooks/recover.test.ts',
+      'tests/search/fts.test.ts',
+      'tests/hooks/skill.test.ts',
+      'tests/test-env.test.ts',
+      'tests/hooks/setup.test.ts',
     ],
   },
 });

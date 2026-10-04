@@ -8,6 +8,7 @@ import { initializeSchema, initializeHybridSchema } from '@/db/schema';
 import { Store } from '@/db/store';
 import { parseTranscript } from '@/parser/transcript';
 import { buildChunks } from '@/parser/chunker';
+import { archiveTranscript } from '@/archive/store';
 import { runAutoMaintenance } from '@/maintenance/auto';
 import { JsonlWriter } from '@/jsonl/writer';
 import { chunksToJsonlRecords } from '@/jsonl/converter';
@@ -48,6 +49,12 @@ export async function handleSave(
     // transcript の jsonl は Claude Code 側が rotate/削除することがあるため、
     // 既に存在しない場合は silently skip する (ハーネス由来の状態でユーザー対処不能)。
     if (!fs.existsSync(input.transcript_path)) return;
+
+    try {
+      archiveTranscript(input.transcript_path, config.storage.transcriptArchiveDir);
+    } catch (err) {
+      process.stderr.write(`kizami archive error (skipped): ${String(err)}\n`);
+    }
 
     const messages = await parseTranscript(input.transcript_path);
     if (messages.length === 0) return;
@@ -133,6 +140,23 @@ export async function handleSave(
   }
 }
 
+/** Claude Code が生ログを消す前に保管する。保管に失敗しても hook の保存は続ける。 */
+export function archiveHookTranscript(
+  raw: string,
+  runtime: HookRuntime,
+  configPath?: string
+): void {
+  if (runtime !== 'claude') return;
+  try {
+    const { transcript_path: file } = JSON.parse(raw) as { transcript_path: string };
+    // 欠けた値・文字列でない値・無いパスのどれにも fs.existsSync は false を返す。
+    if (!fs.existsSync(file)) return;
+    archiveTranscript(file, loadConfig(configPath).storage.transcriptArchiveDir);
+  } catch (err) {
+    process.stderr.write(`kizami archive error (skipped): ${String(err)}\n`);
+  }
+}
+
 export async function runSave(configPath?: string, runtime: HookRuntime = 'claude'): Promise<void> {
   process.on('SIGINT', () => {});
   process.on('SIGTERM', () => {});
@@ -149,6 +173,7 @@ export async function runSave(configPath?: string, runtime: HookRuntime = 'claud
       /* malformed input handled below */
     }
 
+    archiveHookTranscript(raw, runtime, configPath);
     const { checkpointStop, checkpointSessionEnd } = await import('@/checkpoint/service');
 
     if (eventName === 'Stop' || (!eventName && runtime !== 'kimi')) {

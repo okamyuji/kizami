@@ -2,7 +2,9 @@ import { afterEach, describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { claudeAdapter } from '@/checkpoint/adapters/claude';
+import { claudeAdapter, buildClaudeTurnCandidates } from '@/checkpoint/adapters/claude';
+import { createTurnKey } from '@/checkpoint/identity';
+import type { TranscriptMessage } from '@/parser/transcript';
 import { getDefaultConfig } from '@/config';
 
 const tempDirs: string[] = [];
@@ -183,5 +185,65 @@ describe('claudeAdapter', () => {
     );
 
     expect(result.candidates[0].projectPath).toBe('/shared/project');
+  });
+});
+
+describe('buildClaudeTurnCandidates', () => {
+  const u = (text: string, timestamp?: string): TranscriptMessage => ({
+    kind: 'user',
+    sessionId: 's1',
+    timestamp,
+    text,
+  });
+  const a = (text: string, timestamp?: string): TranscriptMessage => ({
+    kind: 'assistant',
+    sessionId: 's1',
+    timestamp,
+    content: [{ type: 'text', text }],
+    toolResults: [],
+  });
+
+  it('builds one candidate per answered user turn with the Stop hook turn keys', () => {
+    const messages = [
+      a('stray', 't0'),
+      u('q1', 't1'),
+      a('a1', 't2'),
+      u('unanswered', 't3'),
+      u('q2', 't4'),
+      a('a2', 't5'),
+    ];
+
+    const candidates = buildClaudeTurnCandidates(messages, 's1', '/w/p', 123, 'now');
+
+    expect(candidates.map((c) => c.turnKey)).toEqual([
+      createTurnKey('claude', 's1', 'offset:1'),
+      createTurnKey('claude', 's1', 'offset:4'),
+    ]);
+    expect(candidates.map((c) => c.sourceOrder)).toEqual([
+      '00000000000000000002',
+      '00000000000000000005',
+    ]);
+    expect(candidates.map((c) => [c.prompt, c.assistant])).toEqual([
+      ['q1', 'a1'],
+      ['q2', 'a2'],
+    ]);
+    expect(candidates[0].messages).toEqual([messages[1], messages[2]]);
+    expect(candidates[0]).toMatchObject({
+      runtime: 'claude',
+      sessionId: 's1',
+      projectPath: '/w/p',
+      observedThrough: { kind: 'source_offset', generation: 0, offset: 123 },
+    });
+  });
+
+  it('uses the time of the last message in the turn, or the fallback when it has none', () => {
+    const candidates = buildClaudeTurnCandidates(
+      [u('q1', 't1'), a('a1', 't2'), u('q2', 't3'), a('a2')],
+      's1',
+      '/w/p',
+      0,
+      'fallback'
+    );
+    expect(candidates.map((c) => c.completedAt)).toEqual(['t2', 'fallback']);
   });
 });

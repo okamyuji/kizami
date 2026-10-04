@@ -17,6 +17,8 @@ Claude Codeのセッション会話を自動的に記録し、過去の議論や
 - hybridモードではRuri v3日本語embeddingによるベクトル検索も利用できます
 - DB肥大化を防ぐ自動メンテナンス機能を内蔵しています(90日超の古いチャンク・実行観測の削除、サイズ上限制御)
 - CLIから記憶の検索、編集、削除ができます
+- 会話の生ログを保管し、`kizami show`で読み返し、`kizami resume`で再開できます。Claude Codeが期間経過で消した会話も、保管側には残ります
+- `kizami-recall`スキルにより、「あれ思い出して」のような依頼を受けたClaudeが過去の会話を探して答えます
 
 ## 設計原則
 
@@ -32,21 +34,21 @@ Claude Codeのセッション会話を自動的に記録し、過去の議論や
 
 ## 類似ツールとの比較
 
-| 領域               | sui-memory                        | claude-mem                    | Kizami                                            |
-| ------------------ | --------------------------------- | ----------------------------- | ------------------------------------------------- |
-| 言語               | Python                            | Bun/Python/JS                 | TypeScript                                        |
-| ランタイム依存     | sentence-transformers, sqlite-vec | Chroma, Claude Agent SDK等    | better-sqlite3のみ(coreモード)                    |
-| モデルダウンロード | Ruri v3-310m (約600MB)            | 内部embedding                 | coreでは不要。hybridではRuri v3-30m (約37MB)      |
-| チャンク分割       | Q&A形式ルールベース               | AI圧縮(APIトークン消費あり)   | ルールベース(トークン消費ゼロ)                    |
-| データモデル       | Q&Aペア                           | observation + session summary | ターンベースチャンク + メタデータ                 |
-| 検索               | RRF (FTS5 + ベクトル)             | FTS5 + Chroma + 3層段階開示   | FTS5 + BM25 + 時間減衰 + リランカー(+ RRF hybrid) |
-| 記憶注入           | 明示的検索のみ                    | MCP Server経由で明示的検索    | UserPromptSubmit hookで自動注入(常時参照)         |
-| セットアップ       | `uv sync`                         | npm install -g                | `npm link` + `kizami setup`                       |
-| Web UI             | なし                              | localhost:37777で可視化       | なし                                              |
-| 記憶管理           | なし                              | Web UI経由                    | CLI経由で編集、削除、エクスポート、マージ         |
-| DB肥大化対策       | なし                              | AI圧縮による暗黙的な削減      | 自動メンテナンス(90日超削除、サイズ上限制御)      |
-| プライバシータグ   | なし                              | `<private>`タグで除外可能     | なし                                              |
-| observation分類    | なし                              | bugfix, feature等を自動分類   | なし                                              |
+| 領域               | sui-memory                        | claude-mem                    | Kizami                                                                     |
+| ------------------ | --------------------------------- | ----------------------------- | -------------------------------------------------------------------------- |
+| 言語               | Python                            | Bun/Python/JS                 | TypeScript                                                                 |
+| ランタイム依存     | sentence-transformers, sqlite-vec | Chroma, Claude Agent SDK等    | better-sqlite3のみ(coreモード)                                             |
+| モデルダウンロード | Ruri v3-310m (約600MB)            | 内部embedding                 | coreでは不要。hybridではRuri v3-30m (約37MB)                               |
+| チャンク分割       | Q&A形式ルールベース               | AI圧縮(APIトークン消費あり)   | ルールベース(トークン消費ゼロ)                                             |
+| データモデル       | Q&Aペア                           | observation + session summary | ターンベースチャンク + メタデータ                                          |
+| 検索               | RRF (FTS5 + ベクトル)             | FTS5 + Chroma + 3層段階開示   | FTS5 + BM25 + 時間減衰 + リランカー(+ RRF hybrid)                          |
+| 記憶注入           | 明示的検索のみ                    | MCP Server経由で明示的検索    | UserPromptSubmit hookで自動注入(常時参照)と、kizami-recallスキルによる想起 |
+| セットアップ       | `uv sync`                         | npm install -g                | `npm link` + `kizami setup`                                                |
+| Web UI             | なし                              | localhost:37777で可視化       | なし                                                                       |
+| 記憶管理           | なし                              | Web UI経由                    | CLI経由で編集、削除、エクスポート、マージ                                  |
+| DB肥大化対策       | なし                              | AI圧縮による暗黙的な削減      | 自動メンテナンス(90日超削除、サイズ上限制御)                               |
+| プライバシータグ   | なし                              | `<private>`タグで除外可能     | なし                                                                       |
+| observation分類    | なし                              | bugfix, feature等を自動分類   | なし                                                                       |
 
 ### Kizamiにあってclaude-memにない機能
 
@@ -57,6 +59,7 @@ Claude Codeのセッション会話を自動的に記録し、過去の議論や
 - CLI経由での記憶の直接編集、削除、エクスポート
 - 自動メンテナンスによるDB肥大化防止
 - 類似チャンクの検出とマージ
+- 会話の生ログの保管と、`claude -r`による過去セッションの再開
 
 ### claude-memにあってKizamiにない機能
 
@@ -139,6 +142,8 @@ Codex でも記憶保存・注入を有効にしたい場合だけ `kizami setup
   - **SessionStart hook でセッション開始時にプロジェクト直近Q&Aを冒頭注入します (v0.2.0〜)**
   - SessionEnd hookでセッション終了時に会話を自動保存します
   - UserPromptSubmit hookでプロンプト送信時に関連記憶を自動注入します
+- `~/.claude/skills/kizami-recall/SKILL.md`に想起用のスキルを書き込みます
+- `~/.claude/projects/`にある既存の会話をDBへ取り込み、取り込んだ件数を`Imported past sessions: N`と表示します
 
 `--target codex` を指定した場合は Codex の `~/.codex/hooks.json` に以下を追加します。
 
@@ -147,6 +152,16 @@ Codex でも記憶保存・注入を有効にしたい場合だけ `kizami setup
 - Stop hookで `last_assistant_message` と一時保存したプロンプトを結合し、JSONL正本へ保存します
 
 Codex は hook の信頼レビューが必要になる場合があります。セットアップ後に Codex 側で `/hooks` を実行し、Kizami hook を確認してください。
+
+### 自動注入を使わない設定
+
+自動注入を使わず、過去ログの検索と想起だけを使う場合は`--recall-only`を付けます。
+
+```bash
+kizami setup --recall-only
+```
+
+この指定では、保存用のhook（StopとSessionEnd）と`kizami-recall`スキルだけを入れます。UserPromptSubmitとSessionStartの自動注入hookは入れず、既に入っていれば外します。保存用のhookを残すのは、生ログの保管と検索用の取り込みに使うためです。自動注入hookを戻したいときは、`--recall-only`を付けずに`kizami setup`を実行し直してください。使えるのは`--target claude`のときだけです。他のtargetと組み合わせると、エラーで終了します。
 
 ### v0.1.1 / v0.1.2 からのアップグレード
 
@@ -182,6 +197,44 @@ kizami embed --backfill
 
 ```bash
 kizami search "React Hook Form"
+```
+
+検索は現在のプロジェクトから始めます。見つからなければ全プロジェクトを探し、結果の前に`No results in this project. Results from other projects:`と表示します。それでも見つからない場合は、保管済みの生ログのうち`maintenance.maxChunkAgeDays`（既定90日）より古いファイルを探します。古いチャンクは自動メンテナンスで削除されるので、その期間の会話を拾うのがこの段階の役割です。`-`、`/`、`.`を含む語（例 `better-sqlite3`、`src/cli.ts`）もそのまま検索できます。
+
+検索を始める前に、`~/.claude/projects/`にあってDBに無い会話を取り込みます。取り込み済みの場合、この処理にかかる時間は0.1秒前後です。
+
+### 過去セッションの想起
+
+`kizami setup`は`~/.claude/skills/kizami-recall/SKILL.md`を書き込みます。Claude Codeは「あれ思い出して」「前に〜したやつ」「previous session」のような依頼を受けるとこのスキルを起動します。スキルは`kizami search`で候補を探し、`kizami show`で該当セッションを読んでから答える流れです。`/kizami-recall <検索語>`と入力して直接呼ぶこともできます。
+
+同じ名前のスキルを自分で置いている場合、`kizami setup`はそのファイルを上書きせずにエラーで終了します。`kizami setup uninstall`が削除するのは、kizamiが書いたスキルだけです。
+
+### セッションの表示
+
+```bash
+kizami show 1831b2                  # セッションIDの先頭4文字以上で指定します
+kizami show 1831b2 --max-chars 0    # 全ターンを表示します
+```
+
+`kizami show`は保管済みの生ログか`~/.claude/projects/`の会話を読み、先頭にセッションID、作業ディレクトリ、ブランチ、期間、ターン数を表示します。既定の上限は30000文字で、超える分は古いターンから省き、省いたターン数を表示に含めます。指定したIDが複数のセッションに当たる場合、`kizami show`は候補を一覧にして、終了コード1で終わります。
+
+### セッションの再開
+
+```bash
+kizami resume 1831b2
+kizami resume 1831b2 -- -p "続きをお願いします"    # -- の後ろはclaudeへそのまま渡します
+```
+
+`kizami resume`は、記録された作業ディレクトリで`claude -r <セッションID>`を起動します。Claude Codeが元の会話ファイルを消していた場合は、保管済みの生ログを`~/.claude/projects/`へ書き戻してから再開します。作業ディレクトリが無くなっている場合は再開せず、`kizami show`で読むよう案内します。
+
+### 生ログの保管
+
+Stop hookとSessionEnd hookが動くたびに、そのセッションの生ログを`~/.local/share/kizami/transcripts/<プロジェクトのディレクトリ名>/<セッションID>.jsonl`へ複写します。保管側が元のファイルより古くない場合は複写を省きます。macOSのAPFSでは`cp -c`によるcloneで複写するため、元のファイルが残っている間はディスクの使用量が増えません。
+
+Claude Codeは設定`cleanupPeriodDays`の日数を過ぎた会話を消しますが、kizamiは保管側のコピーを消しません。保管側が唯一のコピーになる場合があるので、バックアップの対象に含めてください。hookを入れる前の会話は、次のコマンドでまとめて保管できます。
+
+```bash
+kizami archive
 ```
 
 ### 検証済みエラー解決記録の検索 (v0.6.0〜)
@@ -231,11 +284,19 @@ kizami delete --before 2024-01-01
 kizami delete --chunk 42
 ```
 
+`--session`と`--chunk`による削除は、DBと同じディレクトリの`deletions.json`に記録します。セッションはIDを、チャンクは本文のSHA-256を記録し、本文そのものは残しません。削除したセッションは、`kizami show`、`kizami resume`、保管済み生ログの検索、会話の取り込み（`kizami recover`）の対象から外れ、保管済みの生ログも削除されます。削除したチャンクは、`kizami show`の表示で`[deleted]`に置き換わります。`--before`による削除は保存期間の整理として扱います。保管済みの生ログは消えず、`kizami show`や保管済み生ログの検索で読めます。会話の本文を消したい場合は`--session`を使ってください。
+
+`--session`と`--chunk`による削除は、JSONL正本にも記録されます。セッションの削除は中身の無い`session_reset`として、チャンクの削除は`chunk_delete`として書くので、`kizami rebuild`で作り直したDBにも削除したものは戻りません。正本への書き込みに失敗した場合、kizamiはDBも生ログも消さずに終了します。削除したセッションをClaude Codeで続けると、削除の後に保存されたターンだけが記録として残ります。
+
+この記録を含むJSONLは、この機能より前の版のkizamiでは`kizami rebuild`できません。古い版は`unknown record version/type`で処理を止めます。保存は古い版でも続くため、Gitで正本を同期している場合は、すべてのマシンのkizamiを更新してから削除してください。`external_id`を持たない古いチャンクは正本に記録できないので、先に`kizami migrate-to-jsonl`で付与しておく必要があります。
+
 ### 古いメモリの一括削除
 
 ```bash
 kizami prune --older-than 90d
 ```
+
+`prune`もDBのチャンクだけを消します。保管済みの生ログは残ります。
 
 ### エクスポート
 
@@ -253,6 +314,10 @@ hookが動かなかったセッションなど、`~/.claude/projects/` に残っ
 ```bash
 kizami recover
 ```
+
+`kizami setup`と`kizami search`はこの処理を自動で実行します。削除したセッションは取り込みません。
+
+取り込んだ後に会話が伸びた場合も、次の`kizami recover`で伸びた分を反映します。kizamiは取り込んだときの生ログのサイズを`recover-state.json`（DBと同じディレクトリ）に記録し、サイズが変わった会話だけを読み直します。hookが保存している会話と、削除したチャンクを含む会話には手を加えません。
 
 ### SQLiteキャッシュの再構築 (v0.2.0〜)
 
@@ -1040,31 +1105,32 @@ maintenanceセクションは自動メンテナンスの設定です。embedding
 
 各設定項目の意味は以下のとおりです。
 
-| セクション  | キー                        | デフォルト                        | 説明                                                                                                                 |
-| ----------- | --------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| database    | path                        | `~/.local/share/kizami/memory.db` | データベースファイル（キャッシュ層）のパスです                                                                       |
-| storage     | jsonlDir                    | `~/.local/share/kizami/jsonl`     | JSONL正本のディレクトリです。環境変数 `KIZAMI_JSONL_DIR` で上書き可能 (v0.2.0〜)                                     |
-| storage     | selfHealTailLines           | 100                               | save時の self-heal が走査する JSONL 末尾行数 (v0.2.0〜)                                                              |
-| search      | mode                        | `core`                            | 検索モードを指定します(`core`または`hybrid`)                                                                         |
-| search      | timeDecayHalfLifeDays       | 30                                | 時間減衰の半減期(日数)です                                                                                           |
-| search      | defaultLimit                | 5                                 | 検索結果のデフォルト件数です                                                                                         |
-| search      | projectScope                | true                              | `true`: 現プロジェクトのみ、`false`: 全プロジェクト、`"tiered"`: 現プロジェクト優先+クロスプロジェクトフォールバック |
-| search      | crossProjectPenalty         | 0.3                               | tieredモードでクロスプロジェクト結果に適用するスコア倍率(0-1)                                                        |
-| chunking    | maxTokensPerChunk           | 512                               | チャンクあたりの最大トークン数です                                                                                   |
-| chunking    | truncateToolOutputLines     | 20                                | ツール出力の先頭保持行数です                                                                                         |
-| chunking    | truncateToolOutputTailLines | 5                                 | ツール出力の末尾保持行数です                                                                                         |
-| hooks       | autoRecall                  | true                              | プロンプト送信時の自動記憶注入を有効にします                                                                         |
-| hooks       | recallLimit                 | 3                                 | 自動注入する記憶の最大件数です                                                                                       |
-| hooks       | minRelevanceScore           | 0                                 | 注入する記憶の最低関連度スコアです。0より大きい値を設定するとフォールバックカスケードが無効になります(推奨: 0.2)     |
-| hooks       | injectRecentCount           | 3                                 | SessionStart 時に冒頭注入する直近Q&Aの件数です (v0.2.0〜)                                                            |
-| maintenance | enabled                     | true                              | 自動メンテナンスを有効にします                                                                                       |
-| maintenance | intervalHours               | 24                                | メンテナンスの実行間隔(時間)です                                                                                     |
-| maintenance | maxChunkAgeDays             | 90                                | この日数を超えたチャンクを自動削除します                                                                             |
-| maintenance | maxDbSizeMB                 | 100                               | DBサイズがこの上限を超えたら古い順に削除します                                                                       |
-| embedding   | model                       | `sirasagi62/ruri-v3-30m-ONNX`     | hybridモードで使用するembeddingモデルです                                                                            |
-| embedding   | quantized                   | true                              | int8量子化モデルを使用します                                                                                         |
-| embedding   | dimensions                  | 256                               | embeddingの次元数です                                                                                                |
-| embedding   | cacheDir                    | `$XDG_CACHE_HOME/kizami/models`   | モデルのキャッシュディレクトリです                                                                                   |
+| セクション  | キー                        | デフォルト                          | 説明                                                                                                                 |
+| ----------- | --------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| database    | path                        | `~/.local/share/kizami/memory.db`   | データベースファイル（キャッシュ層）のパスです                                                                       |
+| storage     | jsonlDir                    | `~/.local/share/kizami/jsonl`       | JSONL正本のディレクトリです。環境変数 `KIZAMI_JSONL_DIR` で上書き可能 (v0.2.0〜)                                     |
+| storage     | selfHealTailLines           | 100                                 | save時の self-heal が走査する JSONL 末尾行数 (v0.2.0〜)                                                              |
+| storage     | transcriptArchiveDir        | `~/.local/share/kizami/transcripts` | 会話の生ログを保管するディレクトリです。環境変数`KIZAMI_TRANSCRIPT_ARCHIVE_DIR`で上書きできます                      |
+| search      | mode                        | `core`                              | 検索モードを指定します(`core`または`hybrid`)                                                                         |
+| search      | timeDecayHalfLifeDays       | 30                                  | 時間減衰の半減期(日数)です                                                                                           |
+| search      | defaultLimit                | 5                                   | 検索結果のデフォルト件数です                                                                                         |
+| search      | projectScope                | true                                | `true`: 現プロジェクトのみ、`false`: 全プロジェクト、`"tiered"`: 現プロジェクト優先+クロスプロジェクトフォールバック |
+| search      | crossProjectPenalty         | 0.3                                 | tieredモードでクロスプロジェクト結果に適用するスコア倍率(0-1)                                                        |
+| chunking    | maxTokensPerChunk           | 512                                 | チャンクあたりの最大トークン数です                                                                                   |
+| chunking    | truncateToolOutputLines     | 20                                  | ツール出力の先頭保持行数です                                                                                         |
+| chunking    | truncateToolOutputTailLines | 5                                   | ツール出力の末尾保持行数です                                                                                         |
+| hooks       | autoRecall                  | true                                | プロンプト送信時の自動記憶注入を有効にします                                                                         |
+| hooks       | recallLimit                 | 3                                   | 自動注入する記憶の最大件数です                                                                                       |
+| hooks       | minRelevanceScore           | 0                                   | 注入する記憶の最低関連度スコアです。0より大きい値を設定するとフォールバックカスケードが無効になります(推奨: 0.2)     |
+| hooks       | injectRecentCount           | 3                                   | SessionStart 時に冒頭注入する直近Q&Aの件数です (v0.2.0〜)                                                            |
+| maintenance | enabled                     | true                                | 自動メンテナンスを有効にします                                                                                       |
+| maintenance | intervalHours               | 24                                  | メンテナンスの実行間隔(時間)です                                                                                     |
+| maintenance | maxChunkAgeDays             | 90                                  | この日数を超えたチャンクを自動削除します                                                                             |
+| maintenance | maxDbSizeMB                 | 100                                 | DBサイズがこの上限を超えたら古い順に削除します                                                                       |
+| embedding   | model                       | `sirasagi62/ruri-v3-30m-ONNX`       | hybridモードで使用するembeddingモデルです                                                                            |
+| embedding   | quantized                   | true                                | int8量子化モデルを使用します                                                                                         |
+| embedding   | dimensions                  | 256                                 | embeddingの次元数です                                                                                                |
+| embedding   | cacheDir                    | `$XDG_CACHE_HOME/kizami/models`     | モデルのキャッシュディレクトリです                                                                                   |
 
 ### 推奨設定
 
@@ -1186,7 +1252,14 @@ kizami/
 │   │   ├── hybrid.ts           # スコアリング、重複排除、RRF統合
 │   │   ├── embedding.ts        # Ruri v3 embedding生成 (HF_HUB_OFFLINE デフォルト化)
 │   │   ├── reranker.ts         # キーワードベースリランキング
+│   │   ├── archive-scan.ts     # 保管済み生ログの全文走査 (検索の最終段)
 │   │   └── formatter.ts        # 出力フォーマット
+│   ├── archive/
+│   │   ├── store.ts            # 生ログの保管 (APFSではclone)
+│   │   ├── resolve.ts          # セッションIDの前方一致解決
+│   │   ├── show.ts             # 生ログの整形表示
+│   │   ├── resume.ts           # claude -r による再開と生ログの書き戻し
+│   │   └── deletions.ts        # 削除記録 (deletions.json) と表示時の伏せ字
 │   ├── import/
 │   │   └── claude-mem.ts       # claude-memインポート
 │   ├── maintenance/
@@ -1196,7 +1269,8 @@ kizami/
 │       ├── save.ts             # SessionEndハンドラ (JSONL先書き)
 │       ├── recall.ts           # UserPromptSubmitハンドラ
 │       ├── inject.ts           # v0.2.0: SessionStartハンドラ (冒頭注入)
-│       ├── setup.ts            # hook自動設定
+│       ├── setup.ts            # hook自動設定、--recall-only、既存会話の取り込み
+│       ├── skill.ts            # kizami-recall スキルの生成と削除
 │       └── embed.ts            # embedding一括生成
 ├── tools/
 │   └── doclint.mjs             # v0.6.0: docs/ 配下の設計書lint (pnpm doclint)

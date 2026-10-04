@@ -608,7 +608,7 @@ class LockedJsonlWriterImpl implements LockedJsonlWriter {
           endOffset: stat.size,
           payloadDigest,
           payloads: transaction.records.filter(
-            (r) => r.type === 'session_reset' || r.type === 'turn_checkpoint'
+            (r) => r.type !== 'tx_begin' && r.type !== 'tx_commit'
           ) as JsonlV2Payload[],
         },
       };
@@ -648,7 +648,7 @@ class LockedJsonlWriterImpl implements LockedJsonlWriter {
     const endOffset = beginOffset + Buffer.byteLength(data, 'utf-8');
 
     const payloads = transaction.records.filter(
-      (r) => r.type === 'session_reset' || r.type === 'turn_checkpoint'
+      (r) => r.type !== 'tx_begin' && r.type !== 'tx_commit'
     ) as JsonlV2Payload[];
 
     const committed: CommittedTransaction = {
@@ -797,6 +797,8 @@ class LockedJsonlWriterImpl implements LockedJsonlWriter {
     for (const payload of transaction.payloads) {
       if (payload.type === 'session_reset') {
         this.stmts.upsertEpoch.run(payload.sessionId, payload.historyEpoch);
+      } else if (payload.type === 'chunk_delete') {
+        continue;
       } else if (
         shouldAdvanceTurnHead(this.getTurnHead(payload.sessionId, payload.turnKey), payload)
       ) {

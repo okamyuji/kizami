@@ -111,6 +111,98 @@ function parseContentBlocks(value: unknown): ContentBlock[] {
   return blocks;
 }
 
+/** 1 行を解釈して messages に足す。ツール結果は直前の assistant に付ける。 */
+function appendLine(messages: TranscriptMessage[], line: string): void {
+  // JSON.parse は BOM と NBSP を空白として扱わないので、先に trim で落とす。
+  const trimmed = line.trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    // 空行と壊れた行は parsed が undefined のまま、次の isRecord で読み飛ばす。
+  }
+  if (!isRecord(parsed)) return;
+  const raw = parsed as RawLine;
+
+  // Skip compaction summaries
+  if (raw.isCompactSummary) return;
+
+  const sessionId = typeof raw.sessionId === 'string' ? raw.sessionId : '';
+  const timestamp = typeof raw.timestamp === 'string' ? raw.timestamp : undefined;
+
+  // Tool result: attach to preceding assistant message
+  if (isRecord(raw.toolUseResult)) {
+    const toolResult: ToolResult = {
+      toolUseId:
+        typeof raw.toolUseResult.tool_use_id === 'string' ? raw.toolUseResult.tool_use_id : '',
+      content: typeof raw.toolUseResult.content === 'string' ? raw.toolUseResult.content : '',
+      isError:
+        typeof raw.toolUseResult.is_error === 'boolean' ? raw.toolUseResult.is_error : undefined,
+    };
+    // Find last assistant message and attach
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].kind === 'assistant') {
+        (messages[i] as AssistantMessage).toolResults.push(toolResult);
+        break;
+      }
+    }
+    return;
+  }
+
+  if (!isRecord(raw.message)) return;
+  const role = raw.message.role;
+  const rawContent = raw.message.content;
+  const content = parseContentBlocks(rawContent);
+
+  if (role === 'user') {
+    if (content.length > 0) {
+      for (const block of content) {
+        if (block.type !== 'tool_result') continue;
+        const result = block as ToolResultContent;
+        const content =
+          typeof result.content === 'string'
+            ? result.content
+            : Array.isArray(result.content)
+              ? result.content.map((part) => part.text ?? '').join('')
+              : '';
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].kind === 'assistant') {
+            (messages[i] as AssistantMessage).toolResults.push({
+              toolUseId: result.tool_use_id,
+              content,
+              isError: result.is_error,
+            });
+            break;
+          }
+        }
+      }
+    }
+    const text = extractText(typeof rawContent === 'string' ? rawContent : content);
+    if (text) {
+      messages.push({
+        kind: 'user',
+        sessionId,
+        timestamp,
+        text,
+      });
+    }
+  } else if (role === 'assistant') {
+    messages.push({
+      kind: 'assistant',
+      sessionId,
+      timestamp,
+      content,
+      toolResults: [],
+    });
+  }
+}
+
+export function parseTranscriptText(text: string): TranscriptMessage[] {
+  const messages: TranscriptMessage[] = [];
+  for (const line of text.split(/\r?\n/)) appendLine(messages, line);
+  return messages;
+}
+
 export async function parseTranscript(filePath: string): Promise<TranscriptMessage[]> {
   const messages: TranscriptMessage[] = [];
 
@@ -119,91 +211,7 @@ export async function parseTranscript(filePath: string): Promise<TranscriptMessa
     crlfDelay: Infinity,
   });
 
-  for await (const line of rl) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-    if (!isRecord(parsed)) continue;
-    const raw = parsed as RawLine;
-
-    // Skip compaction summaries
-    if (raw.isCompactSummary) continue;
-
-    const sessionId = typeof raw.sessionId === 'string' ? raw.sessionId : '';
-    const timestamp = typeof raw.timestamp === 'string' ? raw.timestamp : undefined;
-
-    // Tool result: attach to preceding assistant message
-    if (isRecord(raw.toolUseResult)) {
-      const toolResult: ToolResult = {
-        toolUseId:
-          typeof raw.toolUseResult.tool_use_id === 'string' ? raw.toolUseResult.tool_use_id : '',
-        content: typeof raw.toolUseResult.content === 'string' ? raw.toolUseResult.content : '',
-        isError:
-          typeof raw.toolUseResult.is_error === 'boolean' ? raw.toolUseResult.is_error : undefined,
-      };
-      // Find last assistant message and attach
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].kind === 'assistant') {
-          (messages[i] as AssistantMessage).toolResults.push(toolResult);
-          break;
-        }
-      }
-      continue;
-    }
-
-    if (!isRecord(raw.message)) continue;
-    const role = raw.message.role;
-    const rawContent = raw.message.content;
-    const content = parseContentBlocks(rawContent);
-
-    if (role === 'user') {
-      if (content.length > 0) {
-        for (const block of content) {
-          if (block.type !== 'tool_result') continue;
-          const result = block as ToolResultContent;
-          const content =
-            typeof result.content === 'string'
-              ? result.content
-              : Array.isArray(result.content)
-                ? result.content.map((part) => part.text ?? '').join('')
-                : '';
-          for (let i = messages.length - 1; i >= 0; i--) {
-            if (messages[i].kind === 'assistant') {
-              (messages[i] as AssistantMessage).toolResults.push({
-                toolUseId: result.tool_use_id,
-                content,
-                isError: result.is_error,
-              });
-              break;
-            }
-          }
-        }
-      }
-      const text = extractText(typeof rawContent === 'string' ? rawContent : content);
-      if (text) {
-        messages.push({
-          kind: 'user',
-          sessionId,
-          timestamp,
-          text,
-        });
-      }
-    } else if (role === 'assistant') {
-      messages.push({
-        kind: 'assistant',
-        sessionId,
-        timestamp,
-        content,
-        toolResults: [],
-      });
-    }
-  }
+  for await (const line of rl) appendLine(messages, line);
 
   return messages;
 }

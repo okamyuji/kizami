@@ -31,6 +31,7 @@ export async function foldCanonicalHistory(files: string[]): Promise<CanonicalHi
   const turns = new Map<string, TurnCheckpointV2>();
   const turnsByEpoch = new Map<string, TurnCheckpointV2>();
   const resetSessions = new Set<string>();
+  const deletedChunkIds = new Set<string>();
   const sessionMaxEpoch = new Map<string, number>();
   const errors: JsonlFoldError[] = [];
   const committedPayloadDigests = new Map<string, Set<string>>();
@@ -68,6 +69,10 @@ export async function foldCanonicalHistory(files: string[]): Promise<CanonicalHi
       committedPayloadDigests.set(transaction.txId, digests);
 
       for (const payload of transaction.payloads) {
+        if (payload.type === 'chunk_delete') {
+          deletedChunkIds.add(payload.externalId);
+          continue;
+        }
         if (payload.type === 'session_reset') {
           resetSessions.add(payload.sessionId);
           const currentMax = sessionMaxEpoch.get(payload.sessionId) ?? 0;
@@ -125,13 +130,17 @@ export async function foldCanonicalHistory(files: string[]): Promise<CanonicalHi
   }
 
   // Remove legacy chunks for sessions that have a committed reset
-  const filteredLegacy = legacyChunks.filter((c) => !resetSessions.has(c.sessionId));
+  const filteredLegacy = legacyChunks.filter(
+    (c) => !resetSessions.has(c.sessionId) && !deletedChunkIds.has(c.id)
+  );
 
   // Select the maximum epoch first, then the maximum revision already chosen above.
   for (const checkpoint of turnsByEpoch.values()) {
     const maxEpoch = sessionMaxEpoch.get(checkpoint.sessionId) ?? checkpoint.historyEpoch;
     if (resetSessions.has(checkpoint.sessionId) && checkpoint.historyEpoch !== maxEpoch) continue;
-    turns.set(turnMapKey(checkpoint.sessionId, checkpoint.turnKey), checkpoint);
+    const parts = checkpoint.parts.filter((p) => !deletedChunkIds.has(p.externalId));
+    if (parts.length === 0) continue;
+    turns.set(turnMapKey(checkpoint.sessionId, checkpoint.turnKey), { ...checkpoint, parts });
   }
 
   const relevantErrors = errors.filter((error) => {
