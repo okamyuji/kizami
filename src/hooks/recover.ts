@@ -10,9 +10,11 @@ import { buildChunks } from '@/parser/chunker';
 import { JsonlWriter } from '@/jsonl/writer';
 import { chunksToJsonlRecords } from '@/jsonl/converter';
 import { loadDeletions, deletionsFile } from '@/archive/deletions';
+import { loadRecoverMarks, saveRecoverMarks, refreshIfGrown } from '@/hooks/refresh';
 
 export interface RecoverResult {
   recovered: number;
+  refreshed: number;
   skipped: number;
   errors: number;
   details: string[];
@@ -58,6 +60,7 @@ export async function recoverTranscripts(
 
   const result: RecoverResult = {
     recovered: 0,
+    refreshed: 0,
     skipped: 0,
     errors: 0,
     details: [],
@@ -67,6 +70,7 @@ export async function recoverTranscripts(
     initializeSchema(db);
     const store = new Store(db);
     const deleted = loadDeletions(deletionsFile(config.database.path));
+    const marks = loadRecoverMarks(config);
 
     const projectsDir = claudeProjectsDir ?? getClaudeProjectsDir();
     if (!fs.existsSync(projectsDir)) {
@@ -97,8 +101,25 @@ export async function recoverTranscripts(
         const sessionId = entry.name.replace(/\.jsonl$/, '');
         const transcriptPath = path.join(projectDir, entry.name);
 
-        if (store.hasSession(sessionId) || deleted.sessions.has(sessionId)) {
+        if (deleted.sessions.has(sessionId)) {
           result.skipped++;
+          continue;
+        }
+        if (store.hasSession(sessionId)) {
+          const outcome = await refreshIfGrown({
+            config,
+            store,
+            sessionId,
+            transcriptPath,
+            marks,
+            deletedChunkDigests: deleted.chunkDigests,
+          });
+          if (outcome === 'refreshed') {
+            result.refreshed++;
+            result.details.push(`${sessionId.slice(0, 8)} (refreshed)`);
+          } else {
+            result.skipped++;
+          }
           continue;
         }
 
@@ -132,6 +153,7 @@ export async function recoverTranscripts(
             lastMessage: lastHuman?.kind === 'user' ? lastHuman.text.slice(0, 200) : undefined,
           });
 
+          marks.set(sessionId, fs.statSync(transcriptPath).size);
           result.recovered++;
           result.details.push(`${sessionId.slice(0, 8)} (${chunks.length} chunks)`);
         } catch (err) {
@@ -141,6 +163,7 @@ export async function recoverTranscripts(
       }
     }
 
+    saveRecoverMarks(config, marks);
     return result;
   } finally {
     db.close();

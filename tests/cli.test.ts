@@ -30,6 +30,7 @@ import {
   cmdResume,
   cmdSetup,
   cmdSearchFresh,
+  cmdRecover,
 } from '../src/cli';
 
 // worker スレッドでは process.env.HOME を変えても os.homedir() に届かない。
@@ -1065,6 +1066,74 @@ describe('cli commands', () => {
         '--recall-only supports only --target claude.'
       );
       expect(fs.existsSync(path.join(home, 'HOME'))).toBe(false);
+    });
+  });
+
+  describe('cmdRecover', () => {
+    const prevHome = process.env['HOME'];
+    afterEach(() => {
+      if (prevHome === undefined) delete process.env['HOME'];
+      else process.env['HOME'] = prevHome;
+    });
+
+    it('says there is nothing to do when no transcript exists', async () => {
+      process.env['HOME'] = path.join(tmpDir, 'empty-home');
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      await cmdRecover({ config: configPath });
+      expect(log).toHaveBeenCalledWith('No unsaved transcripts found.');
+      log.mockRestore();
+    });
+
+    it('prints the counts when a transcript fails to import', async () => {
+      process.env['HOME'] = path.join(tmpDir, 'home-err');
+      const dir = path.join(tmpDir, 'home-err', '.claude', 'projects', '-p');
+      fs.mkdirSync(dir, { recursive: true });
+      const bad = path.join(dir, 'bad-0001.jsonl');
+      fs.writeFileSync(bad, '{}\n');
+      fs.chmodSync(bad, 0o000);
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await cmdRecover({ config: configPath });
+      } finally {
+        fs.chmodSync(bad, 0o600);
+      }
+      expect(log).toHaveBeenCalledWith('Errors:    1');
+      expect(log).not.toHaveBeenCalledWith('No unsaved transcripts found.');
+      log.mockRestore();
+    });
+
+    it('reports refreshed sessions even when nothing new was imported', async () => {
+      process.env['HOME'] = path.join(tmpDir, 'home');
+      const dir = path.join(tmpDir, 'home', '.claude', 'projects', '-p');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, 'rec-0001.jsonl');
+      const line = (o: object) => JSON.stringify(o) + '\n';
+      fs.writeFileSync(
+        file,
+        line({ type: 'user', message: { role: 'user', content: 'q1' } }) +
+          line({
+            type: 'assistant',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'a1' }] },
+          })
+      );
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      await cmdRecover({ config: configPath });
+      expect(log).toHaveBeenCalledWith('Recovered: 1');
+      fs.appendFileSync(
+        file,
+        line({ type: 'user', message: { role: 'user', content: 'q2' } }) +
+          line({
+            type: 'assistant',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'a2' }] },
+          })
+      );
+      log.mockClear();
+
+      await cmdRecover({ config: configPath });
+
+      expect(log).toHaveBeenCalledWith('Refreshed: 1');
+      expect(log).not.toHaveBeenCalledWith('No unsaved transcripts found.');
+      log.mockRestore();
     });
   });
 

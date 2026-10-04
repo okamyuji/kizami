@@ -146,6 +146,21 @@ export class Store {
     return this.rowToChunk(row);
   }
 
+  /** recover が取り込んだまま、hook の checkpoint に置き換わっていない行があるか。 */
+  hasLegacyRows(sessionId: string): boolean {
+    const row = this.db
+      .prepare('SELECT 1 FROM chunks WHERE session_id = ? AND turn_key IS NULL LIMIT 1')
+      .get(sessionId);
+    return row !== undefined;
+  }
+
+  getSessionTurnKeys(sessionId: string): string[] {
+    const rows = this.db
+      .prepare('SELECT DISTINCT turn_key FROM chunks WHERE session_id = ? AND turn_key IS NOT NULL')
+      .all(sessionId) as Array<{ turn_key: string }>;
+    return rows.map((row) => row.turn_key);
+  }
+
   getSession(sessionId: string): Session | undefined {
     const row = this.db
       .prepare(

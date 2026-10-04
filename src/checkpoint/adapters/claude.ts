@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import { applyProjectAlias } from '@/config';
 import { parseTranscript } from '@/parser/transcript';
-import type { TranscriptMessage } from '@/parser/transcript';
+import type { TranscriptMessage, UserMessage } from '@/parser/transcript';
 import type {
   PendingPromptV2,
   TurnCheckpointCandidate,
@@ -75,6 +75,57 @@ function extractLastAssistantText(messages: TranscriptMessage[], fromIndex: numb
   return '';
 }
 
+/**
+ * userIdx の発話から次の発話の手前までを 1 ターンとする candidate。turnKey は Stop hook と
+ * 同じ offset:<userIdx> で作る。recover の置き換えと hook の保存で同じターンを指すため。
+ */
+function turnCandidate(
+  messages: TranscriptMessage[],
+  userIdx: number,
+  base: { sessionId: string; projectPath: string; fileSize: number; completedAt: string }
+): TurnCheckpointCandidate {
+  const userMsg = messages[userIdx] as UserMessage;
+  const nextUser = messages.findIndex((m, i) => i > userIdx && m.kind === 'user');
+  const turnMessages = messages.slice(userIdx, nextUser === -1 ? messages.length : nextUser);
+  return {
+    runtime: 'claude',
+    sessionId: base.sessionId,
+    turnKey: createTurnKey('claude', base.sessionId, `offset:${userIdx}`),
+    sourceOrder: String(userIdx + 1).padStart(20, '0'),
+    observedThrough: { kind: 'source_offset', generation: 0, offset: base.fileSize },
+    projectPath: base.projectPath,
+    completedAt: base.completedAt,
+    prompt: userMsg.text,
+    assistant: extractAssistantText(messages, userIdx + 1),
+    messages: turnMessages,
+    executions: extractClaudeExecutions(turnMessages),
+  };
+}
+
+/** 応答のあるすべてのターンを candidate にする。completedAt はターン最後のメッセージの時刻。 */
+export function buildClaudeTurnCandidates(
+  messages: TranscriptMessage[],
+  sessionId: string,
+  projectPath: string,
+  fileSize: number,
+  fallbackTime: string
+): TurnCheckpointCandidate[] {
+  const candidates: TurnCheckpointCandidate[] = [];
+  messages.forEach((message, userIdx) => {
+    if (message.kind !== 'user') return;
+    const candidate = turnCandidate(messages, userIdx, {
+      sessionId,
+      projectPath,
+      fileSize,
+      completedAt: fallbackTime,
+    });
+    if (!candidate.messages.some((m) => m.kind === 'assistant')) return;
+    const last = candidate.messages[candidate.messages.length - 1];
+    candidates.push({ ...candidate, completedAt: last.timestamp ?? fallbackTime });
+  });
+  return candidates;
+}
+
 async function extractTurns(
   payload: ClaudeStopPayload,
   env: AdapterEnvironment,
@@ -146,11 +197,6 @@ async function extractTurns(
     }
   }
 
-  const userMsg = messages[lastUserIdx];
-  const prompt = userMsg.kind === 'user' ? userMsg.text : '';
-  const turnMessages = messages.slice(lastUserIdx);
-  const assistant = extractAssistantText(messages, lastUserIdx + 1);
-
   // Determine source identity
   const sourceIdentity =
     pendingPrompts.length > 0
@@ -174,20 +220,18 @@ async function extractTurns(
   projectPath = applyProjectAlias(env.config.storage.projectAliases, projectPath);
 
   const candidate: TurnCheckpointCandidate = {
-    runtime: 'claude',
-    sessionId: payload.session_id,
+    ...turnCandidate(messages, lastUserIdx, {
+      sessionId: payload.session_id,
+      projectPath,
+      fileSize,
+      completedAt: env.now().toISOString(),
+    }),
     turnKey,
     sourceOrder:
       pendingPrompts.length > 0
         ? pendingPrompts[pendingPrompts.length - 1].sourceOrder
         : String(lastUserIdx + 1).padStart(20, '0'),
     observedThrough,
-    projectPath,
-    completedAt: env.now().toISOString(),
-    prompt,
-    assistant,
-    messages: turnMessages,
-    executions: extractClaudeExecutions(turnMessages),
   };
 
   const pendingPaths = pendingPrompts.filter((p) => p.source.path).map((p) => p.source.path!);
