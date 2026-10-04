@@ -51,6 +51,11 @@ export default defineConfig({
     globals: true,
     env: {
       KIZAMI_TRANSCRIPT_ARCHIVE_DIR: join(tmpdir(), 'kizami-test-transcripts'),
+      // 上の上書きが変異体やテストで外れても、既定パスが実ホームに落ちないようにする。
+      XDG_DATA_HOME: join(tmpdir(), 'kizami-test-xdg', 'data'),
+      XDG_CONFIG_HOME: join(tmpdir(), 'kizami-test-xdg', 'config'),
+      XDG_CACHE_HOME: join(tmpdir(), 'kizami-test-xdg', 'cache'),
+      CLAUDE_CONFIG_DIR: join(tmpdir(), 'kizami-test-claude'),
     },
     exclude: [...configDefaults.exclude, '.stryker-tmp/**'],
   },

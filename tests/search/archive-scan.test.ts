@@ -109,9 +109,9 @@ describe('scanArchive', () => {
     expect(scanArchive('needle', tmp, 90 * DAY - 1, NOW).map((h) => h.sessionId)).toEqual(['edge']);
   });
 
-  it('falls back to the raw line when no message text holds the term', () => {
-    put('-a', 'o1', [{ type: 'tool', payload: 'needle-in-tool' }], 100);
-    expect(scanArchive('needle', tmp, 90 * DAY, NOW)[0].snippet).toContain('needle-in-tool');
+  it('does not match a term found only outside the conversation text', () => {
+    put('-a', 'o1', [{ type: 'tool', payload: 'needle-in-tool' }, user('hello')], 100);
+    expect(scanArchive('needle', tmp, 90 * DAY, NOW)).toEqual([]);
   });
 
   it('reads text blocks from array content and skips non-text blocks', () => {
@@ -120,7 +120,9 @@ describe('scanArchive', () => {
       'o1',
       [
         {
+          type: 'assistant',
           message: {
+            role: 'assistant',
             content: [
               null,
               'str',
@@ -132,7 +134,9 @@ describe('scanArchive', () => {
       ],
       100
     );
-    expect(scanArchive('needle', tmp, 90 * DAY, NOW)[0].snippet).toBe('\n\n\nthe needle here');
+    const { snippet } = scanArchive('needle', tmp, 90 * DAY, NOW)[0];
+    expect(snippet).toContain('the needle here');
+    expect(snippet).not.toContain('{');
   });
 
   it('survives malformed lines and non-text content', () => {
@@ -141,7 +145,7 @@ describe('scanArchive', () => {
     fs.writeFileSync(file, 'not json needle\n{"message":{"content":5}}\n{"message":null}\n');
     const t = new Date(NOW - 100 * DAY);
     fs.utimesSync(file, t, t);
-    expect(scanArchive('needle', tmp, 90 * DAY, NOW)[0].snippet).toBe('not json needle');
+    expect(scanArchive('needle', tmp, 90 * DAY, NOW)).toEqual([]);
   });
 
   it('truncates the snippet to 300 characters', () => {
@@ -151,15 +155,18 @@ describe('scanArchive', () => {
 
   it('returns an empty snippet shape safely and uses the first term for the snippet', () => {
     put('-a', 'o1', [user('alpha line'), user('beta line')], 100);
-    expect(scanArchive('beta alpha', tmp, 90 * DAY, NOW)[0].snippet).toBe('beta line');
+    expect(scanArchive('beta alpha', tmp, 90 * DAY, NOW)[0].snippet).toBe(
+      '[User]\nalpha line\n\n[User]\nbeta line'
+    );
   });
 
   it('ignores stray files at the archive root and non-jsonl files', () => {
     const old = new Date(NOW - 100 * DAY);
-    fs.writeFileSync(path.join(tmp, 'needle.jsonl'), 'needle');
+    const line = JSON.stringify(user('needle'));
+    fs.writeFileSync(path.join(tmp, 'needle.jsonl'), line);
     fs.utimesSync(path.join(tmp, 'needle.jsonl'), old, old);
     fs.mkdirSync(path.join(tmp, '-a'));
-    fs.writeFileSync(path.join(tmp, '-a', 'notes.txt'), 'needle');
+    fs.writeFileSync(path.join(tmp, '-a', 'notes.txt'), line);
     fs.utimesSync(path.join(tmp, '-a', 'notes.txt'), old, old);
     expect(scanArchive('needle', tmp, 0, NOW)).toEqual([]);
   });
@@ -174,22 +181,17 @@ describe('scanArchive', () => {
     expect(scanArchive('  alpha \t  beta  ', tmp, 90 * DAY, NOW)).toHaveLength(1);
   });
 
-  it('truncates a raw-line fallback snippet to 300 characters', () => {
-    put('-a', 'o1', [{ type: 'tool', payload: 'needle' + 'y'.repeat(500) }], 100);
-    expect(scanArchive('needle', tmp, 90 * DAY, NOW)[0].snippet).toHaveLength(300);
-  });
-
   it('ignores lines whose JSON has no message or is null', () => {
     fs.mkdirSync(path.join(tmp, '-a'));
     const file = path.join(tmp, '-a', 'odd.jsonl');
     fs.writeFileSync(file, 'null\n{"x":1}\n{"message":null}\n{"message":{}}\n{"note":"needle"}\n');
     fs.utimesSync(file, new Date(NOW - 100 * DAY), new Date(NOW - 100 * DAY));
-    expect(scanArchive('needle', tmp, 90 * DAY, NOW)[0].snippet).toBe('{"note":"needle"}');
+    expect(scanArchive('needle', tmp, 90 * DAY, NOW)).toEqual([]);
   });
 
   it('ignores a non-string text field inside array content', () => {
     put('-a', 'o1', [{ message: { content: [{ text: 42 }, null] }, n: '42' }], 100);
-    expect(scanArchive('42', tmp, 90 * DAY, NOW)[0].snippet).toContain('"text":42');
+    expect(scanArchive('42', tmp, 90 * DAY, NOW)).toEqual([]);
   });
 
   it('formats hits with date, short id and project dir', () => {

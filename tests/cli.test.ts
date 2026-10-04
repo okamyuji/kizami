@@ -204,7 +204,10 @@ describe('cli commands', () => {
       function putArchived(id: string, text: string, ageDays: number) {
         const file = path.join(archiveDir, '-proj', `${id}.jsonl`);
         fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, JSON.stringify({ message: { content: text } }) + '\n');
+        fs.writeFileSync(
+          file,
+          JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n'
+        );
         const t = new Date(Date.now() - ageDays * DAY);
         fs.utimesSync(file, t, t);
       }

@@ -20,6 +20,7 @@ export function resumeSession(
   if (!fs.existsSync(live)) {
     fs.mkdirSync(path.dirname(live), { recursive: true });
     fs.copyFileSync(session.path, live);
+    fs.chmodSync(live, 0o600);
   }
   const run = opts.spawn ?? spawnSync;
   const result = run('claude', ['-r', session.sessionId, ...passthrough], {

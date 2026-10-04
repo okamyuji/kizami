@@ -65,15 +65,13 @@ describe('archiveTranscript', () => {
   });
 
   it('throws and leaves no temp file when the copy fails', () => {
-    const dir = path.dirname(dest());
-    fs.mkdirSync(dir, { recursive: true });
-    fs.chmodSync(dir, 0o500);
+    fs.chmodSync(src, 0o000);
     try {
       expect(() => archiveTranscript(src, archive)).toThrow(/EACCES/);
     } finally {
-      fs.chmodSync(dir, 0o700);
+      fs.chmodSync(src, 0o600);
     }
-    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(fs.readdirSync(path.dirname(dest()))).toEqual([]);
   });
 
   it('recopies a same-size source that is newer than the archived copy', () => {
@@ -89,6 +87,23 @@ describe('archiveTranscript', () => {
     const st = fs.statSync(dest());
     expect(Math.floor(st.atimeMs)).toBe(Math.floor(st.mtimeMs));
     expect(Math.floor(st.mtimeMs)).toBe(Math.floor(fs.statSync(src).mtimeMs));
+  });
+
+  it('keeps the archive private: 0700 directories and a 0600 copy', () => {
+    fs.chmodSync(src, 0o644);
+    archiveTranscript(src, archive);
+    const dest = path.join(archive, path.basename(path.dirname(src)), path.basename(src));
+    expect(fs.statSync(archive).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.dirname(dest)).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(dest).mode & 0o777).toBe(0o600);
+  });
+
+  it('skips a transcript path whose project directory would leave the archive', () => {
+    // <projects>/<dir>/../../escape.jsonl: basename(dirname) is "..", so a naive join lands in tmp/.
+    const escaping = `${path.dirname(src)}/../../escape.jsonl`;
+    fs.writeFileSync(escaping, '{}\n');
+    expect(archiveTranscript(escaping, archive)).toBe('skipped');
+    expect(fs.readdirSync(tmp).sort()).toEqual(['escape.jsonl', 'projects']);
   });
 
   it('skips a missing file and a non-jsonl file', () => {
@@ -206,7 +221,9 @@ describe('archiveAll', () => {
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
       archiveAll(projects, path.join(tmp, 'archive'));
-      expect(String(spy.mock.calls[0][0])).toMatch(/^kizami archive: ffff\.jsonl: .*ENOTDIR/);
+      expect(String(spy.mock.calls[0][0])).toMatch(
+        /^kizami archive: ffff\.jsonl: Error: Private storage path is not a directory/
+      );
     } finally {
       spy.mockRestore();
     }

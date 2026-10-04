@@ -13,40 +13,12 @@ export interface ArchiveHit {
 
 const SNIPPET_CHARS = 300;
 
-// Stryker disable BlockStatement: catch を空にしても undefined が返り、呼び出し側の ?. が同じく読み飛ばすため区別できない
-function parseLine(line: string): unknown {
-  try {
-    return JSON.parse(line);
-  } catch {
-    return undefined; // 壊れた行は生のまま扱う
-  }
-}
-// Stryker restore BlockStatement
-
-function messageText(line: string): string | undefined {
-  const content = (parseLine(line) as { message?: { content?: unknown } } | null | undefined)
-    ?.message?.content;
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content.map((b) => (typeof b?.text === 'string' ? b.text : '')).join('\n');
-  }
-  return undefined;
-}
-
-function snippetFor(raw: string, term: string): string {
-  const lines = raw.split('\n');
-  for (const line of lines) {
-    const text = messageText(line);
-    if (text && text.toLowerCase().includes(term)) return text.slice(0, SNIPPET_CHARS);
-  }
-  // 呼び出し側が全 term の存在を確認済みなので、生の行は必ず見つかる。
-  const hit = lines.find((l) => l.toLowerCase().includes(term)) as string;
-  return hit.slice(0, SNIPPET_CHARS);
-}
-
 const SNIPPET_LEAD_CHARS = 100;
 
-/** 削除したチャンクに語があっても当たらないよう、伏せた本文で照合し直す。 */
+/**
+ * 生の JSON 行ではなく会話本文で照合し直す。JSON のキーだけに語がある行で当たらず、
+ * 削除したチャンクは伏せた本文になるので、そこにしか無い語でも当たらない。
+ */
 function keptSnippet(raw: string, terms: string[], deleted: Set<string>): string | undefined {
   const text = buildTurns(parseTranscriptText(raw))
     .map((turn) => redactTurnText(turnToText(turn), deleted))
@@ -89,11 +61,10 @@ export function scanArchive(
       if (now - mtimeMs <= olderThanMs) continue;
       const raw = fs.readFileSync(file, 'utf-8');
       const lower = raw.toLowerCase();
+      // 結果は keptSnippet の照合と同じ。全文を解析する前に、語の無いファイルを安く落とすためだけにある。
+      // Stryker disable next-line ConditionalExpression,MethodExpression: 上記の理由で結果が変わらない
       if (!terms.every((t) => lower.includes(t))) continue;
-      const snippet =
-        deletedChunkDigests.size === 0
-          ? snippetFor(raw, terms[0])
-          : keptSnippet(raw, terms, deletedChunkDigests);
+      const snippet = keptSnippet(raw, terms, deletedChunkDigests);
       if (snippet === undefined) continue;
       hits.push({ sessionId, dirName: dir.name, mtime: new Date(mtimeMs), snippet });
     }

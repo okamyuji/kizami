@@ -53,6 +53,13 @@ describe('resumeSession', () => {
     );
   });
 
+  it('restores the transcript with owner-only permissions', () => {
+    fs.chmodSync(session().path, 0o644);
+    resumeSession(session(), [], { projectsDir, spawn: fakeSpawn(0) });
+    const live = path.join(projectsDir, session().dirName, `${session().sessionId}.jsonl`);
+    expect(fs.statSync(live).mode & 0o777).toBe(0o600);
+  });
+
   it('restores the transcript before claude starts', () => {
     const live = path.join(projectsDir, '-w', 'abcd0001.jsonl');
     const spawn = vi.fn(() => ({

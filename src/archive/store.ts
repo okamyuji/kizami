@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { enforcePrivateDirectory } from '@/storage/permissions';
 
 export type ArchiveOutcome = 'copied' | 'current' | 'skipped';
 
@@ -48,6 +49,8 @@ export function archiveTranscript(transcriptPath: string, archiveDir: string): A
     path.basename(path.dirname(transcriptPath)),
     path.basename(transcriptPath)
   );
+  // 正規化されていない hook 入力（<dir>/../x.jsonl）は project 名が ".." になり、保管先の外を指す。
+  if (!path.resolve(dest).startsWith(path.resolve(archiveDir) + path.sep)) return 'skipped';
   try {
     // utimes 経由の往復で ms 未満が丸まるため、mtime は ms で比べ、size も併せて見る。
     const d = fs.statSync(dest);
@@ -57,12 +60,15 @@ export function archiveTranscript(transcriptPath: string, archiveDir: string): A
   } catch {
     /* 未保管 */
   }
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  // 会話本文を持つので、既存の JSONL と同じく本人だけが読めるようにする。
+  enforcePrivateDirectory(archiveDir);
+  enforcePrivateDirectory(path.dirname(dest));
   // 複写途中で落ちた不完全なファイルに新しい mtime が付くと、以後ずっと「最新」と
   // 誤判定される。一時ファイルに書き、元の mtime を移してから rename する。
   const tmp = `${dest}.${process.pid}.tmp`;
   try {
     copyPreferClone(transcriptPath, tmp);
+    fs.chmodSync(tmp, 0o600);
     fs.utimesSync(tmp, srcStat.mtimeMs / 1000, srcStat.mtimeMs / 1000);
     fs.renameSync(tmp, dest);
   } catch (err) {

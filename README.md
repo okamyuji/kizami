@@ -284,7 +284,7 @@ kizami delete --before 2024-01-01
 kizami delete --chunk 42
 ```
 
-`--session`と`--chunk`による削除は、DBと同じディレクトリの`deletions.json`に記録します。セッションはIDを、チャンクは本文のSHA-256を記録し、本文そのものは残しません。削除したセッションは、`kizami show`、`kizami resume`、保管済み生ログの検索、会話の取り込み（`kizami recover`）の対象から外れ、保管済みの生ログも削除されます。削除したチャンクは、`kizami show`の表示で`[deleted]`に置き換わります。`--before`による削除は保存期間の整理として扱い、生ログの表示には反映しません。
+`--session`と`--chunk`による削除は、DBと同じディレクトリの`deletions.json`に記録します。セッションはIDを、チャンクは本文のSHA-256を記録し、本文そのものは残しません。削除したセッションは、`kizami show`、`kizami resume`、保管済み生ログの検索、会話の取り込み（`kizami recover`）の対象から外れ、保管済みの生ログも削除されます。削除したチャンクは、`kizami show`の表示で`[deleted]`に置き換わります。`--before`による削除は保存期間の整理として扱います。保管済みの生ログは消えず、`kizami show`や保管済み生ログの検索で読めます。会話の本文を消したい場合は`--session`を使ってください。
 
 `--session`と`--chunk`による削除は、JSONL正本にも記録されます。セッションの削除は中身の無い`session_reset`として、チャンクの削除は`chunk_delete`として書くので、`kizami rebuild`で作り直したDBにも削除したものは戻りません。正本への書き込みに失敗した場合、kizamiはDBも生ログも消さずに終了します。削除したセッションをClaude Codeで続けると、削除の後に保存されたターンだけが記録として残ります。
 
@@ -295,6 +295,8 @@ kizami delete --chunk 42
 ```bash
 kizami prune --older-than 90d
 ```
+
+`prune`もDBのチャンクだけを消します。保管済みの生ログは残ります。
 
 ### エクスポート
 

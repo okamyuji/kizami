@@ -9,6 +9,11 @@ export default defineConfig({
     pool: 'forks',
     env: {
       KIZAMI_TRANSCRIPT_ARCHIVE_DIR: join(tmpdir(), 'kizami-test-transcripts'),
+      // 上の上書きが変異体やテストで外れても、既定パスが実ホームに落ちないようにする。
+      XDG_DATA_HOME: join(tmpdir(), 'kizami-test-xdg', 'data'),
+      XDG_CONFIG_HOME: join(tmpdir(), 'kizami-test-xdg', 'config'),
+      XDG_CACHE_HOME: join(tmpdir(), 'kizami-test-xdg', 'cache'),
+      CLAUDE_CONFIG_DIR: join(tmpdir(), 'kizami-test-claude'),
     },
     include: [
       'tests/execution/**/*.test.ts',
@@ -44,6 +49,7 @@ export default defineConfig({
       'tests/hooks/recover.test.ts',
       'tests/search/fts.test.ts',
       'tests/hooks/skill.test.ts',
+      'tests/test-env.test.ts',
       'tests/hooks/setup.test.ts',
     ],
   },
