@@ -15,6 +15,7 @@ import {
   hasKizamiTomlBlock,
 } from '@/hooks/toml';
 import type { TomlHook } from '@/hooks/toml';
+import { installRecallSkill, removeRecallSkill, RECALL_SKILL_NAME } from '@/hooks/skill';
 
 interface HookEntry {
   type: string;
@@ -42,6 +43,7 @@ export interface SetupOptions {
   configPath?: string;
   jsonlDir?: string;
   binPath?: string;
+  recallOnly?: boolean;
 }
 
 export type SetupTarget = 'claude' | 'codex' | 'kimi' | 'all';
@@ -93,15 +95,21 @@ function isEngramHook(hook: HookEntry): boolean {
   return hook.command.includes('# kizami-managed');
 }
 
-function mergeHooks(existing: HookMatcher[] | undefined, newMatcher: HookMatcher): HookMatcher[] {
-  if (!existing) return [newMatcher];
-  const cleaned = existing
+function withoutKizami(existing: HookMatcher[] | undefined): HookMatcher[] {
+  return (existing ?? [])
     .map((matcher) => ({
       ...matcher,
       hooks: matcher.hooks.filter((h) => !isEngramHook(h)),
     }))
     .filter((matcher) => matcher.hooks.length > 0);
-  return [...cleaned, newMatcher];
+}
+
+function mergeHooks(existing: HookMatcher[] | undefined, newMatcher: HookMatcher): HookMatcher[] {
+  return [...withoutKizami(existing), newMatcher];
+}
+
+function getSkillsDir(options?: SetupOptions): string {
+  return path.join(path.dirname(options?.settingsPath ?? getDefaultSettingsPath()), 'skills');
 }
 
 function writeEngramConfig(mode: 'core' | 'hybrid', configPath?: string): void {
@@ -237,10 +245,19 @@ function setupClaudeHooks(options?: SetupOptions): void {
 
   settings.hooks['Stop'] = mergeHooks(settings.hooks['Stop'], stopSaveHook);
   settings.hooks['SessionEnd'] = mergeHooks(settings.hooks['SessionEnd'], saveHook);
-  settings.hooks['UserPromptSubmit'] = mergeHooks(settings.hooks['UserPromptSubmit'], recallHook);
-  settings.hooks['SessionStart'] = mergeHooks(settings.hooks['SessionStart'], injectHook);
+  if (options?.recallOnly) {
+    for (const event of ['UserPromptSubmit', 'SessionStart']) {
+      const rest = withoutKizami(settings.hooks[event]);
+      if (rest.length > 0) settings.hooks[event] = rest;
+      else delete settings.hooks[event];
+    }
+  } else {
+    settings.hooks['UserPromptSubmit'] = mergeHooks(settings.hooks['UserPromptSubmit'], recallHook);
+    settings.hooks['SessionStart'] = mergeHooks(settings.hooks['SessionStart'], injectHook);
+  }
 
   writeSettings(settingsPath, settings);
+  installRecallSkill(getSkillsDir(options), kizamiCommand);
 }
 
 function setupCodexHooks(options?: SetupOptions): void {
@@ -393,10 +410,17 @@ function initializeKizamiStorage(options?: SetupOptions): void {
 
 export async function setupHooks(options?: SetupOptions): Promise<void> {
   const target = options?.target ?? 'claude';
+  if (options?.recallOnly && target !== 'claude') {
+    throw new Error('--recall-only supports only --target claude.');
+  }
 
   if (target === 'claude' || target === 'all') {
     setupClaudeHooks(options);
     console.log(`  Claude settings: ${options?.settingsPath ?? getDefaultSettingsPath()}`);
+    console.log(
+      `  Recall skill: ${path.join(getSkillsDir(options), RECALL_SKILL_NAME, 'SKILL.md')}`
+    );
+    if (options?.recallOnly) console.log('  Mode: recall-only (no automatic injection)');
   }
   if (target === 'codex' || target === 'all') {
     setupCodexHooks(options);
@@ -538,6 +562,7 @@ export function uninstallHooks(options?: SetupOptions): SetupStatus[] {
         removedPaths.add(settingsPath);
       }
     }
+    removeRecallSkill(getSkillsDir(options));
   }
   if (target === 'codex' || target === 'all') {
     const scope = options?.scope;

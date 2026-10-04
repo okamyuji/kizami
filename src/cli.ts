@@ -442,6 +442,7 @@ export async function cmdSetup(options: {
   target?: SetupTarget;
   scope?: SetupScope;
   configPath?: string;
+  recallOnly?: boolean;
 }): Promise<void> {
   await setupHooks({ ...options, configPath: options.configPath });
 }
@@ -697,6 +698,7 @@ Commands:
   setup             Auto-configure Claude Code hooks
                     --target claude|codex|kimi|all (default: claude)
                     setup status|uninstall for diagnostics/removal
+                    --recall-only: save hooks and the kizami-recall skill only (no auto-injection)
   prune             Bulk delete old memories
   export            Export as JSON/Markdown
   merge             Merge similar chunks
@@ -749,6 +751,7 @@ async function main(): Promise<void> {
       scope: { type: 'string' },
       backfill: { type: 'boolean', default: false },
       'from-month': { type: 'string' },
+      'recall-only': { type: 'boolean', default: false },
       'max-chars': { type: 'string' },
       version: { type: 'boolean', short: 'v', default: false },
     },
@@ -886,6 +889,7 @@ async function main(): Promise<void> {
       } else if (positionals[1] == null || positionals[1] === 'install') {
         await cmdSetup({
           hybrid: !!values['hybrid'],
+          recallOnly: !!values['recall-only'],
           target,
           scope,
           configPath: sharedOpts.config,

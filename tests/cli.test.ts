@@ -20,7 +20,16 @@ import {
   cmdArchive,
   cmdShow,
   cmdResume,
+  cmdSetup,
 } from '../src/cli';
+
+// worker スレッドでは process.env.HOME を変えても os.homedir() に届かない。
+// 既定パスが実ホームを指さないよう、homedir() を process.env.HOME に従わせる。
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  const homedir = (): string => process.env['HOME'] ?? actual.homedir();
+  return { ...actual, homedir, default: { ...actual, homedir } };
+});
 
 describe('cli commands', () => {
   let db: Database.Database;
@@ -903,6 +912,45 @@ describe('cli commands', () => {
       fs.mkdirSync(path.join(root, 'claude', 'projects', '-p', 'beef0001.jsonl'));
       await expect(cmdResume('beef', [], { config: none() })).rejects.toThrow();
       expect(process.exitCode).toBeUndefined();
+    });
+  });
+
+  describe('cmdSetup', () => {
+    const ENV_KEYS = ['HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'KIMI_CODE_HOME'] as const;
+    const saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
+    let home: string;
+
+    beforeEach(() => {
+      home = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-cmdsetup-'));
+      for (const key of ENV_KEYS) {
+        saved[key] = process.env[key];
+        process.env[key] = path.join(home, key);
+      }
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      for (const key of ENV_KEYS) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+      fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('passes recallOnly through: save hooks and the skill, no injection hooks', async () => {
+      await cmdSetup({ hybrid: false, recallOnly: true });
+
+      const claudeDir = path.join(home, 'HOME', '.claude');
+      const settings = JSON.parse(fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf-8'));
+      expect(Object.keys(settings.hooks).sort()).toEqual(['SessionEnd', 'Stop']);
+      expect(fs.existsSync(path.join(claudeDir, 'skills', 'kizami-recall', 'SKILL.md'))).toBe(true);
+    });
+
+    it('rejects recallOnly with a non-claude target before writing anything', async () => {
+      await expect(cmdSetup({ hybrid: false, recallOnly: true, target: 'codex' })).rejects.toThrow(
+        '--recall-only supports only --target claude.'
+      );
+      expect(fs.existsSync(path.join(home, 'HOME'))).toBe(false);
     });
   });
 });

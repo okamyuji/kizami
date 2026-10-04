@@ -33,6 +33,8 @@ export default defineConfig({
       'tests/hooks/save.test.ts',
       'tests/search/archive-scan.test.ts',
       'tests/search/fts.test.ts',
+      'tests/hooks/skill.test.ts',
+      'tests/hooks/setup.test.ts',
     ],
   },
 });
