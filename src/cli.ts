@@ -12,6 +12,8 @@ import { rankResults } from '@/search/hybrid';
 import type { ScoredResult } from '@/search/hybrid';
 import { formatResults } from '@/search/formatter';
 import { archiveAll, getClaudeProjectsDir } from '@/archive/store';
+import { resolveSession, SessionLookupError } from '@/archive/resolve';
+import { renderSession } from '@/archive/show';
 import { runSave } from '@/hooks/save';
 import { runRecall } from '@/hooks/recall';
 import { runInject } from '@/hooks/inject';
@@ -558,6 +560,32 @@ export function cmdArchive(options: { config?: string }): void {
   if (result.failed > 0) process.exitCode = 1;
 }
 
+export async function cmdShow(
+  idPrefix: string,
+  options: { config?: string; maxChars?: string }
+): Promise<void> {
+  const config = loadConfig(options.config);
+  const raw = options.maxChars ?? '30000';
+  const maxChars = Number(raw);
+  // Number('') は 0 になり「無制限」と誤解されるので、数字だけの文字列に限る
+  if (!/^\d+$/.test(raw)) {
+    console.error('--max-chars must be a non-negative integer.');
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const session = await resolveSession(idPrefix, {
+      archiveDir: config.storage.transcriptArchiveDir,
+      projectsDir: getClaudeProjectsDir(),
+    });
+    process.stdout.write(await renderSession(session, maxChars));
+  } catch (err) {
+    if (!(err instanceof SessionLookupError)) throw err;
+    console.error(err.message);
+    process.exitCode = 1;
+  }
+}
+
 export async function cmdRecover(options: { config?: string }): Promise<RecoverResult> {
   const result = await recoverTranscripts(options.config);
   if (result.recovered === 0 && result.errors === 0) {
@@ -628,6 +656,7 @@ Commands:
   merge             Merge similar chunks
   embed             Generate embeddings for hybrid mode (--backfill)
   archive           Copy raw transcripts from ~/.claude/projects into the kizami archive
+  show <id>         Print a past session transcript (--max-chars N, 0 = all)
   recover           Recover unsaved transcripts from ~/.claude/projects/
   import-claude-mem Import from claude-mem database
   inject            SessionStart hook: inject recent project Q&A
@@ -673,6 +702,7 @@ async function main(): Promise<void> {
       scope: { type: 'string' },
       backfill: { type: 'boolean', default: false },
       'from-month': { type: 'string' },
+      'max-chars': { type: 'string' },
       version: { type: 'boolean', short: 'v', default: false },
     },
   });
@@ -859,6 +889,20 @@ async function main(): Promise<void> {
     case 'archive':
       cmdArchive({ config: sharedOpts.config });
       break;
+
+    case 'show': {
+      const id = positionals[1];
+      if (!id) {
+        console.error('Usage: kizami show <session-id> [--max-chars N]');
+        process.exitCode = 1;
+        return;
+      }
+      await cmdShow(id, {
+        config: sharedOpts.config,
+        maxChars: values['max-chars'] as string | undefined,
+      });
+      break;
+    }
 
     case 'recover':
       await cmdRecover({ config: sharedOpts.config });

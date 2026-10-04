@@ -18,6 +18,7 @@ import {
   cmdExport,
   cmdEmbed,
   cmdArchive,
+  cmdShow,
 } from '../src/cli';
 
 describe('cli commands', () => {
@@ -621,6 +622,96 @@ describe('cli commands', () => {
       expect(process.exitCode).toBe(1);
       const lines = logSpy.mock.calls.map((c) => String(c[0]));
       expect(lines[1]).toContain('failed=1');
+    });
+  });
+
+  describe('cmdShow', () => {
+    let root: string;
+    let prevClaude: string | undefined;
+    let prevArchive: string | undefined;
+    let errSpy: ReturnType<typeof vi.spyOn>;
+    let outSpy: ReturnType<typeof vi.spyOn>;
+    const none = () => path.join(root, 'none.json');
+    const out = () => outSpy.mock.calls.map((c) => String(c[0])).join('');
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-cli-show-'));
+      prevClaude = process.env.CLAUDE_CONFIG_DIR;
+      prevArchive = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude');
+      process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = path.join(root, 'archive');
+      fs.mkdirSync(path.join(root, 'claude', 'projects', '-p'), { recursive: true });
+      const body = [
+        {
+          type: 'user',
+          sessionId: 'abcd1',
+          timestamp: '2026-09-01T00:00:00Z',
+          message: { role: 'user', content: 'hello there' },
+        },
+        {
+          type: 'assistant',
+          sessionId: 'abcd1',
+          timestamp: '2026-09-01T00:01:00Z',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'general kenobi' }] },
+        },
+      ];
+      fs.writeFileSync(
+        path.join(root, 'claude', 'projects', '-p', 'abcd1.jsonl'),
+        body.map((o) => JSON.stringify(o)).join('\n') + '\n'
+      );
+      errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      process.exitCode = undefined;
+    });
+
+    afterEach(() => {
+      errSpy.mockRestore();
+      outSpy.mockRestore();
+      process.exitCode = undefined;
+      if (prevClaude === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prevClaude;
+      if (prevArchive === undefined) delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      else process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = prevArchive;
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it.each(['-1', 'abc', '1.5', ''])('rejects --max-chars %j', async (bad) => {
+      await cmdShow('abcd', { config: none(), maxChars: bad });
+      expect(errSpy).toHaveBeenCalledWith('--max-chars must be a non-negative integer.');
+      expect(process.exitCode).toBe(1);
+      expect(outSpy).not.toHaveBeenCalled();
+    });
+
+    it('prints the session with the default limit', async () => {
+      await cmdShow('abcd', { config: none() });
+      expect(out()).toContain('Session: abcd1');
+      expect(out()).toContain('general kenobi');
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('accepts 0 as unlimited', async () => {
+      await cmdShow('abcd', { config: none(), maxChars: '0' });
+      expect(out()).toContain('general kenobi');
+      expect(out()).not.toContain('Omitted');
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('applies an explicit --max-chars', async () => {
+      await cmdShow('abcd', { config: none(), maxChars: '5' });
+      expect(out()).toContain('enobi');
+      expect(out()).not.toContain('general');
+    });
+
+    it('reports a lookup failure on stderr with exit code 1', async () => {
+      await cmdShow('ffff', { config: none() });
+      expect(errSpy).toHaveBeenCalledWith('No session matches "ffff".');
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('rethrows errors that are not lookup failures', async () => {
+      fs.mkdirSync(path.join(root, 'claude', 'projects', '-p', 'beef0001.jsonl'));
+      await expect(cmdShow('beef', { config: none() })).rejects.toThrow();
+      expect(process.exitCode).toBeUndefined();
     });
   });
 });

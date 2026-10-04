@@ -27,6 +27,8 @@ export default defineConfig({
       'tests/config.test.ts',
       'tests/cli.test.ts',
       'tests/archive/store.test.ts',
+      'tests/archive/resolve.test.ts',
+      'tests/archive/show.test.ts',
       'tests/hooks/save.test.ts',
     ],
   },
