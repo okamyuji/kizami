@@ -21,6 +21,7 @@ import {
   cmdShow,
   cmdResume,
   cmdSetup,
+  cmdSearchFresh,
 } from '../src/cli';
 
 // worker スレッドでは process.env.HOME を変えても os.homedir() に届かない。
@@ -951,6 +952,40 @@ describe('cli commands', () => {
         '--recall-only supports only --target claude.'
       );
       expect(fs.existsSync(path.join(home, 'HOME'))).toBe(false);
+    });
+  });
+
+  describe('cmdSearchFresh', () => {
+    const ENV_KEYS = ['HOME', 'XDG_DATA_HOME', 'KIZAMI_JSONL_DIR'] as const;
+    const saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
+
+    beforeEach(() => {
+      for (const key of ENV_KEYS) {
+        saved[key] = process.env[key];
+        process.env[key] = path.join(tmpDir, key);
+      }
+      const projectDir = path.join(tmpDir, 'HOME', '.claude', 'projects', '-test-project');
+      fs.mkdirSync(projectDir, { recursive: true });
+      fs.copyFileSync(
+        path.resolve(__dirname, 'fixtures/sample-transcript.jsonl'),
+        path.join(projectDir, 'fresh-0001.jsonl')
+      );
+    });
+
+    afterEach(() => {
+      for (const key of ENV_KEYS) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    });
+
+    it('imports sessions that are not in the DB yet before searching', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      expect(cmdSearch('Express', { config: configPath, allProjects: true })).toEqual([]);
+
+      const results = await cmdSearchFresh('Express', { config: configPath, allProjects: true });
+
+      expect(results.map((r) => r.sessionId)).toContain('fresh-0001');
     });
   });
 });

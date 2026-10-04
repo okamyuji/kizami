@@ -16,6 +16,7 @@ import {
 } from '@/hooks/toml';
 import type { TomlHook } from '@/hooks/toml';
 import { installRecallSkill, removeRecallSkill, RECALL_SKILL_NAME } from '@/hooks/skill';
+import { recoverTranscripts } from '@/hooks/recover';
 
 interface HookEntry {
   type: string;
@@ -435,6 +436,11 @@ export async function setupHooks(options?: SetupOptions): Promise<void> {
   }
 
   initializeKizamiStorage(options);
+  if (target === 'claude' || target === 'all') {
+    // hook 導入前の会話は DB に無く、検索も「あれ思い出して」も空振りするので取り込む。
+    const { recovered } = await recoverTranscripts(options?.configPath);
+    console.log(`  Imported past sessions: ${recovered}`);
+  }
 }
 
 function countKizamiHooks(settings: ClaudeSettings): number {

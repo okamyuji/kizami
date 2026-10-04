@@ -3,6 +3,9 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import { setupHooks, uninstallHooks, getSetupStatus } from '../../src/hooks/setup';
+import { getDatabase } from '../../src/db/connection';
+import { initializeSchema } from '../../src/db/schema';
+import { Store } from '../../src/db/store';
 
 // worker スレッドでは process.env.HOME を変えても os.homedir() に届かない。
 // 既定パスが実ホームを指さないよう、homedir() を process.env.HOME に従わせる。
@@ -172,6 +175,48 @@ describe('setupHooks', () => {
     expect(fs.existsSync(path.join(home, '.claude', 'skills', 'kizami-recall', 'SKILL.md'))).toBe(
       true
     );
+  });
+
+  function putPastSession(id: string): void {
+    const dir = path.join(process.env['HOME'] as string, '.claude', 'projects', '-w-proj');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(
+      path.resolve(__dirname, '../fixtures/sample-transcript.jsonl'),
+      path.join(dir, `${id}.jsonl`)
+    );
+  }
+
+  function storedSessionIds(): string[] {
+    const dbFile = path.join(process.env['XDG_DATA_HOME'] as string, 'kizami', 'memory.db');
+    const db = getDatabase(dbFile);
+    try {
+      initializeSchema(db);
+      return new Store(db).getSessionList().map((s) => s.sessionId);
+    } finally {
+      db.close();
+    }
+  }
+
+  it.each([{ recallOnly: false }, { recallOnly: true }, { target: 'all' as const }])(
+    'imports existing Claude Code sessions on setup (%o)',
+    async (extra) => {
+      putPastSession('past-0001');
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await setupHooks({ ...setupOptions(), ...extra });
+
+      expect(storedSessionIds()).toEqual(['past-0001']);
+      expect(log).toHaveBeenCalledWith('  Imported past sessions: 1');
+    }
+  );
+
+  it('does not import sessions for a codex-only setup', async () => {
+    putPastSession('past-0002');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await setupHooks({ ...setupOptions(), target: 'codex' });
+
+    expect(storedSessionIds()).toEqual([]);
   });
 
   it('prints the skill path, and the recall-only mode only when requested', async () => {

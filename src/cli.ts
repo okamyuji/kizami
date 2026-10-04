@@ -225,6 +225,15 @@ export function cmdSearch(
   }
 }
 
+/** スキル経由の検索でも、hook 未導入の期間や他プロセスの会話を拾えるよう先に取り込む。 */
+export async function cmdSearchFresh(
+  query: string,
+  options: { project?: string; allProjects?: boolean; config?: string }
+): Promise<ScoredResult[]> {
+  await recoverTranscripts(options.config);
+  return cmdSearch(query, options);
+}
+
 function maskCredentials(value: string): string {
   return value
     .replace(
@@ -836,7 +845,7 @@ async function main(): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      cmdSearch(query, sharedOpts);
+      await cmdSearchFresh(query, sharedOpts);
       break;
     }
 
