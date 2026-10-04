@@ -521,7 +521,7 @@ export function cmdExport(options: {
     const sessions = store.getSessionList(projectPath);
 
     if (fmt === 'markdown') {
-      const lines: string[] = ['# Engram Memory Export\n'];
+      const lines: string[] = ['# Kizami Memory Export\n'];
       for (const s of sessions) {
         lines.push(`## Session ${s.sessionId.slice(0, 8)}`);
         lines.push(`- Project: ${s.projectPath}`);

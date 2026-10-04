@@ -718,7 +718,7 @@ describe('cli commands', () => {
         config: configPath,
       });
 
-      expect(output).toContain('# Engram Memory Export');
+      expect(output).toContain('# Kizami Memory Export');
       expect(output).toContain('session-');
     });
 
