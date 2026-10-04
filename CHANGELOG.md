@@ -1,3 +1,9 @@
+## [0.8.0](https://github.com/okamyuji/kizami/compare/v0.7.4...v0.8.0) (2026-10-04)
+
+### Features
+
+- recall past Claude Code sessions with a skill, raw transcript archive, show and resume ([#36](https://github.com/okamyuji/kizami/issues/36)) ([dd94794](https://github.com/okamyuji/kizami/commit/dd947943c47d276f90c5176e9fa9a9dec3d2201a))
+
 ## [0.7.4](https://github.com/okamyuji/kizami/compare/v0.7.3...v0.7.4) (2026-10-01)
 
 ### Bug Fixes
