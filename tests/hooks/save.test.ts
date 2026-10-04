@@ -13,6 +13,7 @@ describe('handleSave', () => {
   let dbPath: string;
   let configPath: string;
   let previousJsonlDir: string | undefined;
+  let previousArchiveDir: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-save-'));
@@ -20,10 +21,17 @@ describe('handleSave', () => {
     configPath = path.join(tmpDir, 'config.json');
     previousJsonlDir = process.env.KIZAMI_JSONL_DIR;
     process.env.KIZAMI_JSONL_DIR = path.join(tmpDir, 'jsonl');
+    previousArchiveDir = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+    process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = path.join(tmpDir, 'archive');
     fs.writeFileSync(configPath, JSON.stringify({ database: { path: dbPath } }), 'utf-8');
   });
 
   afterEach(() => {
+    if (previousArchiveDir === undefined) {
+      delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+    } else {
+      process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = previousArchiveDir;
+    }
     if (previousJsonlDir === undefined) {
       delete process.env.KIZAMI_JSONL_DIR;
     } else {
@@ -33,6 +41,20 @@ describe('handleSave', () => {
   });
 
   const fixtureTranscript = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
+
+  it('archives the raw transcript before chunking', async () => {
+    const projDir = path.join(tmpDir, 'projects', '-proj');
+    fs.mkdirSync(projDir, { recursive: true });
+    const transcript = path.join(projDir, 'cccc3333.jsonl');
+    fs.copyFileSync(fixtureTranscript, transcript);
+
+    await handleSave(
+      { session_id: 'cccc3333', transcript_path: transcript, cwd: tmpDir },
+      configPath
+    );
+
+    expect(fs.existsSync(path.join(tmpDir, 'archive', '-proj', 'cccc3333.jsonl'))).toBe(true);
+  });
 
   it('should parse transcript and save chunks to DB', async () => {
     await handleSave(

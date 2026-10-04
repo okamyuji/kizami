@@ -11,6 +11,7 @@ import { searchFts } from '@/search/fts';
 import { rankResults } from '@/search/hybrid';
 import type { ScoredResult } from '@/search/hybrid';
 import { formatResults } from '@/search/formatter';
+import { archiveAll, getClaudeProjectsDir } from '@/archive/store';
 import { runSave } from '@/hooks/save';
 import { runRecall } from '@/hooks/recall';
 import { runInject } from '@/hooks/inject';
@@ -546,6 +547,17 @@ export function cmdMerge(options: {
   }
 }
 
+export function cmdArchive(options: { config?: string }): void {
+  const config = loadConfig(options.config);
+  const started = Date.now();
+  const result = archiveAll(getClaudeProjectsDir(), config.storage.transcriptArchiveDir);
+  console.log(`[kizami archive] ${config.storage.transcriptArchiveDir}`);
+  console.log(
+    `  copied=${result.copied} current=${result.current} failed=${result.failed} (${Date.now() - started} ms)`
+  );
+  if (result.failed > 0) process.exitCode = 1;
+}
+
 export async function cmdRecover(options: { config?: string }): Promise<RecoverResult> {
   const result = await recoverTranscripts(options.config);
   if (result.recovered === 0 && result.errors === 0) {
@@ -615,6 +627,7 @@ Commands:
   export            Export as JSON/Markdown
   merge             Merge similar chunks
   embed             Generate embeddings for hybrid mode (--backfill)
+  archive           Copy raw transcripts from ~/.claude/projects into the kizami archive
   recover           Recover unsaved transcripts from ~/.claude/projects/
   import-claude-mem Import from claude-mem database
   inject            SessionStart hook: inject recent project Q&A
@@ -841,6 +854,10 @@ async function main(): Promise<void> {
         dryRun: values['dry-run'] as boolean | undefined,
         config: sharedOpts.config,
       });
+      break;
+
+    case 'archive':
+      cmdArchive({ config: sharedOpts.config });
       break;
 
     case 'recover':

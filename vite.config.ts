@@ -1,7 +1,8 @@
 import { defineConfig } from 'vite';
 import { configDefaults } from 'vitest/config';
 import { builtinModules } from 'node:module';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
 
 const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as {
@@ -48,6 +49,7 @@ export default defineConfig({
   },
   test: {
     globals: true,
+    env: { KIZAMI_TRANSCRIPT_ARCHIVE_DIR: join(tmpdir(), 'kizami-test-transcripts') },
     exclude: [...configDefaults.exclude, '.stryker-tmp/**'],
   },
 });

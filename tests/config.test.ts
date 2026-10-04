@@ -58,7 +58,10 @@ describe('config', () => {
 
   it('should return defaults when config file does not exist', () => {
     const config = loadConfig('/nonexistent/path/config.json');
-    expect(config).toEqual(getDefaultConfig());
+    const defaults = getDefaultConfig();
+    // vite.config.ts が test 用に保管先を上書きしている
+    defaults.storage.transcriptArchiveDir = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR!;
+    expect(config).toEqual(defaults);
   });
 
   describe('validateConfig', () => {
@@ -244,5 +247,17 @@ describe('config', () => {
       const aliases = { '/x/proj': 'C:\\Users\\me\\proj' };
       expect(applyProjectAlias(aliases, '/x/proj/sub/dir')).toBe('C:\\Users\\me\\proj\\sub\\dir');
     });
+  });
+
+  it('defaults transcriptArchiveDir under the kizami data dir and honors KIZAMI_TRANSCRIPT_ARCHIVE_DIR', () => {
+    const prev = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+    delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+    expect(loadConfig('/nonexistent/config.json').storage.transcriptArchiveDir).toMatch(
+      /kizami[/\\]transcripts$/
+    );
+    process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = '/tmp/arch';
+    expect(loadConfig('/nonexistent/config.json').storage.transcriptArchiveDir).toBe('/tmp/arch');
+    if (prev === undefined) delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+    else process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = prev;
   });
 });
