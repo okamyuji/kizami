@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
-import type Database from 'better-sqlite3';
+import Database from 'better-sqlite3';
 import { getDatabase } from '../src/db/connection';
 import { initializeSchema } from '../src/db/schema';
 import { Store } from '../src/db/store';
@@ -111,6 +111,135 @@ describe('cli commands', () => {
       });
       expect(results).toEqual([]);
       expect(logSpy).toHaveBeenCalledWith('No results found.');
+      expect(logSpy).not.toHaveBeenCalledWith(
+        'No results in this project. Results from other projects:'
+      );
+    });
+
+    it('closes the database even when the search finishes', () => {
+      const closeSpy = vi.spyOn(Database.prototype, 'close');
+      cmdSearch('anything', { project: '/test/project', config: configPath });
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to other projects only when the current project has no hit', () => {
+      store.insertChunks([
+        makeChunk({ projectPath: '/other/project', content: 'Kubernetes ingress setup' }),
+      ]);
+      const logSpy = vi.spyOn(console, 'log');
+      const results = cmdSearch('Kubernetes', { project: '/test/project', config: configPath });
+      expect(results.length).toBeGreaterThanOrEqual(1);
+      expect(logSpy).toHaveBeenCalledWith(
+        'No results in this project. Results from other projects:'
+      );
+      expect(logSpy.mock.calls.flat().join('\n')).toContain('from=project');
+    });
+
+    it('does not print the fallback heading when --all-projects is given', () => {
+      store.insertChunks([
+        makeChunk({ projectPath: '/other/project', content: 'Kubernetes ingress setup' }),
+      ]);
+      const logSpy = vi.spyOn(console, 'log');
+      cmdSearch('Kubernetes', { project: '/test/project', config: configPath, allProjects: true });
+      expect(logSpy).not.toHaveBeenCalledWith(
+        'No results in this project. Results from other projects:'
+      );
+    });
+
+    it('does not print the fallback heading when the current project has a hit', () => {
+      store.insertChunks([makeChunk({ content: 'Kubernetes ingress setup' })]);
+      const logSpy = vi.spyOn(console, 'log');
+      cmdSearch('Kubernetes', { project: '/test/project', config: configPath });
+      expect(logSpy).not.toHaveBeenCalledWith(
+        'No results in this project. Results from other projects:'
+      );
+    });
+
+    it('treats allProjects:false like unset and honours projectScope:false', () => {
+      const noScope = path.join(tmpDir, 'no-scope2.json');
+      fs.writeFileSync(
+        noScope,
+        JSON.stringify({ database: { path: dbPath }, search: { projectScope: false } })
+      );
+      store.insertChunks([
+        makeChunk({ projectPath: '/other/project', content: 'Kubernetes ingress setup' }),
+      ]);
+      const logSpy = vi.spyOn(console, 'log');
+      const results = cmdSearch('Kubernetes', {
+        project: '/test/project',
+        config: noScope,
+        allProjects: false,
+      });
+      expect(results).toHaveLength(1);
+      expect(logSpy).not.toHaveBeenCalledWith(
+        'No results in this project. Results from other projects:'
+      );
+    });
+
+    describe('archived transcripts tier', () => {
+      let archiveDir: string;
+      let prevEnv: string | undefined;
+      const DAY = 86400000;
+
+      function putArchived(id: string, text: string, ageDays: number) {
+        const file = path.join(archiveDir, '-proj', `${id}.jsonl`);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({ message: { content: text } }) + '\n');
+        const t = new Date(Date.now() - ageDays * DAY);
+        fs.utimesSync(file, t, t);
+      }
+      function archiveConfig(maxChunkAgeDays: number): string {
+        const p = path.join(tmpDir, 'archive-config.json');
+        fs.writeFileSync(
+          p,
+          JSON.stringify({
+            database: { path: dbPath },
+            search: { projectScope: true },
+            maintenance: { maxChunkAgeDays },
+          })
+        );
+        return p;
+      }
+
+      beforeEach(() => {
+        prevEnv = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+        archiveDir = path.join(tmpDir, 'archive');
+        process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = archiveDir;
+      });
+      afterEach(() => {
+        if (prevEnv === undefined) delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+        else process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = prevEnv;
+      });
+
+      it('lists archived matches older than maxChunkAgeDays when FTS has none', () => {
+        putArchived('abcdef123', 'zebra migration notes', 100);
+        const logSpy = vi.spyOn(console, 'log');
+        const results = cmdSearch('zebra', {
+          project: '/test/project',
+          config: archiveConfig(90),
+        });
+        expect(results).toEqual([]);
+        const out = logSpy.mock.calls.flat().join('\n');
+        expect(out).toContain('No indexed results. Matches in archived transcripts:');
+        expect(out).toContain('abcdef from=-proj archived');
+        expect(out).toContain('zebra migration notes');
+        expect(logSpy).not.toHaveBeenCalledWith('No results found.');
+      });
+
+      it('ignores archived files newer than maxChunkAgeDays', () => {
+        putArchived('abcdef123', 'zebra migration notes', 10);
+        const logSpy = vi.spyOn(console, 'log');
+        cmdSearch('zebra', { project: '/test/project', config: archiveConfig(90) });
+        expect(logSpy).toHaveBeenCalledWith('No results found.');
+      });
+
+      it('does not scan the archive when FTS has a hit', () => {
+        putArchived('abcdef123', 'zebra migration notes', 100);
+        store.insertChunks([makeChunk({ content: 'zebra in the index' })]);
+        const logSpy = vi.spyOn(console, 'log');
+        cmdSearch('zebra', { project: '/test/project', config: archiveConfig(90) });
+        expect(logSpy.mock.calls.flat().join('\n')).not.toContain('archived');
+      });
     });
 
     it('should scope to the current project only when projectScope is true (default)', () => {

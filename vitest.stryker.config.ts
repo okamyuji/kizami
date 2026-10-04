@@ -31,6 +31,7 @@ export default defineConfig({
       'tests/archive/show.test.ts',
       'tests/archive/resume.test.ts',
       'tests/hooks/save.test.ts',
+      'tests/search/archive-scan.test.ts',
     ],
   },
 });

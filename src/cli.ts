@@ -11,6 +11,7 @@ import { searchFts } from '@/search/fts';
 import { rankResults } from '@/search/hybrid';
 import type { ScoredResult } from '@/search/hybrid';
 import { formatResults } from '@/search/formatter';
+import { scanArchive, formatArchiveHits } from '@/search/archive-scan';
 import { archiveAll, getClaudeProjectsDir } from '@/archive/store';
 import { resolveSession, SessionLookupError } from '@/archive/resolve';
 import { renderSession } from '@/archive/show';
@@ -161,6 +162,30 @@ export function cmdMigrateToJsonl(options: { config?: string }): void {
   console.log('Migration complete. Run `kizami rebuild` to verify integrity.');
 }
 
+function runFts(
+  store: Store,
+  config: EngramConfig,
+  query: string,
+  projectPath: string,
+  allProjects: boolean
+): ScoredResult[] {
+  const isTiered = config.search.projectScope === 'tiered' && !allProjects;
+  const results = searchFts(store, {
+    query,
+    projectPath,
+    limit: 50,
+    allProjects,
+    tiered: isTiered,
+  });
+  return rankResults(
+    results,
+    config.search.timeDecayHalfLifeDays,
+    query,
+    projectPath,
+    isTiered ? config.search.crossProjectPenalty : undefined
+  );
+}
+
 export function cmdSearch(
   query: string,
   options: { project?: string; allProjects?: boolean; config?: string }
@@ -169,35 +194,32 @@ export function cmdSearch(
   try {
     const rawProjectPath = options.project ? path.resolve(options.project) : process.cwd();
     const projectPath = resolveScopedProjectPath(config, rawProjectPath);
+    // parseArgs が --all-projects に default:false を入れるので、?? ではなく || で config を見る。
+    const allProjects = options.allProjects || config.search.projectScope === false;
 
-    // recall hookと同じくconfig.search.projectScopeをデフォルトの挙動として尊重する。
-    // --all-projectsが明示されればそれを優先する。
-    const isTiered = config.search.projectScope === 'tiered';
-    const allProjects = options.allProjects ?? config.search.projectScope === false;
-
-    const results = searchFts(store, {
-      query,
-      projectPath,
-      limit: 50,
-      allProjects,
-      tiered: isTiered && !allProjects,
-    });
-
-    if (results.length === 0) {
-      console.log('No results found.');
-      return [];
+    let ranked = runFts(store, config, query, projectPath, allProjects);
+    if (ranked.length === 0 && !allProjects) {
+      ranked = runFts(store, config, query, projectPath, true);
+      if (ranked.length > 0)
+        console.log('No results in this project. Results from other projects:');
+    }
+    if (ranked.length > 0) {
+      console.log(formatResults(ranked, config.search.defaultLimit));
+      return ranked;
     }
 
-    const ranked = rankResults(
-      results,
-      config.search.timeDecayHalfLifeDays,
+    const hits = scanArchive(
       query,
-      projectPath,
-      isTiered && !allProjects ? config.search.crossProjectPenalty : undefined
+      config.storage.transcriptArchiveDir,
+      config.maintenance.maxChunkAgeDays * 86400000
     );
-    const output = formatResults(ranked, config.search.defaultLimit);
-    console.log(output);
-    return ranked;
+    if (hits.length > 0) {
+      console.log('No indexed results. Matches in archived transcripts:');
+      console.log(formatArchiveHits(hits));
+    } else {
+      console.log('No results found.');
+    }
+    return [];
   } finally {
     close();
   }
