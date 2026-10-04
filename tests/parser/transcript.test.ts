@@ -141,6 +141,11 @@ describe('parseTranscriptText', () => {
     expect(parseTranscriptText(`\n{oops\n${line}\r\n`).map((m) => m.kind)).toEqual(['user']);
   });
 
+  it('reads a line that starts with a BOM or a no-break space', () => {
+    const line = JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } });
+    expect(parseTranscriptText(`\uFEFF${line}\n\u00A0${line}`)).toHaveLength(2);
+  });
+
   it('skips JSON lines that are not objects and compaction summaries that carry a message', () => {
     const summary = JSON.stringify({
       isCompactSummary: true,

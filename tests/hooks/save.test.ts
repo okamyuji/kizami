@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { getDatabase } from '../../src/db/connection';
 import { initializeSchema } from '../../src/db/schema';
 import { Store } from '../../src/db/store';
@@ -317,6 +317,52 @@ describe('handleSave', () => {
     const sessions = store.getSessionList();
     expect(sessions.filter((s) => s.sessionId === 'reentry')).toHaveLength(1);
     db.close();
+  });
+});
+
+describe('runSave archiving', () => {
+  it('archives the transcript when the save hook runs for claude', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-runsave-'));
+    try {
+      const cfgPath = path.join(tmpDir, 'config.json');
+      fs.writeFileSync(
+        cfgPath,
+        JSON.stringify({
+          database: { path: path.join(tmpDir, 'test.db') },
+          storage: {
+            jsonlDir: path.join(tmpDir, 'jsonl'),
+            transcriptArchiveDir: path.join(tmpDir, 'archive'),
+          },
+        })
+      );
+      const projDir = path.join(tmpDir, 'projects', '-proj');
+      fs.mkdirSync(projDir, { recursive: true });
+      const transcript = path.join(projDir, 'abab1212.jsonl');
+      fs.copyFileSync(path.resolve(__dirname, '../fixtures/sample-transcript.jsonl'), transcript);
+      const env = { ...process.env };
+      delete env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      delete env.KIZAMI_JSONL_DIR;
+
+      const result = spawnSync(
+        process.execPath,
+        ['dist/cli.js', 'save', '--stdin', '--runtime', 'claude', '--config', cfgPath],
+        {
+          cwd: path.resolve(__dirname, '../..'),
+          env,
+          input: JSON.stringify({
+            session_id: 'abab1212',
+            transcript_path: transcript,
+            cwd: tmpDir,
+            hook_event_name: 'Stop',
+          }),
+        }
+      );
+
+      expect(result.status).toBe(0);
+      expect(fs.existsSync(path.join(tmpDir, 'archive', '-proj', 'abab1212.jsonl'))).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

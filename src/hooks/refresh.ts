@@ -19,14 +19,13 @@ function marksFile(config: EngramConfig): string {
 
 export function loadRecoverMarks(config: EngramConfig): RecoverMarks {
   const file = marksFile(config);
-  let raw: { sizes?: Record<string, unknown> };
+  let raw: { sizes?: Record<string, unknown> } | null | undefined;
   try {
-    raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as { sizes?: Record<string, unknown> };
+    raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as { sizes?: Record<string, unknown> } | null;
   } catch {
-    // 目印は解析を省くためだけのもの。無い・壊れているときは全件を解析し直せば済み、検索を止める理由にならない。
-    return new Map();
+    // 目印は解析を省くためだけのもの。無い・壊れているときは空として全件を解析し直し、検索は止めない。
   }
-  const entries = Object.entries(raw.sizes ?? {}).filter(
+  const entries = Object.entries(raw?.sizes ?? {}).filter(
     (entry): entry is [string, number] => typeof entry[1] === 'number'
   );
   return new Map(entries);

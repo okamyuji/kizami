@@ -530,6 +530,25 @@ describe('recoverTranscripts refreshes grown legacy sessions', () => {
     }
   });
 
+  it('retries a refresh on the next run when writing it failed', async () => {
+    await recoverTranscripts(configPath, projectsDir);
+    appendTurn();
+    const blocker = path.join(tmpDir, 'prepared');
+    fs.writeFileSync(blocker, 'x');
+
+    const failed = await recoverTranscripts(configPath, projectsDir);
+    fs.rmSync(blocker);
+    const retried = await recoverTranscripts(configPath, projectsDir);
+
+    expect(failed.errors).toBe(1);
+    expect(retried.refreshed).toBe(1);
+    expect(
+      rows()
+        .map((row) => row.content)
+        .join('\n')
+    ).toContain('appended answer');
+  });
+
   it('adds turns appended after a refresh without resetting the session again', async () => {
     await recoverTranscripts(configPath, projectsDir);
     appendTurn();

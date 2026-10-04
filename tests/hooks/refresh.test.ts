@@ -53,8 +53,10 @@ describe('recover marks', () => {
     expect([...loadRecoverMarks(config)]).toEqual([]);
   });
 
-  it('starts from empty marks when the state file is truncated', () => {
+  it('starts from empty marks when the state file is truncated or holds null', () => {
     fs.writeFileSync(path.join(tmp, 'recover-state.json'), '{"sizes":{"x":1');
+    expect([...loadRecoverMarks(config)]).toEqual([]);
+    fs.writeFileSync(path.join(tmp, 'recover-state.json'), 'null');
     expect([...loadRecoverMarks(config)]).toEqual([]);
   });
 

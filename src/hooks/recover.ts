@@ -163,6 +163,8 @@ export async function recoverTranscripts(
           result.recovered++;
           result.details.push(`${sessionId.slice(0, 8)} (${chunks.length} chunks)`);
         } catch (err) {
+          // refresh は解析した時点で目印を立てる。反映に失敗したら外し、次の実行で再試行させる。
+          marks.delete(sessionId);
           result.errors++;
           result.details.push(`${sessionId.slice(0, 8)}: error - ${String(err)}`);
         }

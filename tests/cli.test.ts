@@ -700,6 +700,19 @@ describe('cli commands', () => {
       ]);
     });
 
+    it('does not record the digest when the local chunk delete fails', () => {
+      store.insertChunks([makeChunk({ content: 'private words' })]);
+      const spy = vi.spyOn(Store.prototype, 'deleteChunk').mockImplementation(() => {
+        throw new Error('locked');
+      });
+      try {
+        expect(() => cmdDelete({ chunk: '1', config: configPath })).toThrow('locked');
+      } finally {
+        spy.mockRestore();
+      }
+      expect(fs.existsSync(deletionsFile(dbPath))).toBe(false);
+    });
+
     it('records nothing for a chunk id that does not exist', () => {
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       cmdDelete({ chunk: '99', config: configPath });

@@ -113,13 +113,13 @@ function parseContentBlocks(value: unknown): ContentBlock[] {
 
 /** 1 行を解釈して messages に足す。ツール結果は直前の assistant に付ける。 */
 function appendLine(messages: TranscriptMessage[], line: string): void {
+  // JSON.parse は BOM と NBSP を空白として扱わないので、先に trim で落とす。
+  const trimmed = line.trim();
   let parsed: unknown;
   try {
-    // 空行と空白だけの行は JSON.parse が失敗し、下の catch で読み飛ばす。
-    parsed = JSON.parse(line);
-    // Stryker disable next-line BlockStatement: catch を空にしても parsed は undefined のままで、次の isRecord で return する
+    parsed = JSON.parse(trimmed);
   } catch {
-    return;
+    // 空行と壊れた行は parsed が undefined のまま、次の isRecord で読み飛ばす。
   }
   if (!isRecord(parsed)) return;
   const raw = parsed as RawLine;
