@@ -12,7 +12,7 @@ import { rankResults } from '@/search/hybrid';
 import type { ScoredResult } from '@/search/hybrid';
 import { formatResults } from '@/search/formatter';
 import { scanArchive, formatArchiveHits } from '@/search/archive-scan';
-import { archiveAll, getClaudeProjectsDir } from '@/archive/store';
+import { archiveAll, getClaudeProjectsDir, removeArchivedTranscript } from '@/archive/store';
 import { resolveSession, SessionLookupError } from '@/archive/resolve';
 import { renderSession } from '@/archive/show';
 import { resumeSession } from '@/archive/resume';
@@ -33,6 +33,12 @@ import type { RecoverResult } from '@/hooks/recover';
 import { backfillEmbeddings } from '@/hooks/embed';
 import type { BackfillResult } from '@/hooks/embed';
 import { VERSION } from '@/version';
+import {
+  loadDeletions,
+  deletionsFile,
+  recordSessionDeletion,
+  recordChunkDeletion,
+} from '@/archive/deletions';
 import { recoverPreparedCheckpoints } from '@/checkpoint/coordinator';
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -208,10 +214,15 @@ export function cmdSearch(
       return ranked;
     }
 
+    const deleted = loadDeletions(deletionsFile(config.database.path));
     const hits = scanArchive(
       query,
       config.storage.transcriptArchiveDir,
-      config.maintenance.maxChunkAgeDays * 86400000
+      config.maintenance.maxChunkAgeDays * 86400000,
+      Date.now(),
+      10,
+      deleted.sessions,
+      deleted.chunkDigests
     );
     if (hits.length > 0) {
       console.log('No indexed results. Matches in archived transcripts:');
@@ -362,10 +373,12 @@ export function cmdDelete(options: {
   chunk?: string;
   config?: string;
 }): void {
-  const { store, close } = createStore(options.config);
+  const { store, close, config } = createStore(options.config);
   try {
     if (options.session) {
       store.deleteSession(options.session);
+      recordSessionDeletion(deletionsFile(config.database.path), options.session);
+      removeArchivedTranscript(config.storage.transcriptArchiveDir, options.session);
       console.log(`Session ${options.session} deleted.`);
     } else if (options.before) {
       const date = new Date(options.before).toISOString();
@@ -378,6 +391,8 @@ export function cmdDelete(options: {
         process.exitCode = 1;
         return;
       }
+      const chunk = store.getChunk(id);
+      if (chunk) recordChunkDeletion(deletionsFile(config.database.path), chunk.content);
       store.deleteChunk(id);
       console.log(`Chunk ${id} deleted.`);
     } else {
@@ -607,12 +622,14 @@ export async function cmdShow(
     process.exitCode = 1;
     return;
   }
+  const deleted = loadDeletions(deletionsFile(config.database.path));
   try {
-    const session = await resolveSession(idPrefix, {
-      archiveDir: config.storage.transcriptArchiveDir,
-      projectsDir: getClaudeProjectsDir(),
-    });
-    process.stdout.write(await renderSession(session, maxChars));
+    const session = await resolveSession(
+      idPrefix,
+      { archiveDir: config.storage.transcriptArchiveDir, projectsDir: getClaudeProjectsDir() },
+      deleted.sessions
+    );
+    process.stdout.write(await renderSession(session, maxChars, deleted.chunkDigests));
   } catch (err) {
     if (!(err instanceof SessionLookupError)) throw err;
     console.error(err.message);
@@ -626,11 +643,13 @@ export async function cmdResume(
   options: { config?: string; spawn?: typeof spawnSync }
 ): Promise<void> {
   const config = loadConfig(options.config);
+  const deleted = loadDeletions(deletionsFile(config.database.path));
   try {
-    const session = await resolveSession(idPrefix, {
-      archiveDir: config.storage.transcriptArchiveDir,
-      projectsDir: getClaudeProjectsDir(),
-    });
+    const session = await resolveSession(
+      idPrefix,
+      { archiveDir: config.storage.transcriptArchiveDir, projectsDir: getClaudeProjectsDir() },
+      deleted.sessions
+    );
     process.exitCode = resumeSession(session, passthrough, {
       projectsDir: getClaudeProjectsDir(),
       spawn: options.spawn,

@@ -3,6 +3,12 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import Database from 'better-sqlite3';
+import {
+  loadDeletions,
+  deletionsFile,
+  contentDigest,
+  recordSessionDeletion,
+} from '../src/archive/deletions';
 import { getDatabase } from '../src/db/connection';
 import { initializeSchema } from '../src/db/schema';
 import { Store } from '../src/db/store';
@@ -628,6 +634,37 @@ describe('cli commands', () => {
       expect(store.getChunk(1)).toBeUndefined();
     });
 
+    it('records a deleted session and removes its archived transcript', () => {
+      store.insertChunks([makeChunk()]);
+      store.insertSession(makeSession());
+      const archived = path.join(tmpDir, 'archive', '-p', 'session-1.jsonl');
+      fs.mkdirSync(path.dirname(archived), { recursive: true });
+      fs.writeFileSync(archived, '{}\n');
+      const prev = process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+      process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = path.join(tmpDir, 'archive');
+      try {
+        cmdDelete({ session: 'session-1', config: configPath });
+      } finally {
+        if (prev === undefined) delete process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR;
+        else process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = prev;
+      }
+      expect([...loadDeletions(deletionsFile(dbPath)).sessions]).toEqual(['session-1']);
+      expect(fs.existsSync(archived)).toBe(false);
+    });
+
+    it('records a deleted chunk by digest', () => {
+      store.insertChunks([makeChunk({ content: 'private words' })]);
+      cmdDelete({ chunk: '1', config: configPath });
+      expect([...loadDeletions(deletionsFile(dbPath)).chunkDigests]).toEqual([
+        contentDigest('private words'),
+      ]);
+    });
+
+    it('records nothing for a chunk id that does not exist', () => {
+      cmdDelete({ chunk: '99', config: configPath });
+      expect(fs.existsSync(deletionsFile(dbPath))).toBe(false);
+    });
+
     it('should delete chunks before a date', () => {
       store.insertChunks([makeChunk()]);
 
@@ -840,6 +877,40 @@ describe('cli commands', () => {
       await cmdShow('abcd', { config: none(), maxChars: '5' });
       expect(out()).toContain('enobi');
       expect(out()).not.toContain('general');
+    });
+
+    function configWithDb(): string {
+      const cfg = path.join(root, 'config.json');
+      fs.writeFileSync(
+        cfg,
+        JSON.stringify({ database: { path: path.join(root, 'db', 'memory.db') } })
+      );
+      return cfg;
+    }
+
+    it('refuses to show a deleted session', async () => {
+      const cfg = configWithDb();
+      recordSessionDeletion(deletionsFile(path.join(root, 'db', 'memory.db')), 'abcd1');
+      await cmdShow('abcd', { config: cfg });
+      expect(errSpy).toHaveBeenCalledWith('Session "abcd" was deleted.');
+      expect(out()).toBe('');
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('hides a deleted chunk in the shown session', async () => {
+      const cfg = configWithDb();
+      const dbFile = path.join(root, 'db', 'memory.db');
+      fs.mkdirSync(path.dirname(dbFile), { recursive: true });
+      fs.writeFileSync(
+        deletionsFile(dbFile),
+        JSON.stringify({
+          sessions: [],
+          chunkDigests: [contentDigest('[User]\nhello there\n\n[Assistant]\ngeneral kenobi')],
+        })
+      );
+      await cmdShow('abcd', { config: cfg });
+      expect(out()).toContain('[deleted]');
+      expect(out()).not.toContain('general kenobi');
     });
 
     it('reports a lookup failure on stderr with exit code 1', async () => {

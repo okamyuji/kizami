@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parseTranscript } from '../../src/parser/transcript';
+import { parseTranscript, parseTranscriptText } from '../../src/parser/transcript';
 import type { AssistantMessage } from '../../src/parser/transcript';
 
 const FIXTURE = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
@@ -125,5 +125,19 @@ describe('parseTranscript', () => {
     expect(firstAssistant.content.length).toBe(2);
     expect(firstAssistant.content[0].type).toBe('text');
     expect(firstAssistant.content[1].type).toBe('tool_use');
+  });
+});
+
+describe('parseTranscriptText', () => {
+  it('gives the same messages as parseTranscript for the same file', async () => {
+    const fixture = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
+    expect(parseTranscriptText(fs.readFileSync(fixture, 'utf-8'))).toEqual(
+      await parseTranscript(fixture)
+    );
+  });
+
+  it('skips blank and malformed lines', () => {
+    const line = JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } });
+    expect(parseTranscriptText(`\n{oops\n${line}\r\n`).map((m) => m.kind)).toEqual(['user']);
   });
 });

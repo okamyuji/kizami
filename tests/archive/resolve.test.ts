@@ -64,6 +64,20 @@ describe('resolveSession', () => {
     await expect(resolveSession('abcd', roots())).rejects.toBeInstanceOf(SessionLookupError);
   });
 
+  it('ignores deleted sessions when matching a prefix', async () => {
+    put(projectsDir, '-p', 'abcd0001', line({}));
+    put(projectsDir, '-q', 'abcd0002', line({ cwd: '/w' }));
+    const s = await resolveSession('abcd', roots(), new Set(['abcd0001']));
+    expect(s.sessionId).toBe('abcd0002');
+  });
+
+  it('says the session was deleted when only deleted sessions match', async () => {
+    put(archiveDir, '-p', 'abcd0001', line({}));
+    await expect(resolveSession('abcd', roots(), new Set(['abcd0001']))).rejects.toThrow(
+      'Session "abcd" was deleted.'
+    );
+  });
+
   it('throws when nothing matches', async () => {
     await expect(resolveSession('ffff', roots())).rejects.toThrow(/No session matches "ffff"/);
   });

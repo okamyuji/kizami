@@ -6,6 +6,7 @@ import { getDatabase } from '../../src/db/connection';
 import { initializeSchema } from '../../src/db/schema';
 import { Store } from '../../src/db/store';
 import { recoverTranscripts, projectDirToPath } from '../../src/hooks/recover';
+import { recordSessionDeletion, deletionsFile } from '../../src/archive/deletions';
 
 describe('projectDirToPath', () => {
   it('should convert project dir name to filesystem path', () => {
@@ -129,6 +130,22 @@ describe('recoverTranscripts', () => {
     const sessions = store.getSessionList();
     expect(sessions).toHaveLength(1);
     expect(sessions[0].projectPath).toBe('/tmp/testproject');
+    db.close();
+  });
+
+  it('skips sessions recorded as deleted', async () => {
+    const projectDir = path.join(fakeProjectsDir, '-tmp-testproject');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.copyFileSync(fixtureTranscript, path.join(projectDir, 'deleted-session-1.jsonl'));
+    recordSessionDeletion(deletionsFile(dbPath), 'deleted-session-1');
+
+    const result = await recoverTranscripts(configPath, fakeProjectsDir);
+
+    expect(result.recovered).toBe(0);
+    expect(result.skipped).toBe(1);
+    const db = getDatabase(dbPath);
+    initializeSchema(db);
+    expect(new Store(db).hasSession('deleted-session-1')).toBe(false);
     db.close();
   });
 

@@ -65,7 +65,8 @@ async function readHeader(file: string): Promise<{ cwd?: string; gitBranch?: str
 
 export async function resolveSession(
   prefix: string,
-  roots: { archiveDir: string; projectsDir: string }
+  roots: { archiveDir: string; projectsDir: string },
+  deletedSessions: Set<string> = new Set()
 ): Promise<ResolvedSession> {
   if (!SESSION_ID_RE.test(prefix)) {
     throw new SessionLookupError(`Invalid session id "${prefix}". Use at least 4 hex characters.`);
@@ -73,6 +74,11 @@ export async function resolveSession(
   const found = new Map<string, { path: string; dirName: string }>();
   collect(roots.archiveDir, prefix, found);
   collect(roots.projectsDir, prefix, found);
+  const matchedDeleted = [...found.keys()].some((id) => deletedSessions.has(id));
+  for (const id of deletedSessions) found.delete(id);
+  if (found.size === 0 && matchedDeleted) {
+    throw new SessionLookupError(`Session "${prefix}" was deleted.`);
+  }
   if (found.size === 0) throw new SessionLookupError(`No session matches "${prefix}".`);
   if (found.size > 1) {
     const list = [...found.entries()].map(([id, f]) => `  ${id}  ${f.dirName}`).join('\n');

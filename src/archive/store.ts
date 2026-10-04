@@ -110,3 +110,20 @@ export function archiveAll(
   }
   return counts;
 }
+
+// --session は利用者の入力なので、区切り文字や .. で保管先の外を消させない。
+const REMOVABLE_ID_RE = /^[\w-]+$/;
+
+export function removeArchivedTranscript(archiveDir: string, sessionId: string): void {
+  if (!REMOVABLE_ID_RE.test(sessionId)) return;
+  let dirs: fs.Dirent[];
+  try {
+    dirs = fs.readdirSync(archiveDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const dir of dirs) {
+    if (dir.isDirectory())
+      fs.rmSync(path.join(archiveDir, dir.name, `${sessionId}.jsonl`), { force: true });
+  }
+}

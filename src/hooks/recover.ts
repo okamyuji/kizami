@@ -9,6 +9,7 @@ import { parseTranscript } from '@/parser/transcript';
 import { buildChunks } from '@/parser/chunker';
 import { JsonlWriter } from '@/jsonl/writer';
 import { chunksToJsonlRecords } from '@/jsonl/converter';
+import { loadDeletions, deletionsFile } from '@/archive/deletions';
 
 export interface RecoverResult {
   recovered: number;
@@ -65,6 +66,7 @@ export async function recoverTranscripts(
   try {
     initializeSchema(db);
     const store = new Store(db);
+    const deleted = loadDeletions(deletionsFile(config.database.path));
 
     const projectsDir = claudeProjectsDir ?? getClaudeProjectsDir();
     if (!fs.existsSync(projectsDir)) {
@@ -95,7 +97,7 @@ export async function recoverTranscripts(
         const sessionId = entry.name.replace(/\.jsonl$/, '');
         const transcriptPath = path.join(projectDir, entry.name);
 
-        if (store.hasSession(sessionId)) {
+        if (store.hasSession(sessionId) || deleted.sessions.has(sessionId)) {
           result.skipped++;
           continue;
         }

@@ -1,6 +1,7 @@
 import { parseTranscript } from '@/parser/transcript';
 import { buildTurns, turnToText } from '@/parser/chunker';
 import type { ResolvedSession } from '@/archive/resolve';
+import { redactTurnText } from '@/archive/deletions';
 
 const TURN_SEPARATOR = '\n\n---\n\n';
 
@@ -19,9 +20,15 @@ function pickTail(texts: string[], maxChars: number): string[] {
   return kept;
 }
 
-export async function renderSession(session: ResolvedSession, maxChars: number): Promise<string> {
+export async function renderSession(
+  session: ResolvedSession,
+  maxChars: number,
+  deletedChunkDigests: Set<string> = new Set()
+): Promise<string> {
   const messages = await parseTranscript(session.path);
-  const texts = buildTurns(messages).map(turnToText);
+  const texts = buildTurns(messages).map((turn) =>
+    redactTurnText(turnToText(turn), deletedChunkDigests)
+  );
   const stamps = messages.map((m) => m.timestamp).filter((t): t is string => !!t);
   const kept = pickTail(texts, maxChars);
   const omittedEarlier = texts.length - kept.length;

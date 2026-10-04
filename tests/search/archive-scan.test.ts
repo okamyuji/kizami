@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { scanArchive, formatArchiveHits } from '../../src/search/archive-scan';
+import { contentDigest } from '../../src/archive/deletions';
 
 const DAY = 86400000;
 const NOW = Date.parse('2026-10-01T00:00:00Z');
@@ -33,6 +34,52 @@ describe('scanArchive', () => {
     expect(hits.map((h) => h.sessionId)).toEqual(['old1']);
     expect(hits[0].dirName).toBe('-a');
     expect(hits[0].snippet).toContain('Retry Policy for staging');
+  });
+
+  it('does not match a session whose terms appear only in deleted chunks', () => {
+    put('-a', 'o1', [user('secret needle'), asst('ok'), user('other'), asst('fine')], 100);
+    const deleted = new Set([contentDigest('[User]\nsecret needle\n\n[Assistant]\nok')]);
+    expect(scanArchive('needle', tmp, 90 * DAY, NOW, 10, new Set(), deleted)).toEqual([]);
+  });
+
+  it('builds the snippet from the kept text only', () => {
+    put('-a', 'o1', [user('secret needle'), asst('ok'), user('public needle'), asst('fine')], 100);
+    const deleted = new Set([contentDigest('[User]\nsecret needle\n\n[Assistant]\nok')]);
+    const hits = scanArchive('needle', tmp, 90 * DAY, NOW, 10, new Set(), deleted);
+    expect(hits.map((h) => h.sessionId)).toEqual(['o1']);
+    expect(hits[0].snippet).toContain('public needle');
+    expect(hits[0].snippet).not.toContain('secret');
+  });
+
+  it('requires every term in the kept text', () => {
+    put('-a', 'o1', [user('secret needle'), asst('ok'), user('public needle'), asst('fine')], 100);
+    const deleted = new Set([contentDigest('[User]\nsecret needle\n\n[Assistant]\nok')]);
+    expect(scanArchive('needle secret', tmp, 90 * DAY, NOW, 10, new Set(), deleted)).toEqual([]);
+  });
+
+  it('centres a kept-text snippet near the first term and caps its length', () => {
+    const pad = 'x'.repeat(600);
+    put('-a', 'o1', [user('secret'), asst('ok'), user(`${pad} needle ${pad}`), asst('fine')], 100);
+    const deleted = new Set([contentDigest('[User]\nsecret\n\n[Assistant]\nok')]);
+    const [hit] = scanArchive('needle', tmp, 90 * DAY, NOW, 10, new Set(), deleted);
+    expect(hit.snippet).toContain('needle');
+    expect(hit.snippet.length).toBe(300);
+    expect(hit.snippet.startsWith('x')).toBe(true);
+  });
+
+  it('joins kept turns with a blank line in the snippet', () => {
+    put('-a', 'o1', [user('secret'), asst('ok'), user('needle'), asst('fine')], 100);
+    const deleted = new Set([contentDigest('[User]\nsecret\n\n[Assistant]\nok')]);
+    const [hit] = scanArchive('needle', tmp, 90 * DAY, NOW, 10, new Set(), deleted);
+    expect(hit.snippet).toBe('[deleted]\n\n[User]\nneedle\n\n[Assistant]\nfine');
+  });
+
+  it('skips deleted sessions', () => {
+    put('-a', 'gone', [user('needle')], 100);
+    put('-a', 'kept', [user('needle')], 120);
+    expect(
+      scanArchive('needle', tmp, 90 * DAY, NOW, 10, new Set(['gone'])).map((h) => h.sessionId)
+    ).toEqual(['kept']);
   });
 
   it('orders by mtime descending and caps at limit', () => {

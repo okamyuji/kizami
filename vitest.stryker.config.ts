@@ -32,6 +32,8 @@ export default defineConfig({
       'tests/archive/resume.test.ts',
       'tests/hooks/save.test.ts',
       'tests/search/archive-scan.test.ts',
+      'tests/archive/deletions.test.ts',
+      'tests/hooks/recover.test.ts',
       'tests/search/fts.test.ts',
       'tests/hooks/skill.test.ts',
       'tests/hooks/setup.test.ts',

@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { renderSession } from '../../src/archive/show';
+import { contentDigest } from '../../src/archive/deletions';
 
 const user = (text: string, ts: string) =>
   JSON.stringify({
@@ -43,6 +44,15 @@ describe('renderSession', () => {
     dirName: '-p',
     cwd: '/w/p',
     gitBranch: 'main',
+  });
+
+  it('hides a deleted chunk and keeps the rest', async () => {
+    const firstTurn = '[User]\nfirst question\n\n[Assistant]\nfirst answer';
+    const out = await renderSession(session(), 0, new Set([contentDigest(firstTurn)]));
+    expect(out).toContain('[deleted]');
+    expect(out).not.toContain('first answer');
+    expect(out).toContain('second answer');
+    expect(out).toContain('Turns: 2');
   });
 
   it('prints a header and every turn when unlimited', async () => {

@@ -7,6 +7,7 @@ import {
   archiveAll,
   getClaudeProjectsDir,
   copyPreferClone,
+  removeArchivedTranscript,
 } from '../../src/archive/store';
 
 describe('archiveTranscript', () => {
@@ -235,5 +236,53 @@ describe('getClaudeProjectsDir', () => {
   it('defaults to ~/.claude/projects', () => {
     delete process.env.CLAUDE_CONFIG_DIR;
     expect(getClaudeProjectsDir()).toBe(path.join(os.homedir(), '.claude', 'projects'));
+  });
+});
+
+describe('removeArchivedTranscript', () => {
+  let tmp: string;
+  beforeEach(() => (tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-archive-rm-'))));
+  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('removes the session file from every project directory and nothing else', () => {
+    const archive = path.join(tmp, 'archive');
+    for (const d of ['-a', '-b']) {
+      fs.mkdirSync(path.join(archive, d), { recursive: true });
+      fs.writeFileSync(path.join(archive, d, 'dead-01.jsonl'), '{}');
+      fs.writeFileSync(path.join(archive, d, 'keep-01.jsonl'), '{}');
+    }
+    removeArchivedTranscript(archive, 'dead-01');
+    expect(fs.readdirSync(path.join(archive, '-a'))).toEqual(['keep-01.jsonl']);
+    expect(fs.readdirSync(path.join(archive, '-b'))).toEqual(['keep-01.jsonl']);
+  });
+
+  it('refuses ids that could leave the archive directory', () => {
+    const archive = path.join(tmp, 'archive');
+    fs.mkdirSync(path.join(archive, '-a'), { recursive: true });
+    const outside = path.join(tmp, 'victim.jsonl');
+    fs.writeFileSync(outside, 'keep');
+    removeArchivedTranscript(archive, '../../victim');
+    expect(fs.readFileSync(outside, 'utf-8')).toBe('keep');
+  });
+
+  it('ignores project directories without the file and stray files in the archive root', () => {
+    const archive = path.join(tmp, 'archive');
+    fs.mkdirSync(path.join(archive, '-empty'), { recursive: true });
+    fs.writeFileSync(path.join(archive, 'stray.txt'), 'x');
+    expect(() => removeArchivedTranscript(archive, 'dead-01')).not.toThrow();
+    expect(fs.readFileSync(path.join(archive, 'stray.txt'), 'utf-8')).toBe('x');
+  });
+
+  it('refuses ids that only start with safe characters', () => {
+    const archive = path.join(tmp, 'archive');
+    fs.mkdirSync(path.join(archive, '-a'), { recursive: true });
+    const outside = path.join(tmp, 'victim.jsonl');
+    fs.writeFileSync(outside, 'keep');
+    removeArchivedTranscript(archive, 'ok/../../../victim');
+    expect(fs.readFileSync(outside, 'utf-8')).toBe('keep');
+  });
+
+  it('does nothing when the archive directory is missing', () => {
+    expect(() => removeArchivedTranscript(path.join(tmp, 'none'), 'x-1')).not.toThrow();
   });
 });
