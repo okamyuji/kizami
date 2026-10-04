@@ -42,6 +42,30 @@ describe('handleSave', () => {
 
   const fixtureTranscript = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
 
+  it('still stores chunks when archiving fails', async () => {
+    const blocker = path.join(tmpDir, 'blocker');
+    fs.writeFileSync(blocker, 'x');
+    process.env.KIZAMI_TRANSCRIPT_ARCHIVE_DIR = path.join(blocker, 'archive');
+    const projDir = path.join(tmpDir, 'projects', '-proj');
+    fs.mkdirSync(projDir, { recursive: true });
+    const transcript = path.join(projDir, 'ffff6666.jsonl');
+    fs.copyFileSync(fixtureTranscript, transcript);
+
+    await handleSave(
+      { session_id: 'ffff6666', transcript_path: transcript, cwd: tmpDir },
+      configPath
+    );
+
+    const db = getDatabase(dbPath);
+    const count = (
+      db.prepare('SELECT COUNT(*) AS n FROM chunks WHERE session_id = ?').get('ffff6666') as {
+        n: number;
+      }
+    ).n;
+    db.close();
+    expect(count).toBeGreaterThan(0);
+  });
+
   it('archives the raw transcript before chunking', async () => {
     const projDir = path.join(tmpDir, 'projects', '-proj');
     fs.mkdirSync(projDir, { recursive: true });
