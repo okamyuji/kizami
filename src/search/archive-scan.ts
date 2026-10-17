@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { parseTranscriptText } from '@/parser/transcript';
 import { buildTurns, turnToText } from '@/parser/chunker';
 import { redactTurnText } from '@/archive/deletions';
-import { stripControlChars } from '@/search/formatter';
+import { fenceUntrusted, sanitizeQuoted } from '@/search/formatter';
 
 export interface ArchiveHit {
   sessionId: string;
@@ -89,11 +89,12 @@ export function scanArchive(
 }
 
 export function formatArchiveHits(hits: ArchiveHit[]): string {
+  if (hits.length === 0) return '';
   const text = hits
     .map(
       (h) =>
         `[${h.mtime.toISOString().slice(0, 10)} ${h.sessionId.slice(0, 6)} from=${h.dirName} archived]\n${h.snippet}\n`
     )
     .join('---\n');
-  return stripControlChars(text);
+  return fenceUntrusted(sanitizeQuoted(text));
 }

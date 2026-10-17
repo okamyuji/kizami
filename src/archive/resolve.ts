@@ -1,7 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { createReadStream } from 'node:fs';
-import { createInterface } from 'node:readline';
+import { readJsonlLines } from '@/parser/transcript';
 
 export class SessionLookupError extends Error {}
 
@@ -56,9 +55,8 @@ function parseLine(raw: string): Header | undefined {
 // Stryker restore BlockStatement
 
 export async function readHeader(file: string): Promise<{ cwd?: string; gitBranch?: string }> {
-  const rl = createInterface({ input: createReadStream(file), crlfDelay: Infinity });
-  // return / break で for await を抜けると readline は自動で閉じる
-  for await (const raw of rl) {
+  // return で for await を抜けるとストリームは自動で閉じる
+  for await (const raw of readJsonlLines(file)) {
     const obj = parseLine(raw);
     if (typeof obj?.cwd === 'string') {
       const { cwd, gitBranch } = obj;

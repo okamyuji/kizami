@@ -12,6 +12,29 @@ import type { AssistantMessage } from '../../src/parser/transcript';
 const FIXTURE = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
 
 describe('parseTranscript', () => {
+  it('keeps a line that holds a raw U+2028 or U+2029 and handles CRLF and a missing final newline', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-transcript-'));
+    const file = path.join(dir, 'sep.jsonl');
+    const user = (text: string) =>
+      JSON.stringify({ type: 'user', message: { role: 'user', content: text } });
+    fs.writeFileSync(file, `${user('a\u2028b\u2029c')}\r\n${user('second')}`);
+    const messages = await parseTranscript(file);
+    expect(messages).toMatchObject([{ text: 'a\u2028b\u2029c' }, { text: 'second' }]);
+    expect(messages).toHaveLength(2);
+    expect(messages).toEqual(parseTranscriptText(fs.readFileSync(file, 'utf-8')));
+  });
+
+  it('parses lines that span stream chunks', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-transcript-'));
+    const file = path.join(dir, 'big.jsonl');
+    const text = '\u20ac'.repeat(100_000);
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n'
+    );
+    expect(await parseTranscript(file)).toMatchObject([{ text }]);
+  });
+
   it('skips malformed external content blocks without throwing', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-transcript-'));
     const file = path.join(dir, 'malformed.jsonl');

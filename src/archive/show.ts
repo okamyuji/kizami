@@ -2,7 +2,7 @@ import { parseTranscript } from '@/parser/transcript';
 import { buildTurns, turnToText } from '@/parser/chunker';
 import type { ResolvedSession } from '@/archive/resolve';
 import { redactTurnText } from '@/archive/deletions';
-import { stripControlChars } from '@/search/formatter';
+import { fenceUntrusted, sanitizeQuoted } from '@/search/formatter';
 
 const TURN_SEPARATOR = '\n\n---\n\n';
 
@@ -45,5 +45,5 @@ export async function renderSession(
     header.push(`Omitted ${omittedEarlier} earlier turn(s). Pass --max-chars 0 to show all.`);
   }
   // 削除判定の digest は元の本文で取るので、落とすのは出力の直前にする
-  return stripControlChars(`${header.join('\n')}\n\n${kept.join(TURN_SEPARATOR)}\n`);
+  return fenceUntrusted(sanitizeQuoted(`${header.join('\n')}\n\n${kept.join(TURN_SEPARATOR)}\n`));
 }

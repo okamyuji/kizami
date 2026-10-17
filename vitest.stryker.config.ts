@@ -52,6 +52,7 @@ export default defineConfig({
       'tests/hooks/skill.test.ts',
       'tests/test-env.test.ts',
       'tests/hooks/setup.test.ts',
+      'tests/import/claude-mem.test.ts',
     ],
   },
 });

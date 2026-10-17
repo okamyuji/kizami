@@ -1,5 +1,4 @@
 import { createReadStream } from 'node:fs';
-import { createInterface } from 'node:readline';
 
 export interface TextContent {
   type: 'text';
@@ -118,7 +117,7 @@ const MAX_FUTURE_SKEW_MS = 24 * 60 * 60 * 1000;
 // Stryker disable next-line Regex: 前後に文字の付いた ISO 形式は Date.parse が NaN にするので、^ と $ を外しても結果は変わらない
 const UTC_ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 
-function validTimestamp(value: unknown): string | undefined {
+export function validTimestamp(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const ms = Date.parse(value);
   // 解釈できない文字列は NaN になり、比較が false になって捨てられる
@@ -228,16 +227,23 @@ export function parseTranscriptText(text: string): TranscriptMessage[] {
   return messages;
 }
 
+/**
+ * 行を \n だけで区切る(行末の \r は JSON.parse が空白として読み飛ばす)。readline は U+2028/U+2029 でも区切り、
+ * JSON 文字列中の生の U+2028 で行が割れて捨てられるため。呼び出し側が途中で抜けるとストリームも閉じる。
+ */
+export async function* readJsonlLines(filePath: string): AsyncGenerator<string> {
+  let rest = '';
+  for await (const chunk of createReadStream(filePath, { encoding: 'utf-8' })) {
+    const lines = (rest + chunk).split('\n');
+    rest = lines.pop() as string;
+    yield* lines;
+  }
+  yield rest;
+}
+
 export async function parseTranscript(filePath: string): Promise<TranscriptMessage[]> {
   const messages: TranscriptMessage[] = [];
-
-  const rl = createInterface({
-    input: createReadStream(filePath, { encoding: 'utf-8' }),
-    crlfDelay: Infinity,
-  });
-
-  for await (const line of rl) appendLine(messages, line);
-
+  for await (const line of readJsonlLines(filePath)) appendLine(messages, line);
   return messages;
 }
 

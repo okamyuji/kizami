@@ -641,7 +641,7 @@ export async function cmdShow(
     process.stdout.write(await renderSession(session, maxChars, deleted.chunkDigests));
   } catch (err) {
     if (!(err instanceof SessionLookupError)) throw err;
-    console.error(err.message);
+    console.error(stripControlChars(err.message));
     process.exitCode = 1;
   }
 }
@@ -665,7 +665,7 @@ export async function cmdResume(
     });
   } catch (err) {
     if (!(err instanceof SessionLookupError)) throw err;
-    console.error(err.message);
+    console.error(stripControlChars(err.message));
     process.exitCode = 1;
   }
 }
@@ -688,7 +688,7 @@ export async function cmdRecover(options: { config?: string }): Promise<RecoverR
     if (result.details.length > 0) {
       console.log('\nDetails:');
       for (const d of result.details) {
-        console.log(`  ${d}`);
+        console.log(`  ${safeTerminalLine(d)}`);
       }
     }
   }
