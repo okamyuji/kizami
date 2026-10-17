@@ -30,7 +30,8 @@ function keptSnippet(raw: string, terms: string[], deleted: Set<string>): string
 }
 
 /**
- * FTS のチャンクは maintenance で消える。消えた期間のセッションだけを生ログから探す。
+ * FTS に無い会話を生ログから探す。maintenance で消えた期間と、取り込まなかった会話が対象。
+ * indexedSessions を渡すと、そこに無いセッションは新しいファイルでも読む。渡さなければ古いファイルだけを読む。
  * ponytail: 1 回の検索で対象ファイルを全文読む。保管が数 GB を超えて遅くなったら索引を作る。
  */
 export function scanArchive(
@@ -40,7 +41,8 @@ export function scanArchive(
   now = Date.now(),
   limit = 10,
   deletedSessions: Set<string> = new Set(),
-  deletedChunkDigests: Set<string> = new Set()
+  deletedChunkDigests: Set<string> = new Set(),
+  indexedSessions?: ReadonlySet<string>
 ): ArchiveHit[] {
   if (!query.trim()) return [];
   const terms = query.toLowerCase().match(/\S+/g) as string[];
@@ -66,7 +68,8 @@ export function scanArchive(
       let raw: string;
       try {
         ({ mtimeMs } = fs.statSync(file));
-        if (now - mtimeMs <= olderThanMs) continue;
+        if (now - mtimeMs <= olderThanMs && (!indexedSessions || indexedSessions.has(sessionId)))
+          continue;
         raw = fs.readFileSync(file, 'utf-8');
       } catch {
         continue;

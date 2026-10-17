@@ -103,6 +103,23 @@ describe('scanArchive', () => {
     expect(scanArchive('   ', tmp, 0, NOW)).toEqual([]);
   });
 
+  it('scans a recent file only when its session is not in the indexed set', () => {
+    put('-a', 'new-unindexed', [user('needle')], 10);
+    put('-a', 'new-indexed', [user('needle')], 10);
+    put('-a', 'old-indexed', [user('needle')], 100);
+    const indexed = new Set(['new-indexed', 'old-indexed']);
+
+    const hits = scanArchive('needle', tmp, 90 * DAY, NOW, 10, new Set(), new Set(), indexed);
+
+    expect(hits.map((h) => h.sessionId).sort()).toEqual(['new-unindexed', 'old-indexed']);
+  });
+
+  it('keeps the age rule when no indexed set is given', () => {
+    put('-a', 'new1', [user('needle')], 10);
+
+    expect(scanArchive('needle', tmp, 90 * DAY, NOW)).toEqual([]);
+  });
+
   it('treats a file exactly at the cutoff age as not old enough', () => {
     put('-a', 'edge', [user('needle')], 90);
     expect(scanArchive('needle', tmp, 90 * DAY, NOW)).toEqual([]);

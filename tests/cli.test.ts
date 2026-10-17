@@ -212,13 +212,13 @@ describe('cli commands', () => {
         const t = new Date(Date.now() - ageDays * DAY);
         fs.utimesSync(file, t, t);
       }
-      function archiveConfig(maxChunkAgeDays: number): string {
+      function archiveConfig(maxChunkAgeDays: number, defaultLimit = 10): string {
         const p = path.join(tmpDir, 'archive-config.json');
         fs.writeFileSync(
           p,
           JSON.stringify({
             database: { path: dbPath },
-            search: { projectScope: true },
+            search: { projectScope: true, defaultLimit },
             maintenance: { maxChunkAgeDays },
           })
         );
@@ -248,21 +248,76 @@ describe('cli commands', () => {
         expect(out).toContain('abcdef from=-proj archived');
         expect(out).toContain('zebra migration notes');
         expect(logSpy).not.toHaveBeenCalledWith('No results found.');
+        expect(logSpy).not.toHaveBeenCalledWith('');
       });
 
-      it('ignores archived files newer than maxChunkAgeDays', () => {
+      it('ignores a recent archived file whose session is already indexed', () => {
         putArchived('abcdef123', 'zebra migration notes', 10);
+        store.insertSession(makeSession({ sessionId: 'abcdef123' }));
         const logSpy = vi.spyOn(console, 'log');
         cmdSearch('zebra', { project: '/test/project', config: archiveConfig(90) });
         expect(logSpy).toHaveBeenCalledWith('No results found.');
       });
 
-      it('does not scan the archive when FTS has a hit', () => {
+      it('scans a recent archived file whose session was never imported', () => {
+        putArchived('abcdef123', 'zebra migration notes', 10);
+        const logSpy = vi.spyOn(console, 'log');
+        cmdSearch('zebra', { project: '/test/project', config: archiveConfig(90) });
+        expect(logSpy.mock.calls.flat().join('\n')).toContain('abcdef from=-proj archived');
+      });
+
+      it('lists archived matches after the indexed results', () => {
         putArchived('abcdef123', 'zebra migration notes', 100);
         store.insertChunks([makeChunk({ content: 'zebra in the index' })]);
         const logSpy = vi.spyOn(console, 'log');
+        const results = cmdSearch('zebra', { project: '/test/project', config: archiveConfig(90) });
+        expect(results).toHaveLength(1);
+        const calls = logSpy.mock.calls.flat().map(String);
+        const indexed = calls.findIndex((c) => c.includes('zebra in the index'));
+        const header = calls.indexOf('Matches in archived transcripts:');
+        expect(indexed).toBeGreaterThanOrEqual(0);
+        expect(header).toBeGreaterThan(indexed);
+        expect(calls[header + 1]).toContain('abcdef from=-proj archived');
+        expect(calls).not.toContain('No indexed results. Matches in archived transcripts:');
+      });
+
+      it('omits an archived hit whose session is already in the indexed results', () => {
+        putArchived('session-1', 'zebra migration notes', 100);
+        putArchived('other-77', 'zebra elsewhere', 100);
+        store.insertChunks([makeChunk({ content: 'zebra in the index' })]);
+        const logSpy = vi.spyOn(console, 'log');
         cmdSearch('zebra', { project: '/test/project', config: archiveConfig(90) });
-        expect(logSpy.mock.calls.flat().join('\n')).not.toContain('archived');
+        const out = logSpy.mock.calls.flat().join('\n');
+        expect(out).toContain('other-');
+        expect(out).not.toContain('sessio from=-proj archived');
+      });
+
+      it('keeps an archived hit for an indexed session that the result limit cut off', () => {
+        putArchived('cutoff-1', 'zebra migration notes', 100);
+        store.insertChunks([
+          makeChunk({ sessionId: 'first-1', content: 'zebra zebra zebra in the index' }),
+          makeChunk({ sessionId: 'cutoff-1', chunkIndex: 1, content: 'zebra once' }),
+        ]);
+        const logSpy = vi.spyOn(console, 'log');
+        cmdSearch('zebra', { project: '/test/project', config: archiveConfig(90, 1) });
+        expect(logSpy.mock.calls.flat().join('\n')).toContain('cutoff from=-proj archived');
+      });
+
+      it('prints neither a header nor "No results found." for indexed hits without archive hits', () => {
+        store.insertChunks([makeChunk({ content: 'zebra in the index' })]);
+        const logSpy = vi.spyOn(console, 'log');
+        cmdSearch('zebra', { project: '/test/project', config: archiveConfig(90) });
+        const calls = logSpy.mock.calls.flat().map(String);
+        expect(calls).not.toContain('No results found.');
+        expect(calls.join('\n')).not.toContain('archived transcripts');
+      });
+
+      it('does not list archived sessions recorded as deleted', () => {
+        putArchived('abcdef123', 'zebra migration notes', 100);
+        recordSessionDeletion(deletionsFile(dbPath), 'abcdef123');
+        const logSpy = vi.spyOn(console, 'log');
+        cmdSearch('zebra', { project: '/test/project', config: archiveConfig(90) });
+        expect(logSpy).toHaveBeenCalledWith('No results found.');
       });
     });
 

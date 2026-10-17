@@ -422,6 +422,13 @@ export class Store {
     return !!row;
   }
 
+  getSessionIds(): Set<string> {
+    const rows = this.db.prepare('SELECT session_id FROM sessions').all() as Array<{
+      session_id: string;
+    }>;
+    return new Set(rows.map((r) => r.session_id));
+  }
+
   getChunkIdsWithoutEmbedding(): number[] {
     try {
       const rows = this.db

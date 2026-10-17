@@ -210,10 +210,8 @@ export function cmdSearch(
       if (ranked.length > 0)
         console.log('No results in this project. Results from other projects:');
     }
-    if (ranked.length > 0) {
-      console.log(formatResults(ranked, config.search.defaultLimit));
-      return ranked;
-    }
+    const shown = ranked.slice(0, config.search.defaultLimit);
+    if (ranked.length > 0) console.log(formatResults(ranked, config.search.defaultLimit));
 
     const deleted = loadDeletions(deletionsFile(config.database.path));
     const hits = scanArchive(
@@ -222,16 +220,21 @@ export function cmdSearch(
       config.maintenance.maxChunkAgeDays * 86400000,
       Date.now(),
       10,
-      deleted.sessions,
-      deleted.chunkDigests
+      new Set([...deleted.sessions, ...shown.map((r) => r.sessionId)]),
+      deleted.chunkDigests,
+      store.getSessionIds()
     );
     if (hits.length > 0) {
-      console.log('No indexed results. Matches in archived transcripts:');
+      console.log(
+        shown.length > 0
+          ? 'Matches in archived transcripts:'
+          : 'No indexed results. Matches in archived transcripts:'
+      );
       console.log(formatArchiveHits(hits));
-    } else {
+    } else if (ranked.length === 0) {
       console.log('No results found.');
     }
-    return [];
+    return ranked;
   } finally {
     close();
   }

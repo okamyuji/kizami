@@ -199,7 +199,7 @@ kizami embed --backfill
 kizami search "React Hook Form"
 ```
 
-検索は現在のプロジェクトから始めます。見つからなければ全プロジェクトを探し、結果の前に`No results in this project. Results from other projects:`と表示します。それでも見つからない場合は、保管済みの生ログのうち`maintenance.maxChunkAgeDays`（既定90日）より古いファイルを探します。古いチャンクは自動メンテナンスで削除されるので、その期間の会話を拾うのがこの段階の役割です。`-`、`/`、`.`を含む語（例 `better-sqlite3`、`src/cli.ts`）もそのまま検索できます。
+検索は現在のプロジェクトから始めます。見つからなければ全プロジェクトを探し、結果の前に`No results in this project. Results from other projects:`と表示します。インデックスの結果の有無にかかわらず、保管済みの生ログも探し、一致した会話を結果の後に`Matches in archived transcripts:`の見出しで並べます。インデックスに結果が無いときの見出しは`No indexed results. Matches in archived transcripts:`です。探す対象は、`maintenance.maxChunkAgeDays`（既定90日）より古いファイルと、DBにセッションが無いファイルです。古いチャンクは自動メンテナンスで削除され、保存期間より古い会話は取り込まないので、その期間の会話を拾うのがこの段階の役割です。インデックスの結果に出たセッションは、保管側の結果から省きます。保管側の結果は`kizami show <セッションID>`で読めます。`-`、`/`、`.`を含む語（例 `better-sqlite3`、`src/cli.ts`）もそのまま検索できます。
 
 検索を始める前に、`~/.claude/projects/`にあってDBに無い会話を取り込みます。取り込み済みの場合、この処理にかかる時間は0.1秒前後です。
 
