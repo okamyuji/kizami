@@ -161,6 +161,14 @@ export class Store {
     return row.t ?? undefined;
   }
 
+  hasChunkContaining(sessionId: string, text: string): boolean {
+    // LIKE は本文の % と _ を特別扱いするので、文字列のまま探す instr を使う
+    const row = this.db
+      .prepare('SELECT 1 FROM chunks WHERE session_id = ? AND instr(content, ?) > 0 LIMIT 1')
+      .get(sessionId, text);
+    return row !== undefined;
+  }
+
   getSessionTurnKeys(sessionId: string): string[] {
     const rows = this.db
       .prepare('SELECT DISTINCT turn_key FROM chunks WHERE session_id = ? AND turn_key IS NOT NULL')

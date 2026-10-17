@@ -1343,3 +1343,213 @@ describe('recoverTranscripts repairs sessions imported with the wrong time or pr
     ]);
   });
 });
+
+describe('recoverTranscripts repairs sessions that saved api-request-blob lines as turns', () => {
+  let tmpDir: string;
+  let dbPath: string;
+  let jsonlDir: string;
+  let configPath: string;
+  let projectsDir: string;
+  let cwd: string;
+  let file: string;
+  const SID = 'blobfix-0001';
+  const COPY = '<system-reminder>requestcopy</system-reminder>';
+  type Line = [
+    type: 'user' | 'assistant' | 'api-request-blob',
+    role: 'user' | 'assistant',
+    text: string,
+  ];
+
+  const entry = ([type, role, text]: Line, asBefore: boolean) =>
+    JSON.stringify({
+      type: asBefore && type === 'api-request-blob' ? role : type,
+      sessionId: SID,
+      cwd,
+      timestamp: new Date().toISOString(),
+      message:
+        role === 'user' ? { role, content: text } : { role, content: [{ type: 'text', text }] },
+    });
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-blobfix-'));
+    dbPath = path.join(tmpDir, 'test.db');
+    jsonlDir = path.join(tmpDir, 'jsonl');
+    configPath = path.join(tmpDir, 'config.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        database: { path: dbPath },
+        storage: { jsonlDir, transcriptArchiveDir: path.join(tmpDir, 'archive') },
+        maintenance: { enabled: false },
+      })
+    );
+    cwd = path.join(tmpDir, 'work');
+    fs.mkdirSync(cwd);
+    projectsDir = path.join(tmpDir, 'projects');
+    fs.mkdirSync(path.join(projectsDir, '-work'), { recursive: true });
+    file = path.join(projectsDir, '-work', `${SID}.jsonl`);
+  });
+
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  // 0.8.5 以前は blob 行を発言として読んだ。その読み方の生ログを Stop hook に保存させてから、生ログを本来の形に戻す。
+  async function saveAsBefore(lines: Line[]): Promise<void> {
+    const write = (asBefore: boolean) =>
+      fs.writeFileSync(file, lines.map((l) => entry(l, asBefore)).join('\n') + '\n');
+    write(true);
+    await checkpointStop(
+      'claude',
+      JSON.stringify({ hook_event_name: 'Stop', session_id: SID, transcript_path: file, cwd }),
+      configPath
+    );
+    write(false);
+  }
+
+  const polluted: Line[] = [
+    ['user', 'user', 'retry question'],
+    ['api-request-blob', 'user', COPY],
+    ['api-request-blob', 'assistant', 'copied answer'],
+    ['assistant', 'assistant', 'retry answer'],
+  ];
+  const contents = () => {
+    const db = getDatabase(dbPath);
+    try {
+      initializeSchema(db);
+      const rows = db.prepare('SELECT content FROM chunks').all() as { content: string }[];
+      return rows.map((r) => r.content).join('\n');
+    } finally {
+      db.close();
+    }
+  };
+  const marker = () => path.join(tmpDir, 'recover-request-copies.json');
+  const retries = () => JSON.parse(fs.readFileSync(marker(), 'utf-8'));
+
+  it('replaces the saved turns with the turns read again from the transcript', async () => {
+    await saveAsBefore(polluted);
+    expect(contents()).toContain('requestcopy');
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.repaired).toBe(1);
+    expect(result.details).toEqual(['blobfix- (repaired)']);
+    expect(result.skipped).toBe(0);
+    expect(contents()).not.toContain('requestcopy');
+    expect(contents()).not.toContain('copied answer');
+    expect(contents()).toContain('retry question');
+    expect(contents()).toContain('retry answer');
+    expect(retries()).toEqual([]);
+    const state = JSON.parse(fs.readFileSync(path.join(tmpDir, 'recover-state.json'), 'utf-8'));
+    expect(state.sizes[SID]).toBe(fs.statSync(file).size);
+  });
+
+  it('keeps the repair after a rebuild from the JSONL store', async () => {
+    await saveAsBefore(polluted);
+    await recoverTranscripts(configPath, projectsDir);
+
+    const history = await foldCanonicalHistory(listJsonlFiles(jsonlDir));
+
+    expect(history.errors).toEqual([]);
+    const turns = JSON.stringify([...history.turns.values()].filter((t) => t.sessionId === SID));
+    expect(turns).not.toContain('requestcopy');
+    expect(turns).toContain('retry question');
+  });
+
+  it('leaves a session that only talks about system-reminder tags', async () => {
+    await saveAsBefore([
+      ['user', 'user', 'what does <system-reminder> mean'],
+      ['assistant', 'assistant', 'a tag'],
+    ]);
+
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+    expect(contents()).toContain('<system-reminder> mean');
+  });
+
+  it('leaves a session whose request copies hold no system-reminder', async () => {
+    await saveAsBefore([
+      ['user', 'user', 'q'],
+      ['api-request-blob', 'user', 'plain copy'],
+      ['assistant', 'assistant', 'a'],
+    ]);
+
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+    expect(contents()).toContain('plain copy');
+  });
+
+  it('waits while a prompt is pending and writes the marker only after the repair', async () => {
+    await saveAsBefore(polluted);
+    writePendingPrompt(tmpDir, {
+      version: 2,
+      runtime: 'claude',
+      sessionId: SID,
+      projectPath: cwd,
+      prompt: 'live',
+      source: {},
+      pendingKey: 'pk-1',
+      turnSequence: 1,
+      sourceOrder: '00000000000000000009',
+      createdAt: new Date().toISOString(),
+    });
+
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+    expect(retries()).toEqual([SID]);
+
+    fs.rmSync(path.join(tmpDir, 'pending'), { recursive: true, force: true });
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(1);
+    expect(retries()).toEqual([]);
+  });
+
+  it('writes no marker when reading a transcript fails, and repairs it on the next run', async () => {
+    await saveAsBefore(polluted);
+    fs.chmodSync(file, 0o000);
+
+    const failing = await recoverTranscripts(configPath, projectsDir);
+    expect(failing.errors).toBe(1);
+    expect(retries()).toEqual([SID]);
+
+    fs.chmodSync(file, 0o600);
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(1);
+  });
+
+  it('skips the scan and leaves the file as it is once nothing is left to check', async () => {
+    await saveAsBefore(polluted);
+    fs.writeFileSync(marker(), '[ ]');
+
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+    expect(contents()).toContain('requestcopy');
+    expect(fs.readFileSync(marker(), 'utf-8')).toBe('[ ]');
+  });
+
+  it('checks again only the sessions left in the list', async () => {
+    await saveAsBefore(polluted);
+    fs.writeFileSync(marker(), JSON.stringify(['other-session']));
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+    expect(retries()).toEqual([]);
+
+    fs.writeFileSync(marker(), JSON.stringify([SID]));
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(1);
+  });
+
+  it.each([
+    ['is broken', '{oops', 1, '[]'],
+    ['holds no list', '{}', 0, '{}'],
+  ])(
+    'rescans only when the file %s, and rewrites it only after a scan',
+    async (_n, text, repaired, after) => {
+      await saveAsBefore(polluted);
+      fs.writeFileSync(marker(), text);
+
+      expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(repaired);
+      expect(fs.readFileSync(marker(), 'utf-8')).toBe(after);
+    }
+  );
+
+  it('leaves a session that has no answered turn once the copies are dropped', async () => {
+    await saveAsBefore([
+      ['api-request-blob', 'user', COPY],
+      ['assistant', 'assistant', 'a'],
+    ]);
+
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+    expect(contents()).toContain('requestcopy');
+  });
+});

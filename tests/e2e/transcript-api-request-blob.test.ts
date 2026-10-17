@@ -28,56 +28,74 @@ function runCli(root: string, args: string[], input?: string): ReturnType<typeof
   });
 }
 
+const line = (value: unknown) => JSON.stringify(value);
+
+// asBefore は 0.8.5 以前の読み方を再現する。blob 行を発言の行として書く
+function writeTranscript(file: string, project: string, asBefore = false): void {
+  const base = { sessionId: 'blob-session', cwd: project, timestamp: new Date().toISOString() };
+  const blob = (role: 'user' | 'assistant', content: unknown) =>
+    line({ ...base, type: asBefore ? role : 'api-request-blob', message: { role, content } });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    [
+      line({ ...base, type: 'user', message: { role: 'user', content: 'retrypolicyquestion' } }),
+      blob('user', '<system-reminder>requestcopymarker</system-reminder>'),
+      blob('assistant', [{ type: 'text', text: 'requestcopymarker' }]),
+      line({
+        ...base,
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'retrypolicyanswer' }] },
+      }),
+    ].join('\n') + '\n'
+  );
+}
+
+function setup(): { root: string; project: string; transcript: string } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-e2e-blob-'));
+  dirs.push(root);
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const transcript = path.join(root, 'claude', 'projects', '-project', 'blob-session.jsonl');
+  return { root, project, transcript };
+}
+
+function save(root: string, project: string, transcript: string, event: string) {
+  return runCli(
+    root,
+    ['save', '--stdin', '--runtime', 'claude'],
+    line({
+      hook_event_name: event,
+      session_id: 'blob-session',
+      cwd: project,
+      transcript_path: transcript,
+    })
+  );
+}
+
+function expectOnlyConversation(root: string): void {
+  const conversation = runCli(root, ['search', 'retrypolicyquestion']);
+  expect(conversation.stdout).toContain('retrypolicyanswer');
+  expect(conversation.stdout).not.toContain('system-reminder');
+  expect(runCli(root, ['search', 'requestcopymarker']).stdout).not.toContain('requestcopymarker');
+}
+
 describe('built CLI with a Claude Code transcript that holds api-request-blob lines', () => {
   it('saves only the conversation, so search never returns the request copy', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-e2e-blob-'));
-    dirs.push(root);
-    const project = path.join(root, 'project');
-    fs.mkdirSync(project);
-    const transcript = path.join(root, 'session.jsonl');
-    const line = (value: unknown) => JSON.stringify(value);
-    const base = { sessionId: 'blob-session', cwd: project, timestamp: '2026-10-01T00:00:00Z' };
-    fs.writeFileSync(
-      transcript,
-      [
-        line({ ...base, type: 'user', message: { role: 'user', content: 'retrypolicyquestion' } }),
-        line({
-          type: 'api-request-blob',
-          sessionId: 'blob-session',
-          message: {
-            role: 'user',
-            content: '<system-reminder>requestcopymarker</system-reminder>',
-          },
-        }),
-        line({
-          type: 'api-request-blob',
-          sessionId: 'blob-session',
-          message: { role: 'assistant', content: [{ type: 'text', text: 'requestcopymarker' }] },
-        }),
-        line({
-          ...base,
-          type: 'assistant',
-          message: { role: 'assistant', content: [{ type: 'text', text: 'retrypolicyanswer' }] },
-        }),
-      ].join('\n') + '\n'
-    );
+    const { root, project, transcript } = setup();
+    writeTranscript(transcript, project);
 
-    const save = runCli(
-      root,
-      ['save', '--stdin', '--runtime', 'claude'],
-      line({
-        hook_event_name: 'SessionEnd',
-        session_id: 'blob-session',
-        cwd: project,
-        transcript_path: transcript,
-      })
-    );
-    expect(save.status).toBe(0);
+    expect(save(root, project, transcript, 'SessionEnd').status).toBe(0);
 
-    const conversation = runCli(root, ['search', 'retrypolicyquestion']);
-    expect(conversation.stdout).toContain('retrypolicyanswer');
-    const copy = runCli(root, ['search', 'requestcopymarker']);
-    expect(copy.stdout).not.toContain('requestcopymarker');
-    expect(conversation.stdout).not.toContain('system-reminder');
+    expectOnlyConversation(root);
+  });
+
+  it('repairs a session that an older version saved with the request copy on the next search', () => {
+    const { root, project, transcript } = setup();
+    writeTranscript(transcript, project, true);
+    expect(save(root, project, transcript, 'Stop').status).toBe(0);
+    writeTranscript(transcript, project);
+
+    expectOnlyConversation(root);
   });
 });

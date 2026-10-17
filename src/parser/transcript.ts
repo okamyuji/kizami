@@ -225,6 +225,14 @@ export function parseTranscriptText(text: string): TranscriptMessage[] {
   return messages;
 }
 
+/** api-request-blob 行を含むか。0.8.5 以前はこの行を発言として保存したので、修復の対象を見分けるのに使う。 */
+export async function hasRequestCopies(filePath: string): Promise<boolean> {
+  for await (const line of readLines(filePath)) {
+    if (parseRawLine(line)?.type === 'api-request-blob') return true;
+  }
+  return false;
+}
+
 export async function parseTranscript(filePath: string): Promise<TranscriptMessage[]> {
   const messages: TranscriptMessage[] = [];
   for await (const line of readLines(filePath)) appendLine(messages, line);

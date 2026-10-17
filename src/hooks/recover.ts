@@ -21,8 +21,11 @@ import {
   saveRecoverMarks,
   refreshIfGrown,
   repairIfMisdated,
+  repairIfRequestCopies,
   isRepairDone,
   markRepairDone,
+  loadCopyRepairRetries,
+  saveCopyRepairRetries,
 } from '@/hooks/refresh';
 
 export interface RecoverResult {
@@ -85,6 +88,9 @@ interface Scan {
   result: RecoverResult;
   repairDone: boolean;
   repairFailed: boolean;
+  /** undefined なら全件を確かめる。 */
+  copyRetries: Set<string> | undefined;
+  copyRetryNext: Set<string>;
 }
 
 /** 保存済みのセッションを、修復が要れば作り直し、生ログが伸びていれば反映する。 */
@@ -103,6 +109,8 @@ async function syncSavedSession(
     marks,
     deletedChunkDigests: scan.deleted.chunkDigests,
   };
+  const checkCopies = scan.copyRetries?.has(sessionId) ?? true;
+  if (checkCopies && (await repairRequestCopies(scan, ctx, dirName))) return;
   if (!scan.repairDone) {
     let repaired: boolean;
     try {
@@ -126,6 +134,29 @@ async function syncSavedSession(
   } else {
     result.skipped++;
   }
+}
+
+/** api-request-blob の写しを発言として保存したセッションを作り直す。直したら true。 */
+async function repairRequestCopies(
+  scan: Scan,
+  ctx: Parameters<typeof repairIfRequestCopies>[0],
+  dirName: string
+): Promise<boolean> {
+  let outcome: Awaited<ReturnType<typeof repairIfRequestCopies>>;
+  try {
+    outcome = await repairIfRequestCopies(
+      ctx,
+      await resolveProjectPath(scan.config, ctx.transcriptPath, dirName)
+    );
+  } catch (err) {
+    scan.copyRetryNext.add(ctx.sessionId);
+    throw err;
+  }
+  if (outcome === 'deferred') scan.copyRetryNext.add(ctx.sessionId);
+  if (outcome !== 'repaired') return false;
+  scan.result.repaired++;
+  scan.result.details.push(`${ctx.sessionId.slice(0, 8)} (repaired)`);
+  return true;
 }
 
 /** DB に無いセッションを生ログから取り込む。 */
@@ -215,6 +246,8 @@ export async function recoverTranscripts(
       result,
       repairDone: isRepairDone(config),
       repairFailed: false,
+      copyRetries: loadCopyRepairRetries(config),
+      copyRetryNext: new Set(),
     };
 
     const projectsDir = claudeProjectsDir ?? getClaudeProjectsDir();
@@ -264,6 +297,7 @@ export async function recoverTranscripts(
     saveRecoverMarks(config, scan.marks);
     // 修復の判定に失敗したセッションがあれば次回も判定し直す。取り込みの失敗は関係ない
     if (!scan.repairDone && !scan.repairFailed) markRepairDone(config);
+    if (scan.copyRetries?.size !== 0) saveCopyRepairRetries(config, scan.copyRetryNext);
     return result;
   } finally {
     db.close();
