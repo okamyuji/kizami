@@ -216,6 +216,44 @@ describe('recoverTranscripts', () => {
     ]);
   });
 
+  it('records the first and last questions, cut to 200 characters, and an 8-character id in details', async () => {
+    const ts = new Date().toISOString();
+    const ask = (text: string) =>
+      line({
+        type: 'user',
+        sessionId: 's',
+        timestamp: ts,
+        message: { role: 'user', content: text },
+      });
+    const [, answer] = turn(undefined, ts);
+    writeSession('-tmp-p', 'abcdefgh-long-id', [
+      ask('a'.repeat(250)),
+      answer,
+      ask('b'.repeat(250)),
+      answer,
+    ]);
+
+    const result = await recoverTranscripts(configPath, fakeProjectsDir);
+
+    expect(result.details).toEqual([expect.stringMatching(/^abcdefgh \(\d+ chunks\)$/)]);
+    expect(
+      queryRows<{ first_message: string; last_message: string }>(
+        'SELECT first_message, last_message FROM sessions'
+      )
+    ).toEqual([{ first_message: 'a'.repeat(200), last_message: 'b'.repeat(200) }]);
+  });
+
+  it('imports a transcript without any question, leaving the first and last questions empty', async () => {
+    writeSession('-tmp-p', 'noask001', [turn(undefined, new Date().toISOString())[1]]);
+
+    expect((await recoverTranscripts(configPath, fakeProjectsDir)).recovered).toBe(1);
+    expect(
+      queryRows<{ first_message: string | null; last_message: string | null }>(
+        'SELECT first_message, last_message FROM sessions'
+      )
+    ).toEqual([{ first_message: null, last_message: null }]);
+  });
+
   describe('retention', () => {
     const NOW = new Date('2026-10-17T12:00:00.000Z');
     const cutoff = new Date(NOW);
@@ -264,6 +302,46 @@ describe('recoverTranscripts', () => {
       );
       writeSession('-tmp-p', 'old00002', turn(undefined, at(-1)));
 
+      expect((await recoverTranscripts(configPath, fakeProjectsDir)).recovered).toBe(1);
+    });
+
+    // 整理はチャンクの created_at（ターン先頭の時刻）で消す。最後の行の時刻で判定すると、消えては入るを繰り返す
+    it('does not import a conversation whose newest turn started before the cutoff', async () => {
+      const [question, answer] = turn(undefined, at(-1000));
+      const lateAnswer = answer.replace(at(-1000), at(1000));
+      writeSession('-tmp-p', 'late0001', [question, lateAnswer]);
+      writeSession('-tmp-p', 'nots0001', [question, answer.replace(/,"timestamp":"[^"]+"/, '')]);
+
+      const result = await recoverTranscripts(configPath, fakeProjectsDir);
+
+      expect(result.recovered).toBe(0);
+      expect(sessionCount()).toBe(0);
+    });
+
+    it('imports a conversation whose earlier turn is newer than the cutoff even when the last one is not', async () => {
+      writeSession('-tmp-p', 'skew0001', [
+        ...turn(undefined, at(1000)),
+        ...turn(undefined, at(-1000)),
+      ]);
+
+      expect((await recoverTranscripts(configPath, fakeProjectsDir)).recovered).toBe(1);
+    });
+
+    it('remembers a skipped aged transcript by size so the next run does not parse it again', async () => {
+      writeSession('-tmp-p', 'old00004', turn(undefined, at(-1)));
+      const file = path.join(fakeProjectsDir, '-tmp-p', 'old00004.jsonl');
+      await recoverTranscripts(configPath, fakeProjectsDir);
+      const marks = () =>
+        JSON.parse(fs.readFileSync(path.join(tmpDir, 'recover-state.json'), 'utf-8')).sizes;
+      expect(marks()).toEqual({ old00004: fs.statSync(file).size });
+
+      // 同じサイズのまま中身を最近の会話に変えても、目印があれば読まない
+      fs.writeFileSync(file, turn(undefined, at(1)).join('\n') + '\n', 'utf-8');
+      const again = await recoverTranscripts(configPath, fakeProjectsDir);
+      expect(again.recovered).toBe(0);
+      expect(again.skipped).toBe(1);
+
+      fs.appendFileSync(file, '\n');
       expect((await recoverTranscripts(configPath, fakeProjectsDir)).recovered).toBe(1);
     });
 
@@ -642,6 +720,8 @@ describe('recoverTranscripts refreshes grown legacy sessions', () => {
     initializeSchema(db);
     new Store(db).deleteSession(SID);
     db.close();
+    // 伸びた生ログは目印で省かれず、削除した本文の判定まで進む
+    appendTurn();
 
     const result = await recoverTranscripts(configPath, projectsDir);
 
@@ -949,17 +1029,27 @@ describe('recoverTranscripts repairs sessions imported with the wrong time or pr
     expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
   });
 
-  it('writes the repair marker only after a run without errors', async () => {
-    const unreadable = path.join(projectsDir, '-w-go-llm-agent', 'broken-0001.jsonl');
-    fs.writeFileSync(unreadable, 'x\n');
-    fs.chmodSync(unreadable, 0o000);
+  it('writes the repair marker only after every saved session was checked', async () => {
+    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z' });
+    fs.chmodSync(file, 0o000);
 
     const failing = await recoverTranscripts(configPath, projectsDir);
     expect(failing.errors).toBe(1);
     expect(fs.existsSync(marker())).toBe(false);
 
-    fs.chmodSync(unreadable, 0o600);
-    await recoverTranscripts(configPath, projectsDir);
+    fs.chmodSync(file, 0o600);
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(1);
+    expect(fs.existsSync(marker())).toBe(true);
+  });
+
+  it('writes the repair marker even when a transcript not yet saved fails to import', async () => {
+    const unreadable = path.join(projectsDir, '-w-go-llm-agent', 'broken-0001.jsonl');
+    fs.writeFileSync(unreadable, 'x\n');
+    fs.chmodSync(unreadable, 0o000);
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.errors).toBe(1);
     expect(fs.existsSync(marker())).toBe(true);
   });
 
