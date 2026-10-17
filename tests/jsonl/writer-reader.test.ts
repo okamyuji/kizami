@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { JsonlWriter } from '@/jsonl/writer';
-import { readJsonlFile, readTailRecords, isJsonlChunkRecord } from '@/jsonl/reader';
+import { readJsonlFile, readJsonlLines, readTailRecords, isJsonlChunkRecord } from '@/jsonl/reader';
 import type { JsonlChunkRecord } from '@/jsonl/types';
 import { getJsonlFilePath } from '@/jsonl/path';
 
@@ -148,5 +148,41 @@ describe('jsonl writer + reader', () => {
     expect(isJsonlChunkRecord({ ...valid, tokenCount: 'bad' })).toBe(false);
     expect(isJsonlChunkRecord({ ...valid, metadata: [] })).toBe(false);
     expect(isJsonlChunkRecord({ ...valid, embeddingDim: 'bad' })).toBe(false);
+  });
+
+  it('keeps a record whose content holds a raw U+2028 or U+2029 and reports exact byte offsets', async () => {
+    const dir = makeTmpDir();
+    const writer = new JsonlWriter(dir);
+    const filePath = writer.appendRecords(
+      [makeRecord('a', 'x\u2028y\u2029z'), makeRecord('b', 'caf\u00e9')],
+      new Date(Date.UTC(2026, 4, 21))
+    );
+    expect(fs.readFileSync(filePath, 'utf-8')).toContain('\u2028');
+
+    const ids: string[] = [];
+    for await (const rec of readJsonlFile(filePath)) ids.push(rec.id);
+    expect(ids).toEqual(['a', 'b']);
+    expect(readTailRecords(filePath, 10).map((r) => r.id)).toEqual(['a', 'b']);
+
+    const raw = fs.readFileSync(filePath);
+    const spans: { offset: number; endOffset: number; kind: string }[] = [];
+    for await (const r of readJsonlLines(filePath)) spans.push(r);
+    expect(spans.map((r) => r.kind)).toEqual(['record', 'record']);
+    expect(spans[0].offset).toBe(0);
+    expect(spans[1].offset).toBe(spans[0].endOffset);
+    expect(spans[1].endOffset).toBe(raw.length);
+    expect(raw[spans[1].offset - 1]).toBe(0x0a);
+  });
+
+  it('counts a trailing carriage return in the byte offsets', async () => {
+    const dir = makeTmpDir();
+    const filePath = path.join(dir, 'crlf.jsonl');
+    const a = JSON.stringify(makeRecord('a'));
+    const b = JSON.stringify(makeRecord('b'));
+    fs.writeFileSync(filePath, `${a}\r\n${b}\r\n`);
+    const spans: { offset: number; endOffset: number }[] = [];
+    for await (const r of readJsonlLines(filePath)) spans.push(r);
+    expect(spans.map((r) => r.offset)).toEqual([0, a.length + 2]);
+    expect(spans[1].endOffset).toBe(fs.statSync(filePath).size);
   });
 });

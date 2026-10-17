@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { readJsonlLines } from '@/parser/transcript';
+import { readLines } from '@/storage/lines';
 
 export class SessionLookupError extends Error {}
 
@@ -56,7 +56,7 @@ function parseLine(raw: string): Header | undefined {
 
 export async function readHeader(file: string): Promise<{ cwd?: string; gitBranch?: string }> {
   // return で for await を抜けるとストリームは自動で閉じる
-  for await (const raw of readJsonlLines(file)) {
+  for await (const raw of readLines(file)) {
     const obj = parseLine(raw);
     if (typeof obj?.cwd === 'string') {
       const { cwd, gitBranch } = obj;

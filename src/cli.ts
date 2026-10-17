@@ -15,6 +15,8 @@ import {
   stripControlChars,
   escapeControlChars,
   TERMINAL_CONTROL,
+  fenceUntrusted,
+  sanitizeQuoted,
 } from '@/search/formatter';
 import { scanArchive, formatArchiveHits } from '@/search/archive-scan';
 import { archiveAll, getClaudeProjectsDir, removeArchivedTranscript } from '@/archive/store';
@@ -294,16 +296,17 @@ function safeTerminalLine(value: string): string {
   return value.replace(/[\t\n]/g, '�').replace(TERMINAL_CONTROL, '�');
 }
 
-function printResolutionField(label: string, value: string, singleLine = false): void {
+function resolutionField(label: string, value: string, singleLine = false): string[] {
   const masked = maskCredentials(value);
   if (singleLine) {
     const line = masked.replace(/\r\n|[\n\r\u2028\u2029]/g, ' ↵ ');
-    console.log(`${label}: ${safeTerminalLine(line)}`);
-    return;
+    return [`${label}: ${safeTerminalLine(line)}`];
   }
-  const lines = masked.split(/\r\n|[\n\r\u2028\u2029]/);
-  console.log(`${label}: ${safeTerminalLine(lines[0] ?? '')}`);
-  for (const line of lines.slice(1)) console.log(`  | ${safeTerminalLine(line)}`);
+  const [first, ...rest] = masked.split(/\r\n|[\n\r\u2028\u2029]/) as [string, ...string[]];
+  return [
+    `${label}: ${safeTerminalLine(first)}`,
+    ...rest.map((line) => `  | ${safeTerminalLine(line)}`),
+  ];
 }
 
 export function cmdResolutions(
@@ -330,18 +333,26 @@ export function cmdResolutions(
     if (options.showEvidence) {
       console.log('Warning: evidence masking is best-effort; review output before sharing.');
     }
+    // 証拠は過去の実行結果の引用なので、1 つの囲みにまとめて出す
+    const evidence: string[] = [];
     for (const result of results) {
-      console.log(safeTerminalLine(`[${result.verifiedAt}] failures=${result.failureCount}`));
+      const header = safeTerminalLine(`[${result.verifiedAt}] failures=${result.failureCount}`);
       if (options.showEvidence) {
-        printResolutionField('Command', result.command, true);
-        printResolutionField('Failed', result.failureOutputExcerpt);
-        printResolutionField('Verified', result.successOutputExcerpt);
-      } else {
-        console.log(
-          'Evidence: hidden (use --show-evidence to display best-effort-masked excerpts)'
+        evidence.push(
+          header,
+          ...resolutionField('Command', result.command, true),
+          ...resolutionField('Failed', result.failureOutputExcerpt),
+          ...resolutionField('Verified', result.successOutputExcerpt),
+          ''
         );
+        continue;
       }
+      console.log(header);
+      console.log('Evidence: hidden (use --show-evidence to display best-effort-masked excerpts)');
       console.log('');
+    }
+    if (options.showEvidence) {
+      console.log(fenceUntrusted(sanitizeQuoted(evidence.join('\n') + '\n')));
     }
     return results;
   } finally {

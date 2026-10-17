@@ -53,6 +53,7 @@ export default defineConfig({
       'tests/test-env.test.ts',
       'tests/hooks/setup.test.ts',
       'tests/import/claude-mem.test.ts',
+      'tests/storage/lines.test.ts',
     ],
   },
 });

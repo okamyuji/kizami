@@ -382,6 +382,27 @@ describe('importClaudeMem', () => {
     }
   });
 
+  it('compares created_at as instants when the fraction digits differ', async () => {
+    const sourceDb = new Database(sourceDbPath);
+    const add = sourceDb.prepare(
+      `INSERT INTO observations (memory_session_id, project, type, created_at, created_at_epoch)
+       VALUES ('mem-session-2', 'other-project', 'note', ?, 0)`
+    );
+    add.run('2024-06-02T10:15:00.5Z');
+    add.run('2024-06-02T10:15:00Z');
+    sourceDb.close();
+    await importClaudeMem({ sourcePath: sourceDbPath, configPath: kizamiConfigPath });
+    const kizamiDb = getDatabase(kizamiDbPath);
+    try {
+      const row = kizamiDb
+        .prepare("SELECT ended_at AS e FROM sessions WHERE session_id = 'mem-session-2'")
+        .get();
+      expect(row).toEqual({ e: '2024-06-02T10:15:00.5Z' });
+    } finally {
+      kizamiDb.close();
+    }
+  });
+
   it('normalizes non-ISO created_at to UTC and falls back to import time for unparseable ones', async () => {
     const sourceDb = new Database(sourceDbPath);
     sourceDb

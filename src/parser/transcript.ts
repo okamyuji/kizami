@@ -1,4 +1,4 @@
-import { createReadStream } from 'node:fs';
+import { readLines } from '@/storage/lines';
 
 export interface TextContent {
   type: 'text';
@@ -227,23 +227,9 @@ export function parseTranscriptText(text: string): TranscriptMessage[] {
   return messages;
 }
 
-/**
- * 行を \n だけで区切る(行末の \r は JSON.parse が空白として読み飛ばす)。readline は U+2028/U+2029 でも区切り、
- * JSON 文字列中の生の U+2028 で行が割れて捨てられるため。呼び出し側が途中で抜けるとストリームも閉じる。
- */
-export async function* readJsonlLines(filePath: string): AsyncGenerator<string> {
-  let rest = '';
-  for await (const chunk of createReadStream(filePath, { encoding: 'utf-8' })) {
-    const lines = (rest + chunk).split('\n');
-    rest = lines.pop() as string;
-    yield* lines;
-  }
-  yield rest;
-}
-
 export async function parseTranscript(filePath: string): Promise<TranscriptMessage[]> {
   const messages: TranscriptMessage[] = [];
-  for await (const line of readJsonlLines(filePath)) appendLine(messages, line);
+  for await (const line of readLines(filePath)) appendLine(messages, line);
   return messages;
 }
 

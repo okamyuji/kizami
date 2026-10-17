@@ -134,8 +134,9 @@ describe('recoverTranscripts', () => {
       delete o.timestamp;
       return line(o);
     });
+    // 時刻は生ログの更新時刻から取るので、基準はファイルを書く前に取る。ファイルシステムの時計の粒度を 50ms 見込む
+    const before = Date.now() - 50;
     writeSession('-tmp-p', 'bbbb2222', noTs);
-    const before = Date.now();
 
     await recoverTranscripts(configPath, fakeProjectsDir);
 

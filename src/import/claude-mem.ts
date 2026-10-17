@@ -139,11 +139,11 @@ function summaryToChunk(summary: ClaudeMemSummary, chunkIndex: number): Chunk {
   };
 }
 
-// ISO 形式にそろえた時刻は文字列順が時刻順になる。無ければ undefined で、store が取り込み時刻を入れる
+// 小数桁数の違う ISO 形式は文字列順が時刻順にならないので、Date.parse で比べる。無ければ undefined で、store が取り込み時刻を入れる
 function latestCreatedAt(chunks: Chunk[]): string | undefined {
   return chunks
     .flatMap((c) => c.createdAt ?? [])
-    .sort()
+    .sort((a, b) => Date.parse(a) - Date.parse(b))
     .at(-1);
 }
 
