@@ -25,3 +25,8 @@ export async function* readLines(filePath: string): AsyncGenerator<string> {
 export function withoutTrailingCr(line: string): string {
   return line.endsWith('\r') ? line.slice(0, -1) : line;
 }
+
+/** 読み手と追記側の走査が同じ空行判定を使うための唯一の定義。trim が空にする U+2028/U+FEFF なども空行とみなす。 */
+export function isBlankLine(line: string): boolean {
+  return line.trim() === '';
+}

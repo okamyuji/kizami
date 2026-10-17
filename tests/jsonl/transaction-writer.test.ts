@@ -100,6 +100,63 @@ describe('JsonlTransactionWriter', () => {
     }
   });
 
+  it.each([
+    ['three-column legacy', ''],
+    ['mtime_ms only', ', mtime_ms REAL NOT NULL'],
+    ['ctime_ms only', ', ctime_ms REAL NOT NULL'],
+  ])('recreates a %s file_commit_scan_state so append and lookup succeed', (_name, extra) => {
+    const dir = makeTmpDir();
+    const lockPath = path.join(dir, '.writer-lock.sqlite');
+    const legacy = new Database(lockPath);
+    legacy.exec(
+      `CREATE TABLE file_commit_scan_state (file_path TEXT NOT NULL PRIMARY KEY, file_identity TEXT NOT NULL, file_size INTEGER NOT NULL${extra})`
+    );
+    legacy.close();
+
+    const writer = new JsonlTransactionWriter(dir);
+    try {
+      const targetPath = path.join(dir, 'test.jsonl');
+      const serialized = serializeV2Transaction([makePayload()], {
+        txId: 'tx-legacy',
+        createdAt: '2026-06-21T00:00:00.000Z',
+        targetPath,
+      });
+      writer.withExclusiveTransaction((w) => {
+        expect(w.appendPrepared(serialized).receipt.status).toBe('inserted');
+      });
+      writer.withExclusiveTransaction((w) => {
+        expect(w.findCommitted(targetPath, 'tx-legacy', serialized.payloadDigest)).toBe(true);
+      });
+    } finally {
+      writer.close();
+    }
+
+    const check = new Database(lockPath, { readonly: true });
+    const columns = (check.pragma('table_info(file_commit_scan_state)') as { name: string }[]).map(
+      (c) => c.name
+    );
+    check.close();
+    expect(columns).toEqual(['file_path', 'file_identity', 'file_size', 'mtime_ms', 'ctime_ms']);
+  });
+
+  it('keeps rows of an up-to-date file_commit_scan_state', () => {
+    const dir = makeTmpDir();
+    new JsonlTransactionWriter(dir).close();
+    const lockPath = path.join(dir, '.writer-lock.sqlite');
+    const db = new Database(lockPath);
+    db.prepare('INSERT INTO file_commit_scan_state VALUES (?, ?, ?, ?, ?)').run('f', 'id', 1, 2, 3);
+    db.close();
+
+    new JsonlTransactionWriter(dir).close();
+
+    const check = new Database(lockPath, { readonly: true });
+    const count = (
+      check.prepare('SELECT COUNT(*) AS n FROM file_commit_scan_state').get() as { n: number }
+    ).n;
+    check.close();
+    expect(count).toBe(1);
+  });
+
   it('returns already_committed for duplicate txId + digest', () => {
     const dir = makeTmpDir();
     const writer = new JsonlTransactionWriter(dir);
@@ -391,66 +448,133 @@ describe('JsonlTransactionWriter', () => {
     }
   });
 
-  it('fails closed when an existing payload line exceeds the record limit by one byte', () => {
+  it.each([
+    ['space', ' '],
+    ['tab', '\t'],
+    ['U+2028', '\u2028'],
+    ['U+FEFF', '\uFEFF'],
+  ])('skips a %s-only line inside a committed transaction like the reader does', (_, blank) => {
     const dir = makeTmpDir();
     const targetPath = path.join(dir, 'test.jsonl');
-    const template = makePayload({
-      txId: 'tx-one-over',
-      parts: [
-        {
-          partIndex: 0,
-          externalId: 'one-over',
-          content: '',
-          role: 'assistant',
-          metadata: { filePaths: [], toolNames: [], errorMessages: [] },
-          tokenCount: 1,
-        },
-      ],
-    });
-    const overhead = JSON.stringify(template).length;
-    const payload: JsonlV2Payload = {
-      ...template,
-      parts: [{ ...template.parts[0], content: 'x'.repeat(MAX_JSONL_RECORD_BYTES + 1 - overhead) }],
-    };
-    const payloadLine = JSON.stringify(payload);
-    expect(Buffer.byteLength(payloadLine, 'utf-8')).toBe(MAX_JSONL_RECORD_BYTES + 1);
-    const payloadDigest = computePayloadDigest([payloadLine]);
-    const begin = JSON.stringify({
-      v: 2,
-      type: 'tx_begin',
-      txId: payload.txId,
-      createdAt: '2026-06-21T00:00:00.000Z',
-    });
-    const commit = JSON.stringify({
-      v: 2,
-      type: 'tx_commit',
-      txId: payload.txId,
-      recordCount: 1,
-      payloadDigest,
-      createdAt: '2026-06-21T00:00:00.000Z',
-    });
-    fs.writeFileSync(targetPath, `${begin}\n${payloadLine}\n${commit}\n`);
-    const serialized: SerializedJsonlTransaction = {
-      txId: payload.txId,
+    const serialized = serializeV2Transaction([makePayload()], {
+      txId: 'tx-ws-blank',
       createdAt: '2026-06-21T00:00:00.000Z',
       targetPath,
-      payloadLines: [payloadLine],
-      payloadDigest,
-      allLines: [begin, payloadLine, commit],
-      records: [JSON.parse(begin) as JsonlV2Record, payload, JSON.parse(commit) as JsonlV2Record],
-    };
+    });
+    const [begin, ...rest] = serialized.allLines;
+    fs.writeFileSync(targetPath, [begin, blank, ...rest].join('\n') + '\n', { mode: 0o600 });
     const writer = new JsonlTransactionWriter(dir);
 
     try {
-      expect(() =>
-        writer.withExclusiveTransaction((lockedWriter) => {
-          lockedWriter.appendPrepared(serialized);
-        })
-      ).toThrow(/safe scan limit/);
+      writer.withExclusiveTransaction((lockedWriter) => {
+        expect(lockedWriter.appendPrepared(serialized).receipt.status).toBe('already_committed');
+      });
     } finally {
       writer.close();
     }
   });
+
+  it.each([
+    ['LF', '\n'],
+    ['CRLF', '\r\n'],
+  ])('recognizes a %s transaction whose payload line is exactly the record limit', (_, eol) => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const overhead = JSON.stringify(makePayload()).length;
+    const payload = makePayload({
+      parts: [
+        {
+          ...makeCheckpoint().parts[0],
+          content: 'x'.repeat(MAX_JSONL_RECORD_BYTES - overhead + 'Hello'.length),
+        },
+      ],
+    });
+    const serialized = serializeV2Transaction([payload], {
+      txId: 'tx-1',
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+    });
+    expect(Buffer.byteLength(serialized.payloadLines[0], 'utf-8')).toBe(MAX_JSONL_RECORD_BYTES);
+    fs.writeFileSync(targetPath, serialized.allLines.join(eol) + eol, { mode: 0o600 });
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      writer.withExclusiveTransaction((lockedWriter) => {
+        expect(lockedWriter.appendPrepared(serialized).receipt.status).toBe('already_committed');
+      });
+    } finally {
+      writer.close();
+    }
+  });
+
+  it.each([
+    ['LF', '\n'],
+    ['CRLF', '\r\n'],
+  ])(
+    'fails closed when an existing %s payload line exceeds the record limit by one byte',
+    (_, eol) => {
+      const dir = makeTmpDir();
+      const targetPath = path.join(dir, 'test.jsonl');
+      const template = makePayload({
+        txId: 'tx-one-over',
+        parts: [
+          {
+            partIndex: 0,
+            externalId: 'one-over',
+            content: '',
+            role: 'assistant',
+            metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+            tokenCount: 1,
+          },
+        ],
+      });
+      const overhead = JSON.stringify(template).length;
+      const payload: JsonlV2Payload = {
+        ...template,
+        parts: [
+          { ...template.parts[0], content: 'x'.repeat(MAX_JSONL_RECORD_BYTES + 1 - overhead) },
+        ],
+      };
+      const payloadLine = JSON.stringify(payload);
+      expect(Buffer.byteLength(payloadLine, 'utf-8')).toBe(MAX_JSONL_RECORD_BYTES + 1);
+      const payloadDigest = computePayloadDigest([payloadLine]);
+      const begin = JSON.stringify({
+        v: 2,
+        type: 'tx_begin',
+        txId: payload.txId,
+        createdAt: '2026-06-21T00:00:00.000Z',
+      });
+      const commit = JSON.stringify({
+        v: 2,
+        type: 'tx_commit',
+        txId: payload.txId,
+        recordCount: 1,
+        payloadDigest,
+        createdAt: '2026-06-21T00:00:00.000Z',
+      });
+      fs.writeFileSync(targetPath, [begin, payloadLine, commit].join(eol) + eol);
+      const serialized: SerializedJsonlTransaction = {
+        txId: payload.txId,
+        createdAt: '2026-06-21T00:00:00.000Z',
+        targetPath,
+        payloadLines: [payloadLine],
+        payloadDigest,
+        allLines: [begin, payloadLine, commit],
+        records: [JSON.parse(begin) as JsonlV2Record, payload, JSON.parse(commit) as JsonlV2Record],
+      };
+      const writer = new JsonlTransactionWriter(dir);
+
+      try {
+        expect(() =>
+          writer.withExclusiveTransaction((lockedWriter) => {
+            lockedWriter.appendPrepared(serialized);
+          })
+        ).toThrow(/safe scan limit/);
+      } finally {
+        writer.close();
+      }
+    }
+  );
 
   it('serves the second lookup from the commit cache without rescanning the file', () => {
     const dir = makeTmpDir();
