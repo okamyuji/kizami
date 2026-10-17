@@ -11,6 +11,7 @@ import type {
 } from '@/jsonl/types';
 import type { HookRuntime, ObservationBoundaryV2, TurnCheckpointV2 } from '@/checkpoint/types';
 import { compareObservationBoundary } from '@/checkpoint/identity';
+import { isBlankLine } from '@/storage/lines';
 import { assertPrivateFileTarget, enforcePrivateFile } from '@/storage/permissions';
 import { isJsonlV2Payload, isJsonlV2Record, MAX_JSONL_RECORD_BYTES } from '@/jsonl/transaction';
 
@@ -81,14 +82,18 @@ function forEachPrivateFileLine(
   let position = 0;
 
   const visitCurrentLine = (): void => {
-    if (oversized) {
+    // 上限は CR を除いた行に適用する。CR で終わらない MAX+1 バイトの行は上限超過
+    if (
+      oversized ||
+      (lineLength === MAX_JSONL_RECORD_BYTES + 1 && lineBuffer[lineLength - 1] !== 0x0d)
+    ) {
       callback(undefined);
       return;
     }
     // CRLF の \r は外す。書き手は \r の無い行で digest を作るので、残すと確定済みの照合が外れる。
-    // 外した後に空になる行（\r だけの行）は、LF の空行と同じく飛ばす
+    // 外した後に空になる行は callback 側が isBlankLine で飛ばす
     const end = lineBuffer[lineLength - 1] === 0x0d ? lineLength - 1 : lineLength;
-    if (end > 0) callback(lineBuffer.subarray(0, end).toString('utf-8'));
+    callback(lineBuffer.subarray(0, end).toString('utf-8'));
   };
 
   try {
@@ -110,11 +115,11 @@ function forEachPrivateFileLine(
           visitCurrentLine();
           lineLength = 0;
           oversized = false;
-        } else if (lineLength < MAX_JSONL_RECORD_BYTES) {
+        } else if (lineLength < MAX_JSONL_RECORD_BYTES + 1) {
           if (lineLength === lineBuffer.length) {
             // Stryker disable all: capはメモリ量のみに影響し正しさはlineLength比較が保証する
             const grown = Buffer.allocUnsafe(
-              Math.min(lineBuffer.length * 2, MAX_JSONL_RECORD_BYTES)
+              Math.min(lineBuffer.length * 2, MAX_JSONL_RECORD_BYTES + 1)
             );
             // Stryker restore all
             lineBuffer.copy(grown, 0, 0, lineLength);
@@ -295,7 +300,23 @@ export class JsonlTransactionWriter {
     try {
       lockDb.pragma('journal_mode = WAL');
       lockDb.pragma('busy_timeout = 5000');
-      lockDb.exec(COORDINATION_SCHEMA);
+      // 旧版は file_commit_scan_state が3列だった。CREATE TABLE IF NOT EXISTS は既存表を更新しない。
+      // この表は再走査で復元できる走査キャッシュなので、列が足りなければ捨てて作り直す。
+      // 並行プロセスが drop と create の間に割り込まないよう、判定から作成までを1トランザクションにする。
+      lockDb
+        .transaction(() => {
+          const columns = (
+            lockDb.pragma('table_info(file_commit_scan_state)') as { name: string }[]
+          ).map((column) => column.name);
+          if (
+            columns.length > 0 &&
+            !(columns.includes('mtime_ms') && columns.includes('ctime_ms'))
+          ) {
+            lockDb.exec('DROP TABLE file_commit_scan_state');
+          }
+          lockDb.exec(COORDINATION_SCHEMA);
+        })
+        .immediate();
       enforcePrivateFile(lockDbPath);
       enforcePrivateFile(`${lockDbPath}-wal`);
       enforcePrivateFile(`${lockDbPath}-shm`);
@@ -715,6 +736,8 @@ class LockedJsonlWriterImpl implements LockedJsonlWriter {
         if (active) throw new Error(`JSONL transaction record exceeds safe scan limit`);
         return;
       }
+
+      if (isBlankLine(line)) return;
 
       let parsed: unknown;
       try {
