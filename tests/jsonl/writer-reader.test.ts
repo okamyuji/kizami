@@ -3,7 +3,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { JsonlWriter } from '@/jsonl/writer';
-import { readJsonlFile, readJsonlLines, readTailRecords, isJsonlChunkRecord } from '@/jsonl/reader';
+import {
+  readCanonicalTransactions,
+  readJsonlFile,
+  readJsonlLines,
+  readTailRecords,
+  isJsonlChunkRecord,
+} from '@/jsonl/reader';
+import { serializeV2Transaction } from '@/jsonl/transaction';
 import type { JsonlChunkRecord } from '@/jsonl/types';
 import { getJsonlFilePath } from '@/jsonl/path';
 
@@ -184,5 +191,22 @@ describe('jsonl writer + reader', () => {
     for await (const r of readJsonlLines(filePath)) spans.push(r);
     expect(spans.map((r) => r.offset)).toEqual([0, a.length + 2]);
     expect(spans[1].endOffset).toBe(fs.statSync(filePath).size);
+  });
+
+  it('accepts a v2 transaction whose file was converted to CRLF', async () => {
+    const dir = makeTmpDir();
+    const filePath = path.join(dir, 'crlf-tx.jsonl');
+    const tx = serializeV2Transaction(
+      [{ v: 2, type: 'chunk_delete', txId: 'tx1', sessionId: 's1', externalId: 'e1' }],
+      { txId: 'tx1', createdAt: '2026-10-17T00:00:00.000Z', targetPath: filePath }
+    );
+    fs.writeFileSync(filePath, tx.allLines.join('\r\n') + '\r\n');
+    const results = [];
+    for await (const r of readCanonicalTransactions(filePath)) results.push(r);
+    expect(results.map((r) => r.kind)).toEqual(['transaction']);
+    const [first] = results;
+    if (first.kind !== 'transaction') throw new Error('expected a transaction');
+    expect(first.transaction.endOffset).toBe(fs.statSync(filePath).size);
+    expect(first.transaction.payloads).toHaveLength(1);
   });
 });

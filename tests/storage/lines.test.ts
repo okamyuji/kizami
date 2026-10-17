@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { readLines } from '@/storage/lines';
+import { readLines, withoutTrailingCr } from '@/storage/lines';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -63,5 +63,18 @@ describe('readLines', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toHaveLength(32 * 1024 * 1024);
     expect(Date.now() - start).toBeLessThan(1000);
+  });
+});
+
+describe('withoutTrailingCr', () => {
+  it('drops exactly one trailing carriage return', () => {
+    expect(withoutTrailingCr('{"a":1}\r')).toBe('{"a":1}');
+    expect(withoutTrailingCr('x\r\r')).toBe('x\r');
+  });
+
+  it('keeps a line without a trailing carriage return as it is', () => {
+    expect(withoutTrailingCr('{"a":1}')).toBe('{"a":1}');
+    expect(withoutTrailingCr('a\rb')).toBe('a\rb');
+    expect(withoutTrailingCr('')).toBe('');
   });
 });

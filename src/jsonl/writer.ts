@@ -81,8 +81,14 @@ function forEachPrivateFileLine(
   let position = 0;
 
   const visitCurrentLine = (): void => {
-    if (oversized) callback(undefined);
-    else if (lineLength > 0) callback(lineBuffer.subarray(0, lineLength).toString('utf-8'));
+    if (oversized) {
+      callback(undefined);
+      return;
+    }
+    // CRLF の \r は外す。書き手は \r の無い行で digest を作るので、残すと確定済みの照合が外れる。
+    // 外した後に空になる行は、読み手と同じく飛ばす
+    const end = lineBuffer[lineLength - 1] === 0x0d ? lineLength - 1 : lineLength;
+    if (end > 0) callback(lineBuffer.subarray(0, end).toString('utf-8'));
   };
 
   try {

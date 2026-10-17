@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import { readLines } from '@/storage/lines';
+import { readLines, withoutTrailingCr } from '@/storage/lines';
 import type {
   JsonlChunkRecord,
   JsonlLineResult,
@@ -162,9 +162,10 @@ export async function* readJsonlLines(filePath: string): AsyncGenerator<JsonlLin
 
   let offset = 0;
 
-  for await (const line of readLines(filePath)) {
-    const lineBytes = Buffer.byteLength(line, 'utf-8');
-    const endOffset = offset + lineBytes + 1;
+  for await (const raw of readLines(filePath)) {
+    const endOffset = offset + Buffer.byteLength(raw) + 1;
+    // CRLF の \r はバイト位置には数え、digest を取る行からは外す
+    const line = withoutTrailingCr(raw);
     if (!line.trim()) {
       offset = endOffset;
       continue;
