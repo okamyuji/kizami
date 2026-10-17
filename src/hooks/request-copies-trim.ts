@@ -1,7 +1,8 @@
 import type { EngramConfig } from '@/config';
 import type { Chunk, Store } from '@/db/store';
 import type { CanonicalHistory } from '@/jsonl/fold';
-import { appendChunkDeletions } from '@/jsonl/deletion';
+import { appendChunkDeletions, turnRecordKey } from '@/jsonl/deletion';
+import type { StartingRecords } from '@/jsonl/deletion';
 import { JsonlTransactionWriter, JsonlWriter } from '@/jsonl/writer';
 import type { LockedJsonlWriter } from '@/jsonl/writer';
 import { serializeV2Transaction } from '@/jsonl/transaction';
@@ -13,31 +14,10 @@ import { createContentHash, hashFields } from '@/checkpoint/identity';
 import type { TurnCheckpointV2 } from '@/checkpoint/types';
 import { detectRole, estimateTokens, splitTurnText, turnToText } from '@/parser/chunker';
 import { extractMetadata } from '@/parser/metadata';
+import { REQUEST_COPY_SIGNATURE, stripRequestCopy } from '@/parser/request-copy';
 
-/**
- * Claude Code が API へ送った本文の写し（api-request-blob 行）を発言として保存したターンの書き出し。
- * 写しは system-reminder のブロックで始まり、その後ろに本物のプロンプトが続く。
- * 実データでは、正規の会話のターンはこの形で始まらなかった。
- */
-export const REQUEST_COPY_SIGNATURE = '[User]\n<system-reminder>';
-const ASSISTANT_HEADER = '\n\n[Assistant]\n';
-const REMINDER_END = '</system-reminder>';
 /** 写しを除いて書き直した v1 の行の ID に付ける。元の行の ID から決まるので、途中で止まった回の後も同じ行を二度足さない。 */
 const TRIMMED_ID = '-trimmed-';
-
-/**
- * 写しを除いたプロンプトと回答。写しは [User] 節の先頭から、その節の最後の閉じタグまでとする。
- * 写しの中で閉じタグが引用されていても止まらないため。プロンプトが閉じタグを含めば、その手前まで消える。
- * 閉じタグが無ければ [User] 節全体を写しとみなす。
- */
-export function stripRequestCopy(text: string): { prompt: string; assistant: string } {
-  const at = text.indexOf(ASSISTANT_HEADER);
-  const user = at < 0 ? text : text.slice(0, at);
-  const assistant = at < 0 ? '' : text.slice(at + ASSISTANT_HEADER.length);
-  const end = user.lastIndexOf(REMINDER_END);
-  const prompt = end < 0 ? '' : user.slice(end + REMINDER_END.length).trim();
-  return { prompt, assistant };
-}
 
 /** セッションごとの、写しを含むターン。v1 は 1 ターン分の行の並び。 */
 export interface CopyTurns {
@@ -53,15 +33,31 @@ function push<T>(map: Map<string, T[]>, key: string, item: T): void {
   else map.set(key, [item]);
 }
 
-/** v1 の行は長いターンを部品に分けて持つ。写しで始まる行から、次のターンの行の手前までを 1 ターンとする。 */
-function legacyCopyTurns(records: JsonlChunkRecord[]): JsonlChunkRecord[][] {
+/**
+ * v1 の行は長いターンを部品に分けて持つ。写しで始まる行から、次のターンの行の手前までを 1 ターンとする。
+ * 写しで始まる行を手で消してあっても、その位置から続く部品は写しの残りなので、同じように 1 ターンとする。
+ */
+function legacyCopyTurns(
+  records: JsonlChunkRecord[],
+  heads: Array<{ id: string; chunkIndex: number }>
+): JsonlChunkRecord[][] {
+  // 先頭が残っていれば、空のターンの直後に同じ番号の行が新しいターンを始めるので、消したかどうかを分けなくてよい
+  const entries: Array<{ chunkIndex: number; record?: JsonlChunkRecord }> = [
+    ...heads.map((h) => ({ chunkIndex: h.chunkIndex })),
+    // 書き直した行は元の行と同じ番号を持つので、元の行が残っている間はどちらの並びにも入れない
+    ...records
+      .filter((r) => !r.id.includes(TRIMMED_ID))
+      .map((record) => ({
+        chunkIndex: record.chunkIndex,
+        record,
+      })),
+  ].sort((a, b) => a.chunkIndex - b.chunkIndex);
   const found: JsonlChunkRecord[][] = [];
   let current: JsonlChunkRecord[] | undefined;
-  for (const record of [...records].sort((a, b) => a.chunkIndex - b.chunkIndex)) {
-    // 書き直した行は元の行と同じ番号を持つので、元の行が残っている間はどちらの並びにも入れない
-    if (record.id.includes(TRIMMED_ID)) continue;
-    if (record.content.startsWith(REQUEST_COPY_SIGNATURE)) {
-      current = [record];
+  for (const entry of entries) {
+    const { record } = entry;
+    if (!record || record.content.startsWith(REQUEST_COPY_SIGNATURE)) {
+      current = record ? [record] : [];
       found.push(current);
     } else if (record.content.startsWith('[User]\n')) {
       // shortcut: 部品が段落頭の [User] で始まると、そこでターンが切れたとみなす。実データの写しはそうならなかった
@@ -70,22 +66,25 @@ function legacyCopyTurns(records: JsonlChunkRecord[]): JsonlChunkRecord[][] {
       current?.push(record);
     }
   }
-  return found;
+  return found.filter((turn) => turn.length > 0);
 }
 
-/** 正本で採用されている記録のうち、写しを含むターン。 */
-export function findCopyTurns(history: CanonicalHistory): CopyTurns {
+/**
+ * 正本で採用されている記録のうち、写しを含むターン。先頭の部品を手で消したターンも、
+ * 正本に残る消す前の記録から見つける。
+ */
+export function findCopyTurns(history: CanonicalHistory, starting: StartingRecords): CopyTurns {
   const v2 = new Map<string, TurnCheckpointV2[]>();
   for (const turn of history.turns.values()) {
-    if (turn.parts.some((p) => p.content.startsWith(REQUEST_COPY_SIGNATURE))) {
-      push(v2, turn.sessionId, turn);
-    }
+    if (starting.turns.has(turnRecordKey(turn))) push(v2, turn.sessionId, turn);
   }
   const bySession = new Map<string, JsonlChunkRecord[]>();
   for (const record of history.legacyChunks) push(bySession, record.sessionId, record);
+  const headsBySession = new Map<string, Array<{ id: string; chunkIndex: number }>>();
+  for (const head of starting.chunks) push(headsBySession, head.sessionId, head);
   const v1 = new Map<string, JsonlChunkRecord[][]>();
   for (const [sessionId, records] of bySession) {
-    const turns = legacyCopyTurns(records);
+    const turns = legacyCopyTurns(records, headsBySession.get(sessionId) ?? []);
     if (turns.length > 0) v1.set(sessionId, turns);
   }
   return { v2, v1, legacyIds: new Set(history.legacyChunks.map((c) => c.id)) };
@@ -128,18 +127,20 @@ function trimmedCheckpoint(turn: TurnCheckpointV2): TurnCheckpointV2 {
 }
 
 /** DB から消えていた行（整理や --before）は戻さないので、呼び出し側は元の行が DB にあったターンだけを渡す。 */
-function applyToDb(store: Store, cp: TurnCheckpointV2, deletedIds: Set<string>): void {
+/** DB が反映を拒み、そのターンの行を消したら true。 */
+function applyToDb(store: Store, cp: TurnCheckpointV2, deletedIds: Set<string>): boolean {
   const { status } = store.applyTurnCheckpoint(cp);
   const refs = store.getTurnChunkRefs(cp.sessionId, cp.turnKey);
   if (status !== 'inserted' && status !== 'already_current') {
     // DB が正本と食い違っている。写しを残さないよう、そのターンの行を消す。本文は正本にあり rebuild で戻る
     for (const row of refs) store.deleteChunk(row.id);
-    return;
+    return true;
   }
   // 手で消した part と同じ位置の ID は、fold と同じく DB に出さない
   for (const row of refs) {
     if (row.externalId && deletedIds.has(row.externalId)) store.deleteChunk(row.id);
   }
+  return false;
 }
 
 function withLockedWriter(jsonlDir: string, fn: (writer: LockedJsonlWriter) => void): void {
@@ -156,14 +157,15 @@ function withLockedWriter(jsonlDir: string, fn: (writer: LockedJsonlWriter) => v
 
 /**
  * v2 のターンを書き直す。全セッション分を 1 トランザクションで書く。
- * fold の後に、このマシンの別の書き手がより新しい revision を書いたターンは書かずに返す。次の回に読み直す。
+ * fold の後に、このマシンの別の書き手がより新しい revision を書いたターンは書かずに left で返す。次の回に読み直す。
+ * DB が反映を拒んで行を消したターンは dropped で返す。
  */
 export function trimTurns(
   config: EngramConfig,
   store: Store,
   turns: TurnCheckpointV2[],
   deletedIds: Set<string>
-): TurnCheckpointV2[] {
+): { left: TurnCheckpointV2[]; dropped: TurnCheckpointV2[] } {
   const inDb = new Map(
     turns.map((t) => [
       t,
@@ -174,6 +176,7 @@ export function trimTurns(
     ])
   );
   const left: TurnCheckpointV2[] = [];
+  const dropped: TurnCheckpointV2[] = [];
   const written: Array<[TurnCheckpointV2, TurnCheckpointV2]> = [];
   withLockedWriter(config.storage.jsonlDir, (w) => {
     for (const turn of turns) {
@@ -187,7 +190,7 @@ export function trimTurns(
     if (written.length === 0) return;
     // 先に DB を直す。正本を書く前に止まっても、次の回は同じ checkpoint を作り直して正本に書く
     for (const [turn, cp] of written) {
-      if (inDb.get(turn)) applyToDb(store, cp, deletedIds);
+      if (inDb.get(turn) && applyToDb(store, cp, deletedIds)) dropped.push(cp);
     }
     const now = new Date();
     const checkpoints = written.map(([, cp]) => cp);
@@ -211,7 +214,7 @@ export function trimTurns(
     );
     w.applyCommittedToIndex(w.appendPrepared(serialized).transaction);
   });
-  return left;
+  return { left, dropped };
 }
 
 /** v1 の 1 ターンを書き直す計画。 */

@@ -1,7 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { splitTurnText } from '@/parser/chunker';
+import { buildTurns, splitTurnText, turnToText } from '@/parser/chunker';
+import type { TranscriptMessage } from '@/parser/transcript';
+import { REQUEST_COPY_SIGNATURE, stripRequestCopy } from '@/parser/request-copy';
 import type { EngramConfig } from '@/config';
 import type { Chunk, Store } from '@/db/store';
 import { appendChunkDeletion } from '@/jsonl/deletion';
@@ -106,4 +108,42 @@ export function redactTurnText(text: string, chunkDigests: Set<string>): string 
   const parts = splitTurnText(text, 512);
   if (!parts.some((p) => chunkDigests.has(contentDigest(p)))) return text;
   return parts.map((p) => (chunkDigests.has(contentDigest(p)) ? DELETED_MARK : p)).join('\n\n');
+}
+
+/**
+ * 0.8.5 以前は写しの行も発言として読んだので、その版で消したチャンクは今の読み方の本文と照合しても当たらない。
+ * 旧版の読み方で消されていたターンのうち、今の読み方では本文が変わるものを、今の形の本文で返す。
+ */
+function turnsDeletedAsReadBefore(
+  legacy: TranscriptMessage[],
+  current: Set<string>,
+  chunkDigests: Set<string>
+): string[] {
+  return buildTurns(legacy)
+    .map(turnToText)
+    .filter((text) => !current.has(text))
+    .filter((text) => splitTurnText(text, 512).some((p) => chunkDigests.has(contentDigest(p))))
+    .map((text) => {
+      if (!text.startsWith(REQUEST_COPY_SIGNATURE)) return text;
+      const { prompt, assistant } = stripRequestCopy(text);
+      return turnToText({ human: prompt, assistant });
+    });
+}
+
+/**
+ * 会話のターンを、削除したチャンクを伏せた本文にする。旧版で消されていたターンは、
+ * 今の本文と重なるターンごと伏せる。旧版のターンは写しとプロンプトを別のターンに分けていたので、片方だけを含むことがある。
+ */
+export function redactTurns(
+  messages: TranscriptMessage[],
+  legacy: TranscriptMessage[],
+  chunkDigests: Set<string>
+): string[] {
+  const texts = buildTurns(messages).map(turnToText);
+  const before = turnsDeletedAsReadBefore(legacy, new Set(texts), chunkDigests);
+  return texts.map((text) =>
+    before.some((d) => text.includes(d) || d.includes(text))
+      ? DELETED_MARK
+      : redactTurnText(text, chunkDigests)
+  );
 }

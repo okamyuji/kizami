@@ -87,14 +87,38 @@ export function appendChunkDeletions(
   }));
 }
 
-/** 正本で削除されたチャンクの ID とそのセッション、本文に text を含む記録を持つセッションを集める。 */
+/** 正本の記録のうち、本文が text で始まるもの。手で消した部品も含む。 */
+export interface StartingRecords {
+  /** turn_checkpoint の先頭の part。キーは sessionId, turnKey, historyEpoch, revision。 */
+  turns: Set<string>;
+  /** v1 の行。 */
+  chunks: Array<{ id: string; sessionId: string; chunkIndex: number }>;
+}
+
+export const turnRecordKey = (t: {
+  sessionId: string;
+  turnKey: string;
+  historyEpoch: number;
+  revision: number;
+}) => JSON.stringify([t.sessionId, t.turnKey, t.historyEpoch, t.revision]);
+
+/**
+ * 正本で削除されたチャンクの ID とそのセッション、本文に text を含む記録を持つセッション、
+ * 本文が text で始まる記録を集める。
+ */
 export async function scanSessions(
   jsonlDir: string,
   text: string
-): Promise<{ deletedIds: Set<string>; deletedSessions: Set<string>; containing: Set<string> }> {
+): Promise<{
+  deletedIds: Set<string>;
+  deletedSessions: Set<string>;
+  containing: Set<string>;
+  starting: StartingRecords;
+}> {
   const deletedIds = new Set<string>();
   const deletedSessions = new Set<string>();
   const containing = new Set<string>();
+  const starting: StartingRecords = { turns: new Set(), chunks: [] };
   for (const file of listJsonlFiles(jsonlDir)) {
     for await (const result of readJsonlLines(file)) {
       if (result.kind !== 'record') continue;
@@ -104,13 +128,17 @@ export async function scanSessions(
         deletedSessions.add(record.sessionId);
       } else if (record.type === 'chunk' && record.content.includes(text)) {
         containing.add(record.sessionId);
+        if (record.content.startsWith(text)) starting.chunks.push(record);
       } else if (
         record.type === 'turn_checkpoint' &&
         record.parts.some((p) => p.content.includes(text))
       ) {
         containing.add(record.sessionId);
+        if (record.parts.some((p) => p.partIndex === 0 && p.content.startsWith(text))) {
+          starting.turns.add(turnRecordKey(record));
+        }
       }
     }
   }
-  return { deletedIds, deletedSessions, containing };
+  return { deletedIds, deletedSessions, containing, starting };
 }

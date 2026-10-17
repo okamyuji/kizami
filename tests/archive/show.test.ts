@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { unfence } from '../helpers/fence';
 import { renderSession } from '../../src/archive/show';
 import { contentDigest } from '../../src/archive/deletions';
+import { splitTurnText } from '../../src/parser/chunker';
 
 const user = (text: string, ts: string) =>
   JSON.stringify({
@@ -173,5 +174,113 @@ describe('renderSession untrusted fence', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  describe('with a chunk deleted by a version that read request copies as turns', () => {
+    const blob = (text: string, ts: string) =>
+      JSON.stringify({
+        type: 'api-request-blob',
+        sessionId: 's1',
+        timestamp: ts,
+        message: { role: 'user', content: text },
+      });
+    const reminder = '<system-reminder>copy</system-reminder>';
+    let tmp: string;
+    let file: string;
+    const session = () => ({
+      sessionId: 's1',
+      path: file,
+      dirName: '-p',
+      cwd: '/w/p',
+      gitBranch: 'main',
+    });
+    afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    beforeEach(() => {
+      tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-show-legacy-'));
+      file = path.join(tmp, 's1.jsonl');
+      fs.writeFileSync(
+        file,
+        [
+          user('the question', '2026-09-01T00:00:00Z'),
+          blob(`${reminder}\nthe question`, '2026-09-01T00:00:01Z'),
+          assistant('the answer SECRET', '2026-09-01T00:01:00Z'),
+          user('later question', '2026-09-02T00:00:00Z'),
+          assistant('later answer', '2026-09-02T00:01:00Z'),
+        ].join('\n') + '\n'
+      );
+    });
+
+    it('hides the turn whose copied form was deleted', async () => {
+      const copied = `[User]\n${reminder}\nthe question\n\n[Assistant]\nthe answer SECRET`;
+
+      const out = await renderSession(session(), 0, new Set([contentDigest(copied)]));
+
+      expect(out).not.toContain('SECRET');
+      expect(out).toContain('[deleted]');
+      expect(out).toContain('later answer');
+    });
+
+    it('hides the turn that now holds a prompt deleted as a turn of its own', async () => {
+      const out = await renderSession(
+        session(),
+        0,
+        new Set([contentDigest('[User]\nthe question')])
+      );
+
+      expect(out).not.toContain('SECRET');
+      expect(out).toContain('later answer');
+    });
+
+    it('keeps a turn whose copied form was not deleted while another turn was', async () => {
+      const out = await renderSession(
+        session(),
+        0,
+        new Set([contentDigest('[User]\nlater question\n\n[Assistant]\nlater answer')])
+      );
+
+      expect(out).toContain('the answer SECRET');
+      expect(out).not.toContain('later answer');
+    });
+
+    const para = (word: string) => Array.from({ length: 600 }, () => word).join(' ');
+
+    it('hides the whole turn when only one chunk of its long copied form was deleted', async () => {
+      fs.writeFileSync(
+        file,
+        [
+          user('the question', '2026-09-01T00:00:00Z'),
+          blob(`${reminder}\nthe question`, '2026-09-01T00:00:01Z'),
+          assistant(`SECRET ${para('first')}\n\n${para('second')}`, '2026-09-01T00:01:00Z'),
+        ].join('\n') + '\n'
+      );
+      const parts = splitTurnText(
+        `[User]\n${reminder}\nthe question\n\n[Assistant]\nSECRET ${para('first')}\n\n${para('second')}`,
+        512
+      );
+      expect(parts.length).toBeGreaterThan(1);
+      expect(parts[0]).not.toContain('SECRET');
+
+      const out = await renderSession(session(), 0, new Set([contentDigest(parts[0])]));
+
+      expect(out).not.toContain('SECRET');
+      expect(out).not.toContain('second');
+    });
+
+    it('hides only the deleted chunk of a long turn that reads the same in both versions', async () => {
+      const answer = `${para('first')}\n\n${para('second')}`;
+      fs.writeFileSync(
+        file,
+        [user('plain', '2026-09-01T00:00:00Z'), assistant(answer, '2026-09-01T00:01:00Z')].join(
+          '\n'
+        ) + '\n'
+      );
+      const parts = splitTurnText(`[User]\nplain\n\n[Assistant]\n${answer}`, 512);
+      expect(parts.length).toBeGreaterThan(1);
+
+      const out = await renderSession(session(), 0, new Set([contentDigest(parts.at(-1)!)]));
+
+      expect(out).toContain('[deleted]');
+      expect(out).toContain(parts[0]);
+    });
   });
 });

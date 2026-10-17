@@ -3,20 +3,16 @@ import * as path from 'node:path';
 import type { EngramConfig } from '@/config';
 import type { Store } from '@/db/store';
 import { foldCanonicalHistory } from '@/jsonl/fold';
+import { recoverPreparedCheckpoints } from '@/checkpoint/coordinator';
 import { scanSessions } from '@/jsonl/deletion';
 import type { compactSessions } from '@/jsonl/compact';
 import { listJsonlFiles } from '@/jsonl/path';
 import { deletionsFile, recordChunkSessions } from '@/archive/deletions';
-import {
-  REQUEST_COPY_SIGNATURE,
-  applyLegacy,
-  findCopyTurns,
-  planLegacy,
-  trimTurns,
-} from '@/hooks/request-copies-trim';
+import { REQUEST_COPY_SIGNATURE } from '@/parser/request-copy';
+import { applyLegacy, findCopyTurns, planLegacy, trimTurns } from '@/hooks/request-copies-trim';
 import type { CopyTurns, LegacyPlan } from '@/hooks/request-copies-trim';
 
-export { REQUEST_COPY_SIGNATURE, stripRequestCopy } from '@/hooks/request-copies-trim';
+export { REQUEST_COPY_SIGNATURE, stripRequestCopy } from '@/parser/request-copy';
 
 /** 正本の JSONL では、本文の改行は \n と書かれる。 */
 const RAW_SIGNATURE = Buffer.from(JSON.stringify(REQUEST_COPY_SIGNATURE).slice(1, -1));
@@ -132,7 +128,15 @@ async function trimSessions(
   const failed = new Set<string>();
   try {
     const turns = [...copies.v2.values()].flat();
-    for (const turn of trimTurns(config, store, turns, deletedIds)) {
+    const { left, dropped } = trimTurns(config, store, turns, deletedIds);
+    const droppedCounts = new Map<string, number>();
+    for (const turn of dropped) countTurns(droppedCounts, turn.sessionId, 1);
+    for (const [sessionId, n] of droppedCounts) {
+      result.details.push(
+        `${sessionId.slice(0, 8)}: removed ${n} turn(s) from the DB that did not match the JSONL store; kizami rebuild restores it`
+      );
+    }
+    for (const turn of left) {
       if (failed.has(turn.sessionId)) continue;
       failed.add(turn.sessionId);
       result.errors++;
@@ -167,6 +171,19 @@ async function trimSessions(
     result.details.push(`${sessionId.slice(0, 8)} (trimmed ${n} ${n === 1 ? 'turn' : 'turns'})`);
   }
   return failed.size === 0;
+}
+
+/** 一覧に出る最初と最後の発言の要約も直す。以前の版の修復は chunk だけを直し、要約を残した。 */
+function rebuildSummaries(store: Store, result: CopyRepairResult): boolean {
+  try {
+    for (const sessionId of store.sessionsWithSummaryContaining('<system-reminder>')) {
+      store.recomputeSessionMetadata(sessionId);
+    }
+    return true;
+  } catch (err) {
+    reportError(result, 'session summaries', err);
+    return false;
+  }
 }
 
 async function compactTargets(
@@ -228,9 +245,23 @@ function acquireLock(config: EngramConfig): (() => void) | undefined {
     // Stryker disable next-line ConditionalExpression: 消してから作り直すまでの間に別のプロセスが作る競合は、決定的に再現できない
     if (!createLock(file)) return undefined;
   }
-  return () => fs.rmSync(file, { force: true });
+  // 10 分を過ぎて別のプロセスに取り直されたロックは、そのプロセスのものなので消さない
+  return () => {
+    // Stryker disable next-line ObjectLiteral,BooleanLiteral: 持ち主を確かめた後に別のプロセスが消す競合は、決定的に再現できない
+    if (holderIsMe(file)) fs.rmSync(file, { force: true });
+  };
 }
 
+function holderIsMe(file: string): boolean {
+  try {
+    // Stryker disable BlockStatement: catch を空にすると undefined が返り、false と同じく消さない
+    return fs.readFileSync(file, 'utf-8') === String(process.pid);
+  } catch {
+    return false;
+  }
+}
+
+// Stryker restore BlockStatement
 async function repairAll(
   input: CopyRepairInput,
   files: string[],
@@ -239,6 +270,8 @@ async function repairAll(
 ) {
   const { config } = input;
   const jsonlDir = config.storage.jsonlDir;
+  // 済んだ保存の receipt は写しを含む元の取引をそのまま持つので片付ける。途中の receipt は正本に書き終えてから fold に入れる
+  await recoverPreparedCheckpoints(config);
   const history = await foldCanonicalHistory(files);
   if (history.errors.length > 0) {
     const reasons = history.errors.map((e) => e.message).join('; ');
@@ -246,11 +279,13 @@ async function repairAll(
   }
   const scan = await scanSessions(jsonlDir, REQUEST_COPY_SIGNATURE);
   recordChunkSessions(deletionsFile(config.database.path), scan.deletedSessions);
-  const trimmed = await trimSessions(input, findCopyTurns(history), scan.deletedIds, result);
+  const copies = findCopyTurns(history, scan.starting);
+  const trimmed = await trimSessions(input, copies, scan.deletedIds, result);
+  const summarized = rebuildSummaries(input.store, result);
   // 写しを含むセッションは、正本の記録に目印を持つので containing に入る
   const compacted = await compactTargets(input, scan.containing, result);
   // 読む前の位置を残す。修復の間に増えた分は読んでいないので、次の回に読む
-  if (trimmed && compacted) saveMarks(config, marks);
+  if (trimmed && summarized && compacted) saveMarks(config, marks);
 }
 
 /**

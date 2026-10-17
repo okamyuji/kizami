@@ -188,8 +188,13 @@ function appendUser(
   if (text) messages.push({ kind: 'user', sessionId, timestamp, text });
 }
 
+export interface ParseOptions {
+  /** 0.8.5 以前の読み方。api-request-blob 行も発言として読む。その版で消したチャンクと照合するためだけに使う。 */
+  requestCopies?: boolean;
+}
+
 /** 1 行を解釈して messages に足す。ツール結果は直前の assistant に付ける。 */
-function appendLine(messages: TranscriptMessage[], line: string): void {
+function appendLine(messages: TranscriptMessage[], line: string, options: ParseOptions): void {
   const raw = parseRawLine(line);
   // Skip compaction summaries
   if (!raw || raw.isCompactSummary) return;
@@ -203,7 +208,8 @@ function appendLine(messages: TranscriptMessage[], line: string): void {
   }
 
   // api-request-blob 行も message.role を持つが、API へ送った本文（system-reminder を含む）の写しで会話ではない
-  if (raw.type !== 'user' && raw.type !== 'assistant') return;
+  const conversation = raw.type === 'user' || raw.type === 'assistant';
+  if (!conversation && !(options.requestCopies && raw.type === 'api-request-blob')) return;
   if (!isRecord(raw.message)) return;
   const { role, content } = raw.message;
   if (role === 'user') {
@@ -219,15 +225,18 @@ function appendLine(messages: TranscriptMessage[], line: string): void {
   }
 }
 
-export function parseTranscriptText(text: string): TranscriptMessage[] {
+export function parseTranscriptText(text: string, options: ParseOptions = {}): TranscriptMessage[] {
   const messages: TranscriptMessage[] = [];
-  for (const line of text.split(/\r?\n/)) appendLine(messages, line);
+  for (const line of text.split(/\r?\n/)) appendLine(messages, line, options);
   return messages;
 }
 
-export async function parseTranscript(filePath: string): Promise<TranscriptMessage[]> {
+export async function parseTranscript(
+  filePath: string,
+  options: ParseOptions = {}
+): Promise<TranscriptMessage[]> {
   const messages: TranscriptMessage[] = [];
-  for await (const line of readLines(filePath)) appendLine(messages, line);
+  for await (const line of readLines(filePath)) appendLine(messages, line, options);
   return messages;
 }
 

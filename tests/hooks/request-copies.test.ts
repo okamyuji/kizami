@@ -147,6 +147,7 @@ describe('recoverTranscripts removes api-request-blob copies saved as turns', ()
     query<{ content: string }>('SELECT content FROM chunks')
       .map((r) => r.content)
       .join('\n');
+  const summaries = () => JSON.stringify(query('SELECT first_message, last_message FROM sessions'));
   const jsonlText = () =>
     listJsonlFiles(jsonlDir)
       .map((f) => fs.readFileSync(f, 'utf-8'))
@@ -190,9 +191,17 @@ describe('recoverTranscripts removes api-request-blob copies saved as turns', ()
     write(lines, true);
     const chunks = buildChunks(await parseTranscript(file), SID, cwd);
     new JsonlWriter(jsonlDir).appendRecords(chunksToJsonlRecords(chunks));
+    const humans = (await parseTranscript(file)).filter((m) => m.kind === 'user');
     withStore((store) => {
       store.insertChunks(chunks);
-      store.insertSession({ sessionId: SID, projectPath: cwd, chunkCount: chunks.length });
+      // recover の取り込みと同じく、最初と最後の発言を要約に残す
+      store.insertSession({
+        sessionId: SID,
+        projectPath: cwd,
+        chunkCount: chunks.length,
+        firstMessage: humans[0]?.text.slice(0, 200),
+        lastMessage: humans[humans.length - 1]?.text.slice(0, 200),
+      });
     });
     write(lines);
   }
@@ -214,6 +223,7 @@ describe('recoverTranscripts removes api-request-blob copies saved as turns', ()
     expect(result.details).toEqual(['blobfix- (trimmed 1 turn)']);
     expect(contents()).not.toContain('requestcopy');
     expect(contents()).toContain('[User]\nretry question\n\n[Assistant]\nretry answer');
+    expect(summaries()).not.toContain('requestcopy');
     expect(jsonlText()).not.toContain('requestcopy');
     const canonical = await folded();
     expect(canonical).not.toContain('requestcopy');
@@ -346,6 +356,7 @@ describe('recoverTranscripts removes api-request-blob copies saved as turns', ()
     const result = await recover();
 
     expect(result.details).toEqual(['blobfix- (trimmed 1 turn)']);
+    expect(summaries()).not.toContain('CLAUDE.md line');
     expect(contents()).not.toContain('CLAUDE.md line');
     expect(contents()).not.toContain('TAILSECRET');
     expect(contents()).toContain('[User]\nsecond question\n\n[Assistant]\nsecond answer');
@@ -439,10 +450,47 @@ describe('recoverTranscripts removes api-request-blob copies saved as turns', ()
     const result = await recover();
 
     expect(result.errors).toBe(0);
+    expect(result.details).toContain(
+      'blobfix-: removed 1 turn(s) from the DB that did not match the JSONL store; kizami rebuild restores it'
+    );
     expect(contents()).not.toContain('requestcopy');
     expect(contents()).not.toContain('retry answer');
     expect(await folded()).toContain('retry answer');
     expect(fs.existsSync(stateFile())).toBe(true);
+  });
+
+  it('removes the receipts of finished saves that still hold the copy', async () => {
+    await saveAsBefore(polluted);
+    const prepared = path.join(tmpDir, 'prepared', 'claude');
+    const held = () =>
+      fs.existsSync(prepared)
+        ? fs
+            .readdirSync(prepared)
+            .filter((f) => fs.readFileSync(path.join(prepared, f), 'utf-8').includes('requestcopy'))
+        : [];
+    expect(held().length).toBeGreaterThan(0);
+
+    await recover();
+
+    expect(held()).toEqual([]);
+  });
+
+  it('rebuilds a session summary that an earlier repair left with the copy', async () => {
+    await saveAsBefore(polluted);
+    await recover();
+    // 以前の版の修復は chunk だけを直し、要約を残した
+    const db = getDatabase(dbPath);
+    try {
+      db.prepare('UPDATE sessions SET last_message = ?').run(`${COPY}\nretry question`);
+    } finally {
+      db.close();
+    }
+    fs.rmSync(stateFile());
+
+    await recover();
+
+    expect(summaries()).not.toContain('requestcopy');
+    expect(summaries()).toContain('retry question');
   });
 
   it('leaves a session that only talks about system-reminder tags', async () => {

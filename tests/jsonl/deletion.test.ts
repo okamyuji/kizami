@@ -17,6 +17,7 @@ import {
   appendChunkDeletion,
   appendChunkDeletions,
   scanSessions,
+  turnRecordKey,
 } from '@/jsonl/deletion';
 import type { JsonlChunkRecord } from '@/jsonl/types';
 import type { TurnCheckpointV2 } from '@/checkpoint/types';
@@ -342,5 +343,26 @@ describe('scanSessions', () => {
     expect([...found.deletedIds]).toEqual(['ext-x']);
     expect([...found.deletedSessions]).toEqual(['hand']);
     expect([...found.containing].sort()).toEqual(['v1-hit', 'v2-hit']);
+    expect(found.starting).toEqual({ turns: new Set(), chunks: [] });
+  });
+
+  it('takes as starting only the v1 rows and the first v2 part that begin with the text', async () => {
+    const dir = makeTmpDir();
+    const head = { ...record('a', 'v1-head'), content: 'NEEDLE first' };
+    const lines = [
+      JSON.stringify(head),
+      JSON.stringify({ ...record('b', 'v1-inside'), content: 'see NEEDLE here' }),
+      ...checkpointTx('v2-head', ['NEEDLE first', 'rest']),
+      ...checkpointTx('v2-inside', ['see NEEDLE here', 'rest']),
+      ...checkpointTx('v2-later', ['plain', 'NEEDLE in part 1']),
+    ];
+    fs.writeFileSync(path.join(dir, '2026-10-host.jsonl'), lines.join('\n') + '\n');
+
+    const found = await scanSessions(dir, 'NEEDLE');
+
+    expect(found.starting.chunks).toEqual([head]);
+    expect([...found.starting.turns]).toEqual([
+      turnRecordKey({ sessionId: 'v2-head', turnKey: 't', historyEpoch: 0, revision: 1 }),
+    ]);
   });
 });

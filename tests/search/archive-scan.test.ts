@@ -37,6 +37,36 @@ describe('scanArchive', () => {
     expect(hits[0].snippet).toContain('Retry Policy for staging');
   });
 
+  it('does not match a turn whose copied form a version that read request copies deleted', () => {
+    const reminder = '<system-reminder>copy</system-reminder>';
+    put(
+      '-a',
+      'old1',
+      [
+        user('the question'),
+        {
+          type: 'api-request-blob',
+          message: { role: 'user', content: `${reminder}\nthe question` },
+        },
+        asst('the answer SECRET'),
+      ],
+      100
+    );
+    const copied = `[User]\n${reminder}\nthe question\n\n[Assistant]\nthe answer SECRET`;
+
+    const hits = scanArchive(
+      'secret',
+      tmp,
+      90 * DAY,
+      NOW,
+      10,
+      new Set(),
+      new Set([contentDigest(copied)])
+    );
+
+    expect(hits).toEqual([]);
+  });
+
   it('does not match a session whose terms appear only in deleted chunks', () => {
     put('-a', 'o1', [user('secret needle'), asst('ok'), user('other'), asst('fine')], 100);
     const deleted = new Set([contentDigest('[User]\nsecret needle\n\n[Assistant]\nok')]);

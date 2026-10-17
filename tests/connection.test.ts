@@ -38,6 +38,12 @@ describe('connection', () => {
     db.close();
   });
 
+  it('zeroes the pages of deleted rows, so removed text does not stay in the file', () => {
+    const db = getDatabase(makeTmpDb());
+    expect(db.pragma('secure_delete', { simple: true })).toBe(1);
+    db.close();
+  });
+
   it('should return a functional database instance', () => {
     const dbPath = makeTmpDb();
     const db = getDatabase(dbPath);

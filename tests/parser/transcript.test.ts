@@ -156,6 +156,20 @@ describe('parseTranscript', () => {
 });
 
 describe('parseTranscriptText', () => {
+  it('reads request copies as user lines only when asked, as versions before 0.8.6 did', () => {
+    const text = [
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'q' } }),
+      JSON.stringify({ type: 'api-request-blob', message: { role: 'user', content: 'copy' } }),
+      JSON.stringify({ type: 'api-request-blob', message: { role: 'system', content: 'sys' } }),
+      JSON.stringify({ type: 'attachment', message: { role: 'user', content: 'other' } }),
+    ].join('\n');
+
+    expect(parseTranscriptText(text).map((m) => m.kind === 'user' && m.text)).toEqual(['q']);
+    expect(
+      parseTranscriptText(text, { requestCopies: true }).map((m) => m.kind === 'user' && m.text)
+    ).toEqual(['q', 'copy']);
+  });
+
   it('gives the same messages as parseTranscript for the same file', async () => {
     const fixture = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
     expect(parseTranscriptText(fs.readFileSync(fixture, 'utf-8'))).toEqual(

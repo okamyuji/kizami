@@ -1,8 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parseTranscriptText } from '@/parser/transcript';
-import { buildTurns, turnToText } from '@/parser/chunker';
-import { redactTurnText } from '@/archive/deletions';
+import { redactTurns } from '@/archive/deletions';
 import { fenceUntrusted, sanitizeQuoted } from '@/search/formatter';
 
 export interface ArchiveHit {
@@ -21,9 +20,10 @@ const SNIPPET_LEAD_CHARS = 100;
  * 削除したチャンクは伏せた本文になるので、そこにしか無い語でも当たらない。
  */
 function keptSnippet(raw: string, terms: string[], deleted: Set<string>): string | undefined {
-  const text = buildTurns(parseTranscriptText(raw))
-    .map((turn) => redactTurnText(turnToText(turn), deleted))
-    .join('\n\n');
+  // 削除が無ければ旧版の読み方は要らない
+  // Stryker disable next-line ConditionalExpression,EqualityOperator: 削除が無いときに 2 回目の解析を省く近道。外しても旧版のターンは伏せる対象を持たない
+  const legacy = deleted.size > 0 ? parseTranscriptText(raw, { requestCopies: true }) : [];
+  const text = redactTurns(parseTranscriptText(raw), legacy, deleted).join('\n\n');
   const lower = text.toLowerCase();
   if (!terms.every((t) => lower.includes(t))) return undefined;
   const start = Math.max(0, lower.indexOf(terms[0]) - SNIPPET_LEAD_CHARS);

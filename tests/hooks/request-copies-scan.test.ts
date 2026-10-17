@@ -373,6 +373,83 @@ describe('repairRequestCopies reads the JSONL store only when it holds something
     );
   });
 
+  const deleteByHand = (sessionId: string, externalId: string) =>
+    add(
+      file,
+      tx([{ v: 2, type: 'chunk_delete', txId: '', sessionId, externalId }]).allLines.join('\n') +
+        '\n'
+    );
+
+  it('removes the rest of a v1 copy whose first row was deleted by hand', async () => {
+    add(file, record('c1', 's1', 0, '[User]\n<system-reminder>head'));
+    add(file, record('c2', 's1', 1, 'CLAUDEMD rest\n</system-reminder>\nq\n\n[Assistant]\na'));
+    add(file, record('c3', 's1', 2, '[User]\nnext\n\n[Assistant]\nfine'));
+    deleteByHand('s1', 'c1');
+
+    expect((await run()).result.details).toEqual(['s1 (trimmed 1 turn)']);
+    expect((await legacyContents()).sort()).toEqual([
+      '[User]\nnext\n\n[Assistant]\nfine',
+      '[User]\nq\n\n[Assistant]\na',
+    ]);
+  });
+
+  it('removes the rest of a v1 copy whose first row, deleted by hand, came after another turn', async () => {
+    add(file, record('c0', 's1', 0, '[User]\nfirst\n\n[Assistant]\nok'));
+    add(file, record('c1', 's1', 1, '[User]\n<system-reminder>head'));
+    add(file, record('c2', 's1', 2, 'CLAUDEMD rest\n</system-reminder>\nq\n\n[Assistant]\na'));
+    add(file, record('c3', 's1', 3, '[User]\nnext\n\n[Assistant]\nfine'));
+    deleteByHand('s1', 'c1');
+
+    expect((await run()).result.details).toEqual(['s1 (trimmed 1 turn)']);
+    expect((await legacyContents()).sort()).toEqual([
+      '[User]\nfirst\n\n[Assistant]\nok',
+      '[User]\nnext\n\n[Assistant]\nfine',
+      '[User]\nq\n\n[Assistant]\na',
+    ]);
+  });
+
+  it('removes the rest of a v2 copy whose first part was deleted by hand', async () => {
+    const parts = [
+      '[User]\n<system-reminder>head',
+      'CLAUDEMD rest\n</system-reminder>\nq\n\n[Assistant]\na',
+    ];
+    const cp = checkpoint('session-hand-1', parts[0]);
+    cp.parts = parts.map((content, i) => ({
+      ...cp.parts[0],
+      partIndex: i,
+      externalId: createPartExternalId('claude', 'session-hand-1', 'tk-1', i),
+      content,
+    }));
+    add(file, tx([cp]).allLines.join('\n') + '\n');
+    deleteByHand('session-hand-1', cp.parts[0].externalId);
+
+    expect((await run()).result.details).toEqual(['session- (trimmed 1 turn)']);
+    const text = JSON.stringify([
+      ...(await foldCanonicalHistory(listJsonlFiles(jsonlDir))).turns.values(),
+    ]);
+    expect(text).not.toContain('CLAUDEMD');
+  });
+
+  it('does not take as a copy a turn whose copied revision was already replaced', async () => {
+    add(file, turn('session-done-1', COPY));
+    await run();
+    fs.rmSync(stateFile());
+
+    expect((await run()).result.details).toEqual([]);
+  });
+
+  it('leaves the lock of another process that took it over', async () => {
+    add(file, record('c1', 's1', 0, COPY));
+    input.compact = async () => {
+      fs.writeFileSync(lockFile(), '999999');
+      return 'unchanged';
+    };
+
+    await run();
+
+    expect(fs.readFileSync(lockFile(), 'utf-8')).toBe('999999');
+  });
+
   it('reads again on the next run what was appended while it was repairing', async () => {
     add(file, record('c1', 's1', 0, COPY));
     folds.after = () => {
@@ -438,6 +515,18 @@ describe('repairRequestCopies reads the JSONL store only when it holds something
     };
 
     expect((await run()).result.repaired).toBe(1);
+  });
+
+  it('leaves at the end a lock path it cannot read as its own', async () => {
+    add(file, record('c1', 's1', 0, COPY));
+    input.compact = async () => {
+      fs.rmSync(lockFile());
+      fs.mkdirSync(lockFile());
+      return 'unchanged';
+    };
+
+    expect((await run()).result.repaired).toBe(1);
+    expect(fs.statSync(lockFile()).isDirectory()).toBe(true);
   });
 
   it('fails when the lock cannot be created at all', async () => {
@@ -639,10 +728,26 @@ describe('repairRequestCopies reads the JSONL store only when it holds something
 
     const { result } = await run();
 
-    expect(result.errors).toBe(2);
+    expect(result.errors).toBe(3);
     expect(result.details).toEqual([
       expect.stringMatching(/^session-: error - /),
       expect.stringMatching(/^session-: error - /),
+      expect.stringMatching(/^session summaries: error - /),
+    ]);
+    expect(fs.existsSync(stateFile())).toBe(false);
+  });
+
+  it('saves nothing when only the session summaries could not be fixed', async () => {
+    add(file, record('c1', 'session-one', 0, COPY));
+    vi.spyOn(input.store, 'sessionsWithSummaryContaining').mockImplementationOnce(() => {
+      throw new Error('summaries failed');
+    });
+
+    const { result } = await run();
+
+    expect(result.details).toEqual([
+      'session- (trimmed 1 turn)',
+      'session summaries: error - Error: summaries failed',
     ]);
     expect(fs.existsSync(stateFile())).toBe(false);
   });

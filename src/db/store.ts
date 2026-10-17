@@ -168,6 +168,15 @@ export class Store {
       .run(...externalIds);
   }
 
+  sessionsWithSummaryContaining(text: string): string[] {
+    const rows = this.db
+      .prepare(
+        'SELECT session_id FROM sessions WHERE instr(first_message, ?) > 0 OR instr(last_message, ?) > 0'
+      )
+      .all(text, text) as Array<{ session_id: string }>;
+    return rows.map((row) => row.session_id);
+  }
+
   getTurnChunkRefs(
     sessionId: string,
     turnKey: string
