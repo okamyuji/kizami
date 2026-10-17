@@ -189,7 +189,7 @@ function appendUser(
 }
 
 export interface ParseOptions {
-  /** 0.8.5 以前の読み方。api-request-blob 行も発言として読む。その版で消したチャンクと照合するためだけに使う。 */
+  /** 0.8.5 以前の読み方。行の type を見ず、role を持つ行をすべて発言として読む。その版で消したチャンクと照合するためだけに使う。 */
   requestCopies?: boolean;
 }
 
@@ -208,8 +208,7 @@ function appendLine(messages: TranscriptMessage[], line: string, options: ParseO
   }
 
   // api-request-blob 行も message.role を持つが、API へ送った本文（system-reminder を含む）の写しで会話ではない
-  const conversation = raw.type === 'user' || raw.type === 'assistant';
-  if (!conversation && !(options.requestCopies && raw.type === 'api-request-blob')) return;
+  if (!options.requestCopies && raw.type !== 'user' && raw.type !== 'assistant') return;
   if (!isRecord(raw.message)) return;
   const { role, content } = raw.message;
   if (role === 'user') {

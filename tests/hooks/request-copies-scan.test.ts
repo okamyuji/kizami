@@ -728,11 +728,12 @@ describe('repairRequestCopies reads the JSONL store only when it holds something
 
     const { result } = await run();
 
-    expect(result.errors).toBe(3);
+    expect(result.errors).toBe(4);
     expect(result.details).toEqual([
       expect.stringMatching(/^session-: error - /),
       expect.stringMatching(/^session-: error - /),
       expect.stringMatching(/^session summaries: error - /),
+      expect.stringMatching(/^full-text index: error - /),
     ]);
     expect(fs.existsSync(stateFile())).toBe(false);
   });

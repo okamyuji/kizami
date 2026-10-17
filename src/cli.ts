@@ -390,6 +390,7 @@ export function cmdDelete(options: {
       store.deleteSession(options.session);
       recordSessionDeletion(deletionsFile(config.database.path), options.session);
       removeArchivedTranscript(config.storage.transcriptArchiveDir, options.session);
+      store.purgeDeletedIndexEntries();
       console.log(`Session ${options.session} deleted.`);
     } else if (options.before) {
       const date = new Date(options.before).toISOString();
@@ -408,6 +409,7 @@ export function cmdDelete(options: {
           `Chunk ${id} has no external id, so its deletion is not recorded in the JSONL store. Run kizami migrate-to-jsonl to assign ids.`
         );
       }
+      store.purgeDeletedIndexEntries();
       console.log(`Chunk ${id} deleted.`);
     } else {
       console.log('Usage: kizami delete --session <id> | --before <date> | --chunk <id>');

@@ -186,6 +186,16 @@ function rebuildSummaries(store: Store, result: CopyRepairResult): boolean {
   }
 }
 
+function purgeIndex(store: Store, result: CopyRepairResult): boolean {
+  try {
+    store.purgeDeletedIndexEntries();
+    return true;
+  } catch (err) {
+    reportError(result, 'full-text index', err);
+    return false;
+  }
+}
+
 async function compactTargets(
   input: CopyRepairInput,
   targets: Set<string>,
@@ -284,8 +294,9 @@ async function repairAll(
   const summarized = rebuildSummaries(input.store, result);
   // 写しを含むセッションは、正本の記録に目印を持つので containing に入る
   const compacted = await compactTargets(input, scan.containing, result);
+  const purged = purgeIndex(input.store, result);
   // 読む前の位置を残す。修復の間に増えた分は読んでいないので、次の回に読む
-  if (trimmed && summarized && compacted) saveMarks(config, marks);
+  if (trimmed && summarized && compacted && purged) saveMarks(config, marks);
 }
 
 /**

@@ -491,6 +491,15 @@ export class Store {
     this.db.pragma('wal_checkpoint(TRUNCATE)');
   }
 
+  /**
+   * FTS5 は消した行の索引を merge まで残すので、本文を索引から組み立て直せる（https://www.sqlite.org/fts5.html の secure-delete）。
+   * merge でそれを消し、WAL に残る古いページも書き戻す。secure-delete 設定は大量削除を約 7 倍遅くしたので使わない。
+   */
+  purgeDeletedIndexEntries(): void {
+    this.db.exec("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')");
+    this.vacuum();
+  }
+
   deleteOldestChunks(count: number): number {
     const result = this.db
       .prepare(
@@ -963,6 +972,24 @@ export class Store {
     for (let i = 0; i < rows.length; i++) {
       update.run(i, rows[i].id);
     }
+  }
+
+  /**
+   * 一覧に出る最初と最後の発言を、残っているチャンクで書き直す。recomputeSessionMetadata と違い、
+   * チャンクが無くなってもセッションの行は残す。行が消えると recover が未保存の会話とみなして取り込み直すため。
+   */
+  refreshSessionSummary(sessionId: string): void {
+    const edge = (order: 'ASC' | 'DESC') =>
+      (
+        this.db
+          .prepare(
+            `SELECT content FROM chunks WHERE session_id = ? ORDER BY chunk_index ${order} LIMIT 1`
+          )
+          .get(sessionId) as { content: string } | undefined
+      )?.content.substring(0, 200) ?? null;
+    this.db
+      .prepare('UPDATE sessions SET first_message = ?, last_message = ? WHERE session_id = ?')
+      .run(edge('ASC'), edge('DESC'), sessionId);
   }
 
   recomputeSessionMetadata(sessionId: string): void {

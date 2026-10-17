@@ -94,6 +94,7 @@ export function deleteChunkEverywhere(
     appendChunkDeletion(config.storage.jsonlDir, chunk.sessionId, chunk.externalId);
   }
   store.deleteChunk(chunk.id);
+  store.refreshSessionSummary(chunk.sessionId);
   recordChunkDeletion(deletionsFile(config.database.path), chunk.content, chunk.sessionId);
   return chunk.externalId !== undefined;
 }
