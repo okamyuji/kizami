@@ -2,7 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parseTranscript, parseTranscriptText } from '../../src/parser/transcript';
+import {
+  parseTranscript,
+  parseTranscriptText,
+  conversationTime,
+} from '../../src/parser/transcript';
 import type { AssistantMessage } from '../../src/parser/transcript';
 
 const FIXTURE = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
@@ -194,6 +198,37 @@ describe('parseTranscriptText timestamps', () => {
     try {
       expect(stamp('2026-10-18T12:00:00.000Z')).toBe('2026-10-18T12:00:00.000Z');
       expect(stamp('2026-10-18T12:00:00.001Z')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('conversationTime', () => {
+  const NOW = new Date('2026-10-17T12:00:00.000Z');
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it('prefers the transcript timestamp', () => {
+    expect(conversationTime('2026-09-01T00:00:00Z', new Date('2026-10-01T00:00:00Z'))).toBe(
+      '2026-09-01T00:00:00Z'
+    );
+  });
+
+  it('falls back to the file mtime as ISO', () => {
+    expect(conversationTime(undefined, new Date('2026-10-01T00:00:00.123Z'))).toBe(
+      '2026-10-01T00:00:00.123Z'
+    );
+  });
+
+  it('clamps an mtime beyond one day ahead to the same bound as timestamps', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+    try {
+      const bound = new Date(NOW.getTime() + DAY);
+      expect(conversationTime(undefined, bound)).toBe(bound.toISOString());
+      expect(conversationTime(undefined, new Date(bound.getTime() + 1))).toBe(bound.toISOString());
+      expect(conversationTime(undefined, new Date('2036-10-14T00:00:00Z'))).toBe(
+        bound.toISOString()
+      );
     } finally {
       vi.useRealTimers();
     }

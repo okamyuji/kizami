@@ -55,6 +55,21 @@ describe('renderSession', () => {
     expect(out).toContain('Turns: 2');
   });
 
+  it('drops terminal control characters from turns and header, keeping tabs and newlines', async () => {
+    fs.writeFileSync(
+      file,
+      user('q', '2026-09-01T00:00:00Z') +
+        '\n' +
+        assistant('\x1b[31mred\x1b[0m\tcol\x07\x1b]52;c;aGk=\x07', '2026-09-01T00:01:00Z') +
+        '\n'
+    );
+    const out = await renderSession({ ...session(), cwd: '/w/\x1b]0;x\x07p' }, 0);
+    expect(out).toContain('[31mred[0m\tcol]52;c;aGk=');
+    expect(out).toContain('Cwd: /w/]0;xp\n');
+    expect(out).not.toContain('\x1b');
+    expect(out).not.toContain('\x07');
+  });
+
   it('prints a header and every turn when unlimited', async () => {
     const out = await renderSession(session(), 0);
     expect(out).toContain('Session: s1');

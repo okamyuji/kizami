@@ -126,6 +126,16 @@ function validTimestamp(value: unknown): string | undefined {
   return UTC_ISO_RE.test(value) ? value : new Date(ms).toISOString();
 }
 
+/**
+ * ターンや会話の時刻。行の時刻が無ければ生ログの更新時刻を使い、行の時刻と同じ上限で切る。
+ * 取り込み時刻を使うと古い会話が新しく見え、未来の更新時刻は最新として固定されるため。
+ */
+export function conversationTime(timestamp: string | undefined, mtime: Date): string {
+  return (
+    timestamp ?? new Date(Math.min(mtime.getTime(), Date.now() + MAX_FUTURE_SKEW_MS)).toISOString()
+  );
+}
+
 /** 1 行を解釈して messages に足す。ツール結果は直前の assistant に付ける。 */
 function appendLine(messages: TranscriptMessage[], line: string): void {
   // JSON.parse は BOM と NBSP を空白として扱わないので、先に trim で落とす。

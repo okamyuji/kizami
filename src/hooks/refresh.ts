@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { EngramConfig } from '@/config';
 import type { Session, Store } from '@/db/store';
-import { parseTranscript } from '@/parser/transcript';
+import { parseTranscript, conversationTime } from '@/parser/transcript';
 import type { TranscriptMessage } from '@/parser/transcript';
 import { isAgedOut } from '@/maintenance/auto';
 import { buildChunks } from '@/parser/chunker';
@@ -88,9 +88,9 @@ async function commit(
   );
 }
 
-/** 時刻の無いターンには会話の最後の時刻を使う。どの行にも無ければ生ログの更新時刻を使う。取り込み時刻だと古い会話が新しく見える。 */
+/** 時刻の無いターンには会話の最後の時刻を使う。どの行にも無ければ生ログの更新時刻を使う。 */
 function fallbackTime(messages: TranscriptMessage[], mtime: Date): string {
-  return [...messages].reverse().find((m) => m.timestamp)?.timestamp ?? mtime.toISOString();
+  return conversationTime([...messages].reverse().find((m) => m.timestamp)?.timestamp, mtime);
 }
 
 // 取り込み時刻が刻まれた v1 の行を見分ける閾値。hook の保存は会話の終了から数分以内に着く。
@@ -116,7 +116,7 @@ export async function repairIfMisdated(ctx: RefreshContext, projectPath: string)
   if (!needsRepair(store, session, projectPath)) return false;
   const { size, mtime } = fs.statSync(transcriptPath);
   // 保持期間より古い会話は、直しても整理で消える。取り込み時刻の行は保持期間の後に消え、入れ直されない
-  if (isAgedOut(config, session.endedAt ?? mtime.toISOString())) return false;
+  if (isAgedOut(config, session.endedAt)) return false;
   if (readPendingPrompts(path.dirname(config.database.path), 'claude', sessionId).length > 0) {
     return false;
   }

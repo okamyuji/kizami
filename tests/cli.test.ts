@@ -42,6 +42,12 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir, default: { ...actual, homedir } };
 });
 
+const hasControl = (text: string): boolean =>
+  [...text].some((ch) => {
+    const c = ch.charCodeAt(0);
+    return (c < 0x20 && c !== 0x09 && c !== 0x0a) || (c >= 0x7f && c <= 0x9f);
+  });
+
 describe('cli commands', () => {
   let db: Database.Database;
   let store: Store;
@@ -535,6 +541,19 @@ describe('cli commands', () => {
       expect(sessions.length).toBe(2);
     });
 
+    it('prints the first message without terminal control characters', () => {
+      store.insertSession(
+        makeSession({ firstMessage: 'a\u001b]52;c;x\u0007b\u009bc', projectPath: '/test/p\u001bq' })
+      );
+      const logSpy = vi.spyOn(console, 'log');
+
+      cmdList({ project: '/test/p\u001bq', config: configPath });
+
+      const out = logSpy.mock.calls.flat().join('\n');
+      expect(out).toContain('a]52;c;xbc');
+      expect(hasControl(out)).toBe(false);
+    });
+
     it('should return empty array when no sessions', () => {
       const sessions = cmdList({ project: '/test/project', config: configPath });
       expect(sessions).toEqual([]);
@@ -824,6 +843,19 @@ describe('cli commands', () => {
       expect(parsed[0].sessionId).toBe('session-1');
     });
 
+    it('exports markdown without terminal control characters', () => {
+      store.insertSession(makeSession({ firstMessage: 'a\u001b[2Jb\u0007c\u009dd' }));
+
+      const output = cmdExport({
+        format: 'markdown',
+        project: '/test/project',
+        config: configPath,
+      });
+
+      expect(output).toContain('- First: a[2Jbcd');
+      expect(hasControl(output)).toBe(false);
+    });
+
     it('should export sessions as markdown', () => {
       store.insertSession(makeSession());
 
@@ -833,8 +865,9 @@ describe('cli commands', () => {
         config: configPath,
       });
 
-      expect(output).toContain('# Kizami Memory Export');
-      expect(output).toContain('session-');
+      expect(output).toContain(
+        '# Kizami Memory Export\n\n## Session session-\n- Project: /test/project\n'
+      );
     });
 
     it('should default to JSON format', () => {
@@ -972,6 +1005,23 @@ describe('cli commands', () => {
       expect(errSpy).toHaveBeenCalledWith('--max-chars must be a non-negative integer.');
       expect(process.exitCode).toBe(1);
       expect(outSpy).not.toHaveBeenCalled();
+    });
+
+    it('prints the session without terminal control characters', async () => {
+      fs.writeFileSync(
+        path.join(root, 'claude', 'projects', '-p', 'abcd2.jsonl'),
+        JSON.stringify({
+          type: 'user',
+          sessionId: 'abcd2',
+          timestamp: '2026-09-01T00:00:00Z',
+          message: { role: 'user', content: 'x\u001b]52;c;cHduZWQ=\u0007y\u009bz' },
+        }) + '\n'
+      );
+
+      await cmdShow('abcd2', { config: none() });
+
+      expect(out()).toContain('x]52;c;cHduZWQ=yz');
+      expect(hasControl(out())).toBe(false);
     });
 
     it('prints the session with the default limit', async () => {

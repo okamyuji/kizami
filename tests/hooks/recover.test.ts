@@ -1142,6 +1142,45 @@ describe('recoverTranscripts repairs sessions imported with the wrong time or pr
     expect(all('SELECT * FROM sessions')).toEqual([]);
   });
 
+  it('clamps a future file mtime when stamping untimed chunks and the session row', async () => {
+    const future = new Date(Date.now() + 3650 * 86400000);
+    fs.writeFileSync(file, [line('user', 'q'), line('assistant', 'a')].join('\n') + '\n');
+    fs.utimesSync(file, future, future);
+
+    await recoverTranscripts(configPath, projectsDir);
+
+    const limit = Date.now() + 86400000;
+    const [chunk] = all<{ created_at: string }>('SELECT created_at FROM chunks');
+    const [session] = all<{ started_at: string; ended_at: string }>(
+      'SELECT started_at, ended_at FROM sessions'
+    );
+    for (const value of [chunk.created_at, session.started_at, session.ended_at]) {
+      expect(Date.parse(value)).toBeLessThanOrEqual(limit);
+      expect(Date.parse(value)).toBeGreaterThan(limit - 60000);
+    }
+  });
+
+  it('records the file mtime as the session time when the transcript has no timestamps', async () => {
+    const mtime = new Date(Date.now() - 10 * 86400000);
+    mtime.setMilliseconds(0);
+    fs.writeFileSync(file, [line('user', 'q'), line('assistant', 'a')].join('\n') + '\n');
+    fs.utimesSync(file, mtime, mtime);
+
+    await recoverTranscripts(configPath, projectsDir);
+
+    expect(all('SELECT started_at, ended_at FROM sessions')).toEqual([
+      { started_at: mtime.toISOString(), ended_at: mtime.toISOString() },
+    ]);
+  });
+
+  it('keeps the transcript timestamps for the session row when they exist', async () => {
+    await recoverTranscripts(configPath, projectsDir);
+
+    expect(all('SELECT started_at, ended_at FROM sessions')).toEqual([
+      { started_at: '2026-09-01T00:00:00Z', ended_at: '2026-09-01T00:01:00Z' },
+    ]);
+  });
+
   it('uses the file mtime for untimed turns when a grown session is refreshed', async () => {
     fs.writeFileSync(file, [line('user', 'q1'), line('assistant', 'a1')].join('\n') + '\n');
     await recoverTranscripts(configPath, projectsDir);

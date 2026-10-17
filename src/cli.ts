@@ -10,7 +10,7 @@ import type { StoreStats, Session } from '@/db/store';
 import { searchFts } from '@/search/fts';
 import { rankResults } from '@/search/hybrid';
 import type { ScoredResult } from '@/search/hybrid';
-import { formatResults } from '@/search/formatter';
+import { formatResults, stripControlChars } from '@/search/formatter';
 import { scanArchive, formatArchiveHits } from '@/search/archive-scan';
 import { archiveAll, getClaudeProjectsDir, removeArchivedTranscript } from '@/archive/store';
 import { resolveSession, SessionLookupError } from '@/archive/resolve';
@@ -448,7 +448,9 @@ export function cmdList(options: {
       const chunks = String(s.chunkCount ?? 0);
       const msg = (s.firstMessage ?? '').slice(0, 40);
       console.log(
-        `${id.padEnd(10)} ${proj.padEnd(30)} ${date.padEnd(12)} ${chunks.padEnd(8)} ${msg}`
+        stripControlChars(
+          `${id.padEnd(10)} ${proj.padEnd(30)} ${date.padEnd(12)} ${chunks.padEnd(8)} ${msg}`
+        )
       );
     }
 
@@ -543,7 +545,7 @@ export function cmdExport(options: {
         if (s.firstMessage) lines.push(`- First: ${s.firstMessage}`);
         lines.push('');
       }
-      const output = lines.join('\n');
+      const output = stripControlChars(lines.join('\n'));
       console.log(output);
       return output;
     }

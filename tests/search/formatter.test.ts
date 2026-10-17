@@ -180,6 +180,12 @@ describe('formatResults control characters', () => {
     );
   });
 
+  it('drops C1 controls', () => {
+    const out = formatResults([result('a\u0080b\u009bc\u009fd\u00a0e')]);
+
+    expect(out).toContain('abcd\u00a0e');
+  });
+
   it('cleans the project name in the header too', () => {
     expect(formatResults([result('x', '/p/pro\u001bj')])).toContain('from=proj ');
   });

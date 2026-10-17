@@ -7,7 +7,7 @@ import { readHeader } from '@/archive/resolve';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
 import { Store } from '@/db/store';
-import { parseTranscript } from '@/parser/transcript';
+import { parseTranscript, conversationTime } from '@/parser/transcript';
 import { buildChunks } from '@/parser/chunker';
 import { JsonlWriter } from '@/jsonl/writer';
 import { chunksToJsonlRecords } from '@/jsonl/converter';
@@ -170,14 +170,14 @@ export async function recoverTranscripts(
           }
 
           // 保持期間より古い会話は、入れても次の整理で消えてまた入る。生ログは保管側の検索で読める
-          if (isAgedOut(config, messages[messages.length - 1].timestamp ?? mtime.toISOString())) {
+          if (isAgedOut(config, conversationTime(messages[messages.length - 1].timestamp, mtime))) {
             result.skipped++;
             continue;
           }
           const projectPath = await resolveProjectPath(config, transcriptPath, dirent.name);
           const chunks = buildChunks(messages, sessionId, projectPath);
           // 時刻の無いターンに取り込み時刻を刻むと、古い会話が最新として並ぶ。生ログの更新時刻を使う
-          for (const c of chunks) c.createdAt ??= mtime.toISOString();
+          for (const c of chunks) c.createdAt ??= conversationTime(undefined, mtime);
           // rebuild で全チャンクを消したセッションは行ごと無くなる。取り込み直すと削除した本文が戻る。
           if (
             chunks.length === 0 ||
@@ -197,8 +197,8 @@ export async function recoverTranscripts(
           store.insertSession({
             sessionId,
             projectPath,
-            startedAt: messages[0].timestamp,
-            endedAt: messages[messages.length - 1].timestamp,
+            startedAt: conversationTime(messages[0].timestamp, mtime),
+            endedAt: conversationTime(messages[messages.length - 1].timestamp, mtime),
             chunkCount: chunks.length,
             firstMessage: firstHuman?.kind === 'user' ? firstHuman.text.slice(0, 200) : undefined,
             lastMessage: lastHuman?.kind === 'user' ? lastHuman.text.slice(0, 200) : undefined,
