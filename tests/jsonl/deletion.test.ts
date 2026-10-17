@@ -12,7 +12,12 @@ import { serializeV2Transaction, isJsonlV2Payload } from '@/jsonl/transaction';
 import { selfHealFromJsonl } from '@/jsonl/self_heal';
 import { readTailRecords, readTailDeletions } from '@/jsonl/reader';
 import { createHash } from 'node:crypto';
-import { appendSessionDeletion, appendChunkDeletion, scanSessions } from '@/jsonl/deletion';
+import {
+  appendSessionDeletion,
+  appendChunkDeletion,
+  appendChunkDeletions,
+  scanSessions,
+} from '@/jsonl/deletion';
 import type { JsonlChunkRecord } from '@/jsonl/types';
 import type { TurnCheckpointV2 } from '@/checkpoint/types';
 
@@ -169,6 +174,27 @@ describe('appendChunkDeletion', () => {
     expect(turns[0].parts.map((p) => p.externalId)).toEqual(['p2']);
   });
 
+  it('writes several deletions as one transaction', async () => {
+    const dir = makeTmpDir();
+    new JsonlWriter(dir).appendRecords([record('a1', 's1', 0), record('a2', 's1', 1)]);
+    writeTurn(dir, 's1', 'tk-1', ['p1']);
+
+    appendChunkDeletions(dir, [
+      { sessionId: 's1', externalId: 'a1' },
+      { sessionId: 's1', externalId: 'p1' },
+    ]);
+
+    const history = await fold(dir);
+    expect(history.legacyChunks.map((c) => c.id)).toEqual(['a2']);
+    expect([...history.turns.values()]).toEqual([]);
+    const begins = fs
+      .readFileSync(listJsonlFiles(dir).at(-1)!, 'utf-8')
+      .split('\n')
+      .filter((l) => l.includes('"chunk_delete"'));
+    expect(new Set(begins.map((l) => (JSON.parse(l) as { txId: string }).txId)).size).toBe(1);
+    expect(begins).toHaveLength(2);
+  });
+
   it('is safe to record the same deletion twice', async () => {
     const dir = makeTmpDir();
     new JsonlWriter(dir).appendRecords([record('a1', 's1'), record('a2', 's1', 1)]);
@@ -299,7 +325,7 @@ describe('scanSessions', () => {
     }).allLines;
   }
 
-  it('collects sessions with a hand deletion and sessions whose v1 or v2 body holds the text', async () => {
+  it('collects deleted chunk ids with their sessions and sessions whose v1 or v2 body holds the text', async () => {
     const dir = makeTmpDir();
     const lines = [
       '{not json',
@@ -313,7 +339,8 @@ describe('scanSessions', () => {
 
     const found = await scanSessions(dir, 'NEEDLE');
 
-    expect([...found.handDeleted]).toEqual(['hand']);
+    expect([...found.deletedIds]).toEqual(['ext-x']);
+    expect([...found.deletedSessions]).toEqual(['hand']);
     expect([...found.containing].sort()).toEqual(['v1-hit', 'v2-hit']);
   });
 });

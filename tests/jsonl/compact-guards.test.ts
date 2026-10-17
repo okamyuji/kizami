@@ -131,4 +131,33 @@ describe('compactSessions guards', () => {
     expect(await compactSessions(dir, new Set(['S']))).toBe('retry');
     expect(text(dir)).toContain('old-secret');
   });
+
+  it('returns retry when the file was rewritten in place to the same size before the swap', async () => {
+    const dir = seed();
+    between.run = (history) => {
+      const file = listJsonlFiles(dir)[0];
+      fs.writeFileSync(file, fs.readFileSync(file));
+      const later = new Date(Date.now() + 60_000);
+      fs.utimesSync(file, later, later);
+      return history;
+    };
+
+    expect(await compactSessions(dir, new Set(['S']))).toBe('retry');
+    expect(text(dir)).toContain('old-secret');
+  });
+
+  it('refuses a month file that is a symlink and leaves its target as it is', async () => {
+    const dir = seed();
+    const file = listJsonlFiles(dir)[0];
+    const target = path.join(path.dirname(dir), `${path.basename(dir)}-target.jsonl`);
+    fs.renameSync(file, target);
+    fs.symlinkSync(target, file);
+    try {
+      await expect(compactSessions(dir, new Set(['S']))).rejects.toThrow(/symlink/);
+      expect(fs.readFileSync(target, 'utf-8')).toContain('old-secret');
+      expect(fs.lstatSync(file).isSymbolicLink()).toBe(true);
+    } finally {
+      fs.rmSync(target, { force: true });
+    }
+  });
 });

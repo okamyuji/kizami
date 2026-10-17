@@ -9,6 +9,8 @@ import { appendChunkDeletion } from '@/jsonl/deletion';
 export interface Deletions {
   sessions: Set<string>;
   chunkDigests: Set<string>;
+  /** 手でチャンクを消したセッション。生ログから作り直すと、消した本文が別の形で戻る。 */
+  chunkSessions: Set<string>;
 }
 
 const DELETED_MARK = '[deleted]';
@@ -27,8 +29,10 @@ function strings(value: unknown): string[] {
 }
 
 export function loadDeletions(file: string): Deletions {
-  if (!fs.existsSync(file)) return { sessions: new Set(), chunkDigests: new Set() };
-  let raw: { sessions?: unknown; chunkDigests?: unknown };
+  if (!fs.existsSync(file)) {
+    return { sessions: new Set(), chunkDigests: new Set(), chunkSessions: new Set() };
+  }
+  let raw: { sessions?: unknown; chunkDigests?: unknown; chunkSessions?: unknown };
   try {
     raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as typeof raw;
   } catch (err) {
@@ -37,12 +41,17 @@ export function loadDeletions(file: string): Deletions {
   return {
     sessions: new Set(strings(raw.sessions)),
     chunkDigests: new Set(strings(raw.chunkDigests)),
+    chunkSessions: new Set(strings(raw.chunkSessions)),
   };
 }
 
 function save(file: string, d: Deletions): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const body = { sessions: [...d.sessions], chunkDigests: [...d.chunkDigests] };
+  const body = {
+    sessions: [...d.sessions],
+    chunkDigests: [...d.chunkDigests],
+    chunkSessions: [...d.chunkSessions],
+  };
   // 途中で切れたファイルは loadDeletions が拒むので、書き終えてから置き換える。
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(body, null, 2), { mode: 0o600 });
@@ -55,9 +64,18 @@ export function recordSessionDeletion(file: string, sessionId: string): void {
   save(file, d);
 }
 
-export function recordChunkDeletion(file: string, content: string): void {
+export function recordChunkDeletion(file: string, content: string, sessionId?: string): void {
   const d = loadDeletions(file);
   d.chunkDigests.add(contentDigest(content));
+  if (sessionId !== undefined) d.chunkSessions.add(sessionId);
+  save(file, d);
+}
+
+/** 正本に chunk_delete を持つセッションを書き足す。記録を持たない版で消したものを拾うため。 */
+export function recordChunkSessions(file: string, sessionIds: Set<string>): void {
+  const d = loadDeletions(file);
+  if ([...sessionIds].every((id) => d.chunkSessions.has(id))) return;
+  for (const id of sessionIds) d.chunkSessions.add(id);
   save(file, d);
 }
 
@@ -74,7 +92,7 @@ export function deleteChunkEverywhere(
     appendChunkDeletion(config.storage.jsonlDir, chunk.sessionId, chunk.externalId);
   }
   store.deleteChunk(chunk.id);
-  recordChunkDeletion(deletionsFile(config.database.path), chunk.content);
+  recordChunkDeletion(deletionsFile(config.database.path), chunk.content, chunk.sessionId);
   return chunk.externalId !== undefined;
 }
 

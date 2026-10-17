@@ -33,15 +33,19 @@ const line = (value: unknown) => JSON.stringify(value);
 // asBefore は 0.8.5 以前の読み方を再現する。blob 行を発言の行として書く
 function writeTranscript(file: string, project: string, asBefore = false): void {
   const base = { sessionId: 'blob-session', cwd: project, timestamp: new Date().toISOString() };
-  const blob = (role: 'user' | 'assistant', content: unknown) =>
+  const blob = (role: 'user' | 'system', content: unknown) =>
     line({ ...base, type: asBefore ? role : 'api-request-blob', message: { role, content } });
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(
     file,
     [
       line({ ...base, type: 'user', message: { role: 'user', content: 'retrypolicyquestion' } }),
-      blob('user', '<system-reminder>requestcopymarker</system-reminder>'),
-      blob('assistant', [{ type: 'text', text: 'requestcopymarker' }]),
+      // 実データの写しは、system-reminder のブロックの後ろに本物のプロンプトを続ける
+      blob('user', [
+        { type: 'text', text: '<system-reminder>requestcopymarker</system-reminder>' },
+        { type: 'text', text: 'retrypolicyquestion' },
+      ]),
+      blob('system', [{ type: 'text', text: 'requestcopymarker' }]),
       line({
         ...base,
         type: 'assistant',

@@ -57,6 +57,10 @@ export default defineConfig({
       'tests/hooks/setup.test.ts',
       'tests/import/claude-mem.test.ts',
       'tests/storage/lines.test.ts',
+      'tests/hooks/request-copies.test.ts',
+      'tests/hooks/request-copies-scan.test.ts',
+      'tests/connection.test.ts',
+      'tests/storage/permissions-chmod.test.ts',
     ],
   },
 });

@@ -6,6 +6,7 @@ import { serializeV2Transaction } from './transaction';
 import { foldCanonicalHistory } from './fold';
 import type { CanonicalHistory } from './fold';
 import { JsonlTransactionWriter } from './writer';
+import { assertPrivateFileTarget } from '@/storage/permissions';
 import type { CommittedTransaction, JsonlV2Payload } from './types';
 
 export type CompactOutcome = 'compacted' | 'unchanged' | 'retry';
@@ -29,10 +30,13 @@ interface Edit {
 
 interface FilePlan {
   file: string;
-  identity: string;
-  size: number;
+  /** 解析した時のファイル。同じサイズへの書き戻しも見分けるため、時刻も持つ。 */
+  snapshot: string;
   edits: Edit[];
 }
+
+const snapshotOf = (stat: fs.Stats) =>
+  JSON.stringify([stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs]);
 
 const turnId = (p: Checkpoint) => JSON.stringify([p.sessionId, p.turnKey, p.historyEpoch]);
 
@@ -132,7 +136,7 @@ async function planFile(
   }
   if (edits.length === 0) return undefined;
   edits.sort((a, b) => a.begin - b.begin);
-  return { file, identity: `${stat.dev}:${stat.ino}`, size: stat.size, edits };
+  return { file, snapshot: snapshotOf(stat), edits };
 }
 
 function writeCompacted(plan: FilePlan): string {
@@ -180,8 +184,7 @@ function fsyncDir(dir: string): void {
 /** 解析した時から元ファイルが変わっていなければ差し替える。ロックの中で呼ぶ。 */
 function replaceUnchanged(jsonlDir: string, plans: FilePlan[], tmps: string[]): boolean {
   for (const plan of plans) {
-    const stat = fs.lstatSync(plan.file);
-    if (`${stat.dev}:${stat.ino}` !== plan.identity || stat.size !== plan.size) return false;
+    if (snapshotOf(fs.lstatSync(plan.file)) !== plan.snapshot) return false;
   }
   plans.forEach((plan, i) => fs.renameSync(tmps[i], plan.file));
   fsyncDir(jsonlDir);
@@ -190,13 +193,15 @@ function replaceUnchanged(jsonlDir: string, plans: FilePlan[], tmps: string[]): 
 
 function swap(jsonlDir: string, plans: FilePlan[], tmps: string[]): boolean {
   const writer = new JsonlTransactionWriter(jsonlDir);
+  let swapped: boolean;
   // Stryker disable BlockStatement: 閉じ忘れは接続が残るだけで、短命なプロセスの結果は変わらない
   try {
-    return writer.withExclusiveTransaction(() => replaceUnchanged(jsonlDir, plans, tmps));
+    swapped = writer.withExclusiveTransaction(() => replaceUnchanged(jsonlDir, plans, tmps));
   } finally {
     writer.close();
   }
   // Stryker restore BlockStatement
+  return swapped;
 }
 
 /**
@@ -210,6 +215,8 @@ export async function compactSessions(
   targets: Set<string>
 ): Promise<CompactOutcome> {
   const files = listJsonlFiles(jsonlDir);
+  // リンクを差し替えるとリンク先に本文が残るので、リンクの月ファイルは扱わない
+  for (const file of files) assertPrivateFileTarget(file);
   const before = await foldCanonicalHistory(files);
   if (before.errors.length > 0) {
     const reasons = before.errors.map((e) => e.message).join('; ');

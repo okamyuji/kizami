@@ -161,37 +161,21 @@ export class Store {
     return row.t ?? undefined;
   }
 
-  hasChunkContaining(sessionId: string, text: string): boolean {
-    const row = this.db
-      .prepare('SELECT 1 FROM chunks WHERE session_id = ? AND instr(content, ?) > 0 LIMIT 1')
-      .get(sessionId, text);
-    return row !== undefined;
+  deleteChunksByExternalIds(externalIds: string[]): void {
+    const placeholders = externalIds.map(() => '?').join(',');
+    this.db
+      .prepare(`DELETE FROM chunks WHERE external_id IN (${placeholders})`)
+      .run(...externalIds);
   }
 
-  sessionsWithChunkContaining(text: string): string[] {
-    // LIKE は本文の % と _ を特別扱いするので、文字列のまま探す instr を使う
+  getTurnChunkRefs(
+    sessionId: string,
+    turnKey: string
+  ): Array<{ id: number; externalId: string | null }> {
     const rows = this.db
-      .prepare('SELECT DISTINCT session_id FROM chunks WHERE instr(content, ?) > 0')
-      .all(text) as Array<{ session_id: string }>;
-    return rows.map((row) => row.session_id);
-  }
-
-  /** text を含むチャンクと、同じターンの残りのチャンク。長いターンは分けて保存され、後ろの部品は text を含まない。 */
-  getChunksOfTurnsContaining(sessionId: string, text: string): Array<Chunk & { id: number }> {
-    const rows = this.db
-      .prepare(
-        `
-      SELECT id, external_id, session_id, project_path, chunk_index, content, role, metadata, created_at, token_count
-      FROM chunks
-      WHERE session_id = ? AND (
-        instr(content, ?) > 0
-        OR turn_key IN (SELECT turn_key FROM chunks WHERE session_id = ? AND instr(content, ?) > 0)
-      )
-      ORDER BY id
-    `
-      )
-      .all(sessionId, text, sessionId, text) as Record<string, unknown>[];
-    return rows.map((row) => this.rowToChunk(row) as Chunk & { id: number });
+      .prepare('SELECT id, external_id FROM chunks WHERE session_id = ? AND turn_key = ?')
+      .all(sessionId, turnKey) as Array<{ id: number; external_id: string | null }>;
+    return rows.map((row) => ({ id: row.id, externalId: row.external_id }));
   }
 
   getSessionTurnKeys(sessionId: string): string[] {

@@ -6,6 +6,7 @@ import {
   loadDeletions,
   recordSessionDeletion,
   recordChunkDeletion,
+  recordChunkSessions,
   contentDigest,
   redactTurnText,
   deleteChunkEverywhere,
@@ -31,6 +32,7 @@ describe('deletions', () => {
     const d = loadDeletions(file);
     expect([...d.sessions]).toEqual([]);
     expect([...d.chunkDigests]).toEqual([]);
+    expect([...d.chunkSessions]).toEqual([]);
   });
 
   it('records deleted sessions once each and creates the parent directory', () => {
@@ -51,6 +53,24 @@ describe('deletions', () => {
     recordChunkDeletion(file, 'secret token ABC');
     expect([...loadDeletions(file).chunkDigests]).toEqual([contentDigest('secret token ABC')]);
     expect(fs.readFileSync(file, 'utf-8')).not.toContain('secret token ABC');
+  });
+
+  it('records the session of a deleted chunk when it is given', () => {
+    recordChunkDeletion(file, 'x', 'dddd0004');
+    recordChunkDeletion(file, 'y');
+    expect([...loadDeletions(file).chunkSessions]).toEqual(['dddd0004']);
+    expect(JSON.parse(fs.readFileSync(file, 'utf-8')).chunkSessions).toEqual(['dddd0004']);
+  });
+
+  it('adds sessions with deleted chunks and rewrites the file only when one is new', () => {
+    recordChunkSessions(file, new Set(['eeee0005']));
+    const before = fs.statSync(file).mtimeMs;
+    fs.utimesSync(file, new Date(0), new Date(0));
+    recordChunkSessions(file, new Set(['eeee0005']));
+    expect(fs.statSync(file).mtimeMs).toBe(0);
+    recordChunkSessions(file, new Set(['eeee0005', 'ffff0006']));
+    expect([...loadDeletions(file).chunkSessions]).toEqual(['eeee0005', 'ffff0006']);
+    expect(before).toBeGreaterThan(0);
   });
 
   it('keeps sessions and chunks independent in one file', () => {
@@ -141,7 +161,7 @@ describe('deleteChunkEverywhere', () => {
         tokenCount: 1,
       },
     ]);
-    const [chunk] = store.getChunksOfTurnsContaining('s1', 'body');
+    const chunk = { ...store.getChunk(1)!, id: 1 };
     return { config, db, store, chunk };
   }
   const jsonl = (dir: string) =>

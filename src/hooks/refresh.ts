@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { EngramConfig } from '@/config';
-import type { Session, Store } from '@/db/store';
+import type { Chunk, Session, Store } from '@/db/store';
 import { parseTranscript, conversationTime } from '@/parser/transcript';
 import type { TranscriptMessage } from '@/parser/transcript';
 import { isAgedOut } from '@/maintenance/auto';
@@ -60,13 +60,25 @@ export function markRepairDone(config: EngramConfig): void {
 
 export type RefreshOutcome = 'refreshed' | 'unchanged' | 'skipped';
 
-export interface RefreshContext {
+interface RefreshContext {
   config: EngramConfig;
   store: Store;
   sessionId: string;
   transcriptPath: string;
   marks: RecoverMarks;
   deletedChunkDigests: Set<string>;
+  deletedChunkSessions: Set<string>;
+}
+
+/**
+ * 手で消したチャンクが戻るか。本文の照合だけでは足りない。写しを読んだ版で消したチャンクは、
+ * 今の版で読み直すと本文が変わり、照合を素通りするため、セッションでも判定する。
+ */
+function removedByHand(ctx: RefreshContext, chunks: Chunk[]): boolean {
+  return (
+    ctx.deletedChunkSessions.has(ctx.sessionId) ||
+    chunks.some((c) => ctx.deletedChunkDigests.has(contentDigest(c.content)))
+  );
 }
 
 async function commit(
@@ -107,36 +119,23 @@ function needsRepair(store: Store, session: Session, projectPath: string): boole
  * 古い実装は projectPath をディレクトリ名から誤って復号し、チャンクに取り込み時刻を刻んだ。
  * そのセッションを、生ログから作り直した全ターンで置き換える。判定が外れれば何もしない。
  * v1 の行だけのセッションに限る。hook は同じ offset 鍵を付けるため、鍵を持つセッションは hook の管理下にあり触らない。
+ * 置き換えは legacy_mismatch の reset として JSONL に残るので、rebuild しても直した値が残る。
  */
 export async function repairIfMisdated(ctx: RefreshContext, projectPath: string): Promise<boolean> {
-  const { config, store, sessionId } = ctx;
+  const { config, store, sessionId, transcriptPath, marks } = ctx;
   const session = store.getSession(sessionId);
   if (!session || store.getSessionTurnKeys(sessionId).length > 0) return false;
   if (!needsRepair(store, session, projectPath)) return false;
+  const { size, mtime } = fs.statSync(transcriptPath);
   // 保持期間より古い会話は、直しても整理で消える。取り込み時刻の行は保持期間の後に消え、入れ直されない
   if (isAgedOut(config, session.endedAt)) return false;
-  if (hasPendingPrompt(ctx)) return false;
-  return replaceFromTranscript(ctx, projectPath);
-}
+  if (readPendingPrompts(path.dirname(config.database.path), 'claude', sessionId).length > 0) {
+    return false;
+  }
 
-function hasPendingPrompt(ctx: RefreshContext): boolean {
-  const stateRoot = path.dirname(ctx.config.database.path);
-  return readPendingPrompts(stateRoot, 'claude', ctx.sessionId).length > 0;
-}
-
-/**
- * セッションを、生ログから作り直した全ターンで置き換える。削除したチャンクを戻す場合と、応答のあるターンが無い場合は何もしない。
- * 置き換えは legacy_mismatch の reset として JSONL に残るので、rebuild しても直した値が残る。
- */
-export async function replaceFromTranscript(
-  ctx: RefreshContext,
-  projectPath: string
-): Promise<boolean> {
-  const { config, sessionId, transcriptPath, marks } = ctx;
-  const { size, mtime } = fs.statSync(transcriptPath);
   const messages = await parseTranscript(transcriptPath);
   const chunks = buildChunks(messages, sessionId, projectPath);
-  if (chunks.some((c) => ctx.deletedChunkDigests.has(contentDigest(c.content)))) return false;
+  if (removedByHand(ctx, chunks)) return false;
   const candidates = buildClaudeTurnCandidates(
     messages,
     sessionId,
@@ -160,10 +159,11 @@ export async function replaceFromTranscript(
  * 削除したチャンクを含むセッションも触らない。置き換えると新しい ID で本文が戻るため。
  */
 export async function refreshIfGrown(ctx: RefreshContext): Promise<RefreshOutcome> {
-  const { store, sessionId, transcriptPath, marks } = ctx;
+  const { config, store, sessionId, transcriptPath, marks } = ctx;
   const { size, mtime } = fs.statSync(transcriptPath);
   if (marks.get(sessionId) === size) return 'unchanged';
-  if (hasPendingPrompt(ctx)) return 'skipped';
+  const stateRoot = path.dirname(config.database.path);
+  if (readPendingPrompts(stateRoot, 'claude', sessionId).length > 0) return 'skipped';
   const session = store.getSession(sessionId);
   if (!session) return 'skipped';
 
@@ -171,7 +171,7 @@ export async function refreshIfGrown(ctx: RefreshContext): Promise<RefreshOutcom
   const chunks = buildChunks(messages, sessionId, session.projectPath);
   // 解析した時点のサイズを残し、変わらない生ログを次の検索で解析し直さない。
   marks.set(sessionId, size);
-  if (chunks.some((c) => ctx.deletedChunkDigests.has(contentDigest(c.content)))) return 'skipped';
+  if (removedByHand(ctx, chunks)) return 'skipped';
   const candidates = buildClaudeTurnCandidates(
     messages,
     sessionId,
