@@ -7,3 +7,4 @@ dist/
 docs/_quality/
 docs/analysis/
 .stryker-tmp/
+reports/
