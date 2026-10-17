@@ -145,9 +145,9 @@ export function archiveHookTranscript(
 ): void {
   if (runtime !== 'claude') return;
   try {
-    const { transcript_path: file } = JSON.parse(raw) as { transcript_path: string };
-    // 欠けた値・文字列でない値・無いパスのどれにも fs.existsSync は false を返す。
-    if (!fs.existsSync(file)) return;
+    const { transcript_path: file } = JSON.parse(raw) as { transcript_path?: unknown };
+    // 文字列でない値を fs.existsSync に渡すのは非推奨（DEP0187）で、将来は例外になる
+    if (typeof file !== 'string' || !fs.existsSync(file)) return;
     archiveTranscript(file, loadConfig(configPath).storage.transcriptArchiveDir);
   } catch (err) {
     process.stderr.write(`kizami archive error (skipped): ${String(err)}\n`);
