@@ -40,12 +40,12 @@ import type { RecoverResult } from '@/hooks/recover';
 import { backfillEmbeddings } from '@/hooks/embed';
 import type { BackfillResult } from '@/hooks/embed';
 import { VERSION } from '@/version';
-import { appendSessionDeletion, appendChunkDeletion } from '@/jsonl/deletion';
+import { appendSessionDeletion } from '@/jsonl/deletion';
 import {
   loadDeletions,
   deletionsFile,
   recordSessionDeletion,
-  recordChunkDeletion,
+  deleteChunkEverywhere,
 } from '@/archive/deletions';
 import { recoverPreparedCheckpoints } from '@/checkpoint/coordinator';
 
@@ -403,15 +403,11 @@ export function cmdDelete(options: {
         return;
       }
       const chunk = store.getChunk(id);
-      if (chunk?.externalId) {
-        appendChunkDeletion(config.storage.jsonlDir, chunk.sessionId, chunk.externalId);
-      } else if (chunk) {
+      if (chunk && !deleteChunkEverywhere(store, config, { ...chunk, id })) {
         console.error(
           `Chunk ${id} has no external id, so its deletion is not recorded in the JSONL store. Run kizami migrate-to-jsonl to assign ids.`
         );
       }
-      store.deleteChunk(id);
-      if (chunk) recordChunkDeletion(deletionsFile(config.database.path), chunk.content);
       console.log(`Chunk ${id} deleted.`);
     } else {
       console.log('Usage: kizami delete --session <id> | --before <date> | --chunk <id>');

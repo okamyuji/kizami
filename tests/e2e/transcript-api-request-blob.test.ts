@@ -78,6 +78,13 @@ function expectOnlyConversation(root: string): void {
   expect(conversation.stdout).toContain('retrypolicyanswer');
   expect(conversation.stdout).not.toContain('system-reminder');
   expect(runCli(root, ['search', 'requestcopymarker']).stdout).not.toContain('requestcopymarker');
+  const jsonl = fs
+    .readdirSync(path.join(root, 'jsonl'))
+    .filter((f) => f.endsWith('.jsonl'))
+    .map((f) => fs.readFileSync(path.join(root, 'jsonl', f), 'utf-8'))
+    .join('');
+  expect(jsonl).toContain('retrypolicyanswer');
+  expect(jsonl).not.toContain('requestcopymarker');
 }
 
 describe('built CLI with a Claude Code transcript that holds api-request-blob lines', () => {

@@ -12,7 +12,7 @@ import { serializeV2Transaction, isJsonlV2Payload } from '@/jsonl/transaction';
 import { selfHealFromJsonl } from '@/jsonl/self_heal';
 import { readTailRecords, readTailDeletions } from '@/jsonl/reader';
 import { createHash } from 'node:crypto';
-import { appendSessionDeletion, appendChunkDeletion } from '@/jsonl/deletion';
+import { appendSessionDeletion, appendChunkDeletion, scanSessions } from '@/jsonl/deletion';
 import type { JsonlChunkRecord } from '@/jsonl/types';
 import type { TurnCheckpointV2 } from '@/checkpoint/types';
 
@@ -261,5 +261,59 @@ describe('deletion writer lifecycle', () => {
     } finally {
       close.mockRestore();
     }
+  });
+});
+
+describe('scanSessions', () => {
+  function part(content: string) {
+    return {
+      partIndex: 0,
+      externalId: `ext-${content}`,
+      content,
+      role: 'mixed' as const,
+      metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+      tokenCount: 1,
+    };
+  }
+  function checkpointTx(sessionId: string, contents: string[]): string[] {
+    const payload = {
+      v: 2 as const,
+      type: 'turn_checkpoint' as const,
+      txId: '',
+      sessionId,
+      runtime: 'claude' as const,
+      turnKey: 't',
+      sourceOrder: '1',
+      observedThrough: { kind: 'source_offset' as const, generation: 0, offset: 1 },
+      historyEpoch: 0,
+      revision: 1,
+      contentHash: 'h',
+      completedAt: '2026-10-17T00:00:00Z',
+      projectPath: '/p',
+      parts: contents.map((c, i) => ({ ...part(c), partIndex: i })),
+    };
+    return serializeV2Transaction([payload], {
+      txId: `tx-${sessionId}`,
+      createdAt: '2026-10-17T00:00:00Z',
+      targetPath: 'x',
+    }).allLines;
+  }
+
+  it('collects sessions with a hand deletion and sessions whose v1 or v2 body holds the text', async () => {
+    const dir = makeTmpDir();
+    const lines = [
+      '{not json',
+      JSON.stringify({ ...record('a', 'v1-hit'), content: 'has NEEDLE inside' }),
+      JSON.stringify(record('b', 'v1-miss')),
+      ...checkpointTx('v2-hit', ['plain', 'NEEDLE here']),
+      ...checkpointTx('v2-miss', ['plain', 'other']),
+    ];
+    fs.writeFileSync(path.join(dir, '2026-10-host.jsonl'), lines.join('\n') + '\n');
+    appendChunkDeletion(dir, 'hand', 'ext-x');
+
+    const found = await scanSessions(dir, 'NEEDLE');
+
+    expect([...found.handDeleted]).toEqual(['hand']);
+    expect([...found.containing].sort()).toEqual(['v1-hit', 'v2-hit']);
   });
 });

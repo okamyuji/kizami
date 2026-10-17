@@ -152,16 +152,30 @@ export class JsonlWriter {
     const filePath = getJsonlFilePath(this.jsonlDir, now);
     const lines = records.map((r) => JSON.stringify(r)).join('\n') + '\n';
 
-    const fd = openPrivateFileForAppend(filePath);
+    // 正本を差し替える圧縮と、ほかの書き手の追記がぶつからないよう、同じロックの中で書く
+    const txWriter = new JsonlTransactionWriter(this.jsonlDir);
+    // Stryker disable BlockStatement: 閉じ忘れは接続が残るだけで、短命なプロセスの書いた内容は変わらない
     try {
-      writeAllSync(fd, lines);
-      fs.fsyncSync(fd);
+      txWriter.withExclusiveTransaction(() => appendToFile(filePath, lines));
     } finally {
-      fs.closeSync(fd);
+      txWriter.close();
     }
+    // Stryker restore BlockStatement
     enforcePrivateFile(filePath);
     return filePath;
   }
+}
+
+function appendToFile(filePath: string, lines: string): void {
+  const fd = openPrivateFileForAppend(filePath);
+  // Stryker disable BlockStatement: 閉じ忘れは fd が残るだけで、短命なプロセスの書いた内容は変わらない
+  try {
+    writeAllSync(fd, lines);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  // Stryker restore BlockStatement
 }
 
 // --- v2 Transaction Writer ---
@@ -329,7 +343,8 @@ export class JsonlTransactionWriter {
 
   withExclusiveTransaction<T>(operation: (writer: LockedJsonlWriter) => T): T {
     const impl = new LockedJsonlWriterImpl(this.lockDb, this.jsonlDir);
-    return this.lockDb.transaction(() => operation(impl))();
+    // 既定の deferred は最初の書き込みまでロックを取らず、追記が先に走る。BEGIN IMMEDIATE で入口から排他にする
+    return this.lockDb.transaction(() => operation(impl)).immediate();
   }
 
   close(): void {

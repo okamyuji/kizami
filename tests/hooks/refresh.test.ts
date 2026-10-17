@@ -11,7 +11,6 @@ import {
   loadRecoverMarks,
   saveRecoverMarks,
   refreshIfGrown,
-  repairIfRequestCopies,
   isRepairDone,
   markRepairDone,
 } from '../../src/hooks/refresh';
@@ -286,85 +285,6 @@ describe('refreshIfGrown outcomes', () => {
         tokenCount: 1,
       },
     ]);
-    expect(await run()).toBe('skipped');
-  });
-});
-
-describe('repairIfRequestCopies outcomes', () => {
-  let tmp: string;
-  let config: EngramConfig;
-  let store: Store;
-  let close: () => void;
-  let transcript: string;
-  const line = (o: object) => JSON.stringify(o) + '\n';
-  const blob = line({ type: 'api-request-blob', message: { role: 'user', content: 'copy' } });
-  const answer = line({
-    type: 'assistant',
-    message: { role: 'assistant', content: [{ type: 'text', text: 'a' }] },
-  });
-
-  beforeEach(() => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-copies-unit-'));
-    const d = getDefaultConfig();
-    config = {
-      ...d,
-      database: { path: path.join(tmp, 'memory.db') },
-      storage: { ...d.storage, jsonlDir: path.join(tmp, 'jsonl') },
-    };
-    const db = getDatabase(config.database.path);
-    initializeSchema(db);
-    store = new Store(db);
-    close = () => db.close();
-    transcript = path.join(tmp, 's1.jsonl');
-  });
-  afterEach(() => {
-    close();
-    fs.rmSync(tmp, { recursive: true, force: true });
-  });
-
-  const savedChunk = (content: string) =>
-    store.insertChunks([
-      {
-        sessionId: 's1',
-        projectPath: '/p',
-        chunkIndex: 0,
-        content,
-        role: 'mixed',
-        metadata: { filePaths: [], toolNames: [], errorMessages: [] },
-        tokenCount: 1,
-      },
-    ]);
-  const run = () =>
-    repairIfRequestCopies(
-      {
-        config,
-        store,
-        sessionId: 's1',
-        transcriptPath: transcript,
-        marks: new Map(),
-        deletedChunkDigests: new Set(),
-      },
-      '/p'
-    );
-
-  it('returns skipped when no saved chunk holds a system-reminder', async () => {
-    savedChunk('[User]\nq');
-    fs.writeFileSync(transcript, blob + answer);
-    expect(await run()).toBe('skipped');
-  });
-
-  it('returns skipped when the transcript holds no api-request-blob line', async () => {
-    savedChunk('[User]\n<system-reminder>x</system-reminder>');
-    fs.writeFileSync(
-      transcript,
-      line({ type: 'user', message: { role: 'user', content: 'q' } }) + answer
-    );
-    expect(await run()).toBe('skipped');
-  });
-
-  it('returns skipped when no answered turn is left once the copies are dropped', async () => {
-    savedChunk('[User]\n<system-reminder>x</system-reminder>');
-    fs.writeFileSync(transcript, blob + answer);
     expect(await run()).toBe('skipped');
   });
 });

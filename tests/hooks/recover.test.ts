@@ -11,7 +11,11 @@ import {
   recordSessionDeletion,
   recordChunkDeletion,
   deletionsFile,
+  deleteChunkEverywhere,
 } from '../../src/archive/deletions';
+import { loadConfig, getDefaultConfig } from '../../src/config';
+import { replaceFromTranscript } from '../../src/hooks/refresh';
+import { repairRequestCopies } from '../../src/hooks/request-copies';
 import { writePendingPrompt } from '../../src/checkpoint/state';
 import { foldCanonicalHistory } from '../../src/jsonl/fold';
 import { listJsonlFiles } from '../../src/jsonl/path';
@@ -121,9 +125,8 @@ describe('recoverTranscripts', () => {
     expect(queryRows<{ created_at: string }>('SELECT created_at FROM chunks')).toEqual([
       { created_at: '2026-10-05T06:44:12.345Z' },
     ]);
-    const records = fs
-      .readdirSync(jsonlDir)
-      .flatMap((f) => fs.readFileSync(path.join(jsonlDir, f), 'utf-8').trim().split('\n'))
+    const records = listJsonlFiles(jsonlDir)
+      .flatMap((f) => fs.readFileSync(f, 'utf-8').trim().split('\n'))
       .map((l) => JSON.parse(l) as { createdAt: string });
     expect(records.map((r) => r.createdAt)).toEqual(['2026-10-05T06:44:12.345Z']);
   });
@@ -1348,6 +1351,7 @@ describe('recoverTranscripts repairs sessions that saved api-request-blob lines 
   let tmpDir: string;
   let dbPath: string;
   let jsonlDir: string;
+  let archiveDir: string;
   let configPath: string;
   let projectsDir: string;
   let cwd: string;
@@ -1369,40 +1373,50 @@ describe('recoverTranscripts repairs sessions that saved api-request-blob lines 
       message:
         role === 'user' ? { role, content: text } : { role, content: [{ type: 'text', text }] },
     });
+  const write = (target: string, lines: Line[], asBefore = false) => {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, lines.map((l) => entry(l, asBefore)).join('\n') + '\n');
+  };
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-blobfix-'));
     dbPath = path.join(tmpDir, 'test.db');
     jsonlDir = path.join(tmpDir, 'jsonl');
+    archiveDir = path.join(tmpDir, 'archive');
+    // vitest の設定は保管先を共有の一時フォルダへ向けるので、このテストのフォルダに向け直す
+    vi.stubEnv('KIZAMI_TRANSCRIPT_ARCHIVE_DIR', archiveDir);
     configPath = path.join(tmpDir, 'config.json');
     fs.writeFileSync(
       configPath,
       JSON.stringify({
         database: { path: dbPath },
-        storage: { jsonlDir, transcriptArchiveDir: path.join(tmpDir, 'archive') },
+        storage: { jsonlDir, transcriptArchiveDir: archiveDir },
         maintenance: { enabled: false },
       })
     );
     cwd = path.join(tmpDir, 'work');
     fs.mkdirSync(cwd);
     projectsDir = path.join(tmpDir, 'projects');
-    fs.mkdirSync(path.join(projectsDir, '-work'), { recursive: true });
     file = path.join(projectsDir, '-work', `${SID}.jsonl`);
   });
 
-  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
 
-  // 0.8.5 以前は blob 行を発言として読んだ。その読み方の生ログを Stop hook に保存させてから、生ログを本来の形に戻す。
-  async function saveAsBefore(lines: Line[]): Promise<void> {
-    const write = (asBefore: boolean) =>
-      fs.writeFileSync(file, lines.map((l) => entry(l, asBefore)).join('\n') + '\n');
-    write(true);
-    await checkpointStop(
+  const stop = () =>
+    checkpointStop(
       'claude',
       JSON.stringify({ hook_event_name: 'Stop', session_id: SID, transcript_path: file, cwd }),
       configPath
     );
-    write(false);
+
+  // 0.8.5 以前は blob 行を発言として読んだ。その読み方の生ログを Stop hook に保存させてから、生ログを本来の形に戻す。
+  async function saveAsBefore(lines: Line[]): Promise<void> {
+    write(file, lines, true);
+    await stop();
+    write(file, lines);
   }
 
   const polluted: Line[] = [
@@ -1411,40 +1425,49 @@ describe('recoverTranscripts repairs sessions that saved api-request-blob lines 
     ['api-request-blob', 'assistant', 'copied answer'],
     ['assistant', 'assistant', 'retry answer'],
   ];
-  const contents = () => {
+  const query = <T>(sql: string, ...params: string[]): T[] => {
     const db = getDatabase(dbPath);
     try {
       initializeSchema(db);
-      const rows = db.prepare('SELECT content FROM chunks').all() as { content: string }[];
-      return rows.map((r) => r.content).join('\n');
+      return db.prepare(sql).all(...params) as T[];
     } finally {
       db.close();
     }
   };
-  const marker = () => path.join(tmpDir, 'recover-request-copies.json');
-  const retries = () => JSON.parse(fs.readFileSync(marker(), 'utf-8'));
+  const contents = () =>
+    query<{ content: string }>('SELECT content FROM chunks')
+      .map((r) => r.content)
+      .join('\n');
+  const jsonlText = () =>
+    listJsonlFiles(jsonlDir)
+      .map((f) => fs.readFileSync(f, 'utf-8'))
+      .join('');
+  const stateFile = () => path.join(tmpDir, 'recover-request-copies.json');
+  const state = () => JSON.parse(fs.readFileSync(stateFile(), 'utf-8'));
+  const recover = () => recoverTranscripts(configPath, projectsDir);
 
-  it('replaces the saved turns with the turns read again from the transcript', async () => {
+  it('replaces the saved turns with the turns read again and removes the copy from the JSONL store', async () => {
     await saveAsBefore(polluted);
     expect(contents()).toContain('requestcopy');
+    expect(jsonlText()).toContain('requestcopy');
 
-    const result = await recoverTranscripts(configPath, projectsDir);
+    const result = await recover();
 
     expect(result.repaired).toBe(1);
     expect(result.details).toEqual(['blobfix- (repaired)']);
-    expect(result.skipped).toBe(0);
     expect(contents()).not.toContain('requestcopy');
     expect(contents()).not.toContain('copied answer');
     expect(contents()).toContain('retry question');
     expect(contents()).toContain('retry answer');
-    expect(retries()).toEqual([]);
-    const state = JSON.parse(fs.readFileSync(path.join(tmpDir, 'recover-state.json'), 'utf-8'));
-    expect(state.sizes[SID]).toBe(fs.statSync(file).size);
+    expect(jsonlText()).not.toContain('requestcopy');
+    expect(state()).toEqual({ retry: [], compact: [] });
+    expect(fs.statSync(stateFile()).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.join(tmpDir, 'recover-state.json')).mode & 0o777).toBe(0o600);
   });
 
   it('keeps the repair after a rebuild from the JSONL store', async () => {
     await saveAsBefore(polluted);
-    await recoverTranscripts(configPath, projectsDir);
+    await recover();
 
     const history = await foldCanonicalHistory(listJsonlFiles(jsonlDir));
 
@@ -1460,22 +1483,87 @@ describe('recoverTranscripts repairs sessions that saved api-request-blob lines 
       ['assistant', 'assistant', 'a tag'],
     ]);
 
-    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+    expect((await recover()).repaired).toBe(0);
     expect(contents()).toContain('<system-reminder> mean');
   });
 
-  it('leaves a session whose request copies hold no system-reminder', async () => {
+  it('repairs from the archived transcript when Claude Code already removed its own copy', async () => {
+    await saveAsBefore(polluted);
+    write(path.join(archiveDir, '-work', `${SID}.jsonl`), polluted);
+    fs.rmSync(file);
+
+    expect((await recover()).details).toEqual(['blobfix- (repaired)']);
+    expect(contents()).toContain('retry question');
+    expect(contents()).not.toContain('requestcopy');
+  });
+
+  it('deletes the copied turns when no transcript is left to read again', async () => {
+    await saveAsBefore(polluted);
+    fs.rmSync(file);
+    fs.rmSync(archiveDir, { recursive: true, force: true });
+
+    const result = await recover();
+
+    expect(result.details).toEqual(['blobfix- (purged)']);
+    expect(contents()).not.toContain('requestcopy');
+    expect(jsonlText()).not.toContain('requestcopy');
+  });
+
+  it('deletes the copied turns instead of reading the transcript again when a chunk was deleted by hand', async () => {
+    write(file, [
+      ['user', 'user', 'first question'],
+      ['assistant', 'assistant', 'first answer HANDDELETED'],
+    ]);
+    await stop();
+    write(
+      file,
+      [
+        ['user', 'user', 'first question'],
+        ['assistant', 'assistant', 'first answer HANDDELETED'],
+        ['api-request-blob', 'user', COPY],
+        ['assistant', 'assistant', 'second answer'],
+      ],
+      true
+    );
+    await stop();
+    write(file, [
+      ['user', 'user', 'first question'],
+      ['assistant', 'assistant', 'first answer HANDDELETED'],
+      ['api-request-blob', 'user', COPY],
+      ['assistant', 'assistant', 'second answer'],
+    ]);
+    const [handDeleted] = query<{ id: number }>(
+      "SELECT id FROM chunks WHERE instr(content, 'HANDDELETED') > 0"
+    );
+    const db = getDatabase(dbPath);
+    try {
+      const store = new Store(db);
+      deleteChunkEverywhere(store, loadConfig(configPath), store.getChunk(handDeleted.id)!);
+    } finally {
+      db.close();
+    }
+
+    const result = await recover();
+
+    expect(result.details).toEqual(['blobfix- (purged)']);
+    expect(contents()).not.toContain('HANDDELETED');
+    expect(contents()).not.toContain('requestcopy');
+    expect(jsonlText()).not.toContain('requestcopy');
+    const history = await foldCanonicalHistory(listJsonlFiles(jsonlDir));
+    expect(JSON.stringify([...history.turns.values()])).not.toContain('HANDDELETED');
+  });
+
+  it('deletes the copied turns when no answered turn is left once the copies are dropped', async () => {
     await saveAsBefore([
-      ['user', 'user', 'q'],
-      ['api-request-blob', 'user', 'plain copy'],
+      ['api-request-blob', 'user', COPY],
       ['assistant', 'assistant', 'a'],
     ]);
 
-    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
-    expect(contents()).toContain('plain copy');
+    expect((await recover()).details).toEqual(['blobfix- (purged)']);
+    expect(contents()).not.toContain('requestcopy');
   });
 
-  it('waits while a prompt is pending and writes the marker only after the repair', async () => {
+  it('waits while a prompt is pending and checks that session again on the next run', async () => {
     await saveAsBefore(polluted);
     writePendingPrompt(tmpDir, {
       version: 2,
@@ -1490,66 +1578,255 @@ describe('recoverTranscripts repairs sessions that saved api-request-blob lines 
       createdAt: new Date().toISOString(),
     });
 
-    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
-    expect(retries()).toEqual([SID]);
+    expect((await recover()).repaired).toBe(0);
+    expect(state().retry).toEqual([SID]);
 
     fs.rmSync(path.join(tmpDir, 'pending'), { recursive: true, force: true });
-    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(1);
-    expect(retries()).toEqual([]);
+    expect((await recover()).repaired).toBe(1);
+    expect(state()).toEqual({ retry: [], compact: [] });
   });
 
-  it('writes no marker when reading a transcript fails, and repairs it on the next run', async () => {
+  const pending = (createdAt: string) =>
+    writePendingPrompt(tmpDir, {
+      version: 2,
+      runtime: 'claude',
+      sessionId: SID,
+      projectPath: cwd,
+      prompt: 'live',
+      source: {},
+      pendingKey: 'pk-1',
+      turnSequence: 1,
+      sourceOrder: '00000000000000000009',
+      createdAt,
+    });
+
+  it('repairs a session whose pending prompt is a day old or older, since no hook will finish it', async () => {
+    await saveAsBefore(polluted);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-17T12:00:00.000Z'));
+      pending('2026-10-16T12:00:00.000Z');
+
+      expect((await recover()).details).toEqual(['blobfix- (repaired)']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps waiting for a pending prompt just under a day old or with an unreadable time', async () => {
+    await saveAsBefore(polluted);
+    pending(new Date(Date.now() - 24 * 60 * 60 * 1000 + 60_000).toISOString());
+    expect((await recover()).repaired).toBe(0);
+
+    fs.rmSync(path.join(tmpDir, 'pending'), { recursive: true, force: true });
+    pending('not a time');
+    expect((await recover()).repaired).toBe(0);
+    expect(state().retry).toEqual([SID]);
+  });
+
+  it('does not read the JSONL store again while every session left to check is still waiting', async () => {
+    await saveAsBefore(polluted);
+    // 同じターンをもう一度保存し、正本に古い revision（写しを含む）を残す
+    write(file, [...polluted, ['assistant', 'assistant', 'more']], true);
+    await stop();
+    write(file, polluted);
+    pending(new Date().toISOString());
+    fs.writeFileSync(stateFile(), JSON.stringify({ retry: [SID], compact: [] }));
+    const before = jsonlText();
+
+    expect((await recover()).repaired).toBe(0);
+
+    expect(jsonlText()).toBe(before);
+    expect(state()).toEqual({ retry: [SID], compact: [] });
+  });
+
+  it('checks a session again on the next run when reading its transcript fails', async () => {
     await saveAsBefore(polluted);
     fs.chmodSync(file, 0o000);
 
-    const failing = await recoverTranscripts(configPath, projectsDir);
-    expect(failing.errors).toBe(1);
-    expect(retries()).toEqual([SID]);
+    const failing = await recover();
+    // 取り込みの走査と写しの修復の両方が読み損なう
+    expect(failing.errors).toBe(2);
+    expect(failing.details.filter((d) => d.startsWith('blobfix-: error - '))).toHaveLength(2);
+    expect(state().retry).toEqual([SID]);
 
     fs.chmodSync(file, 0o600);
-    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(1);
+    expect((await recover()).repaired).toBe(1);
   });
 
   it('skips the scan and leaves the file as it is once nothing is left to check', async () => {
     await saveAsBefore(polluted);
-    fs.writeFileSync(marker(), '[ ]');
+    fs.writeFileSync(stateFile(), '{ "retry": [], "compact": [] }');
 
-    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+    expect((await recover()).repaired).toBe(0);
     expect(contents()).toContain('requestcopy');
-    expect(fs.readFileSync(marker(), 'utf-8')).toBe('[ ]');
+    expect(fs.readFileSync(stateFile(), 'utf-8')).toBe('{ "retry": [], "compact": [] }');
   });
 
   it('checks again only the sessions left in the list', async () => {
     await saveAsBefore(polluted);
-    fs.writeFileSync(marker(), JSON.stringify(['other-session']));
-    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
-    expect(retries()).toEqual([]);
+    fs.writeFileSync(stateFile(), JSON.stringify({ retry: ['other-session'], compact: [] }));
+    expect((await recover()).repaired).toBe(0);
+    expect(state()).toEqual({ retry: [], compact: [] });
 
-    fs.writeFileSync(marker(), JSON.stringify([SID]));
-    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(1);
+    fs.writeFileSync(stateFile(), JSON.stringify({ retry: [SID], compact: [] }));
+    expect((await recover()).repaired).toBe(1);
+  });
+
+  it('compacts again the sessions left in the list', async () => {
+    await saveAsBefore(polluted);
+    await recover();
+    // 置き換えの後に古い本文を戻し、圧縮だけが残った状態を作る
+    write(file, polluted, true);
+    await stop();
+    fs.writeFileSync(stateFile(), JSON.stringify({ retry: [], compact: [SID] }));
+    expect(jsonlText()).toContain('requestcopy');
+
+    await recover();
+
+    expect(state()).toEqual({ retry: [], compact: [] });
   });
 
   it.each([
-    ['is broken', '{oops', 1, '[]'],
-    ['holds no list', '{}', 0, '{}'],
+    ['is broken', '{oops', 1],
+    ['holds null', 'null', 1],
+    ['holds no lists', '{}', 0],
   ])(
-    'rescans only when the file %s, and rewrites it only after a scan',
-    async (_n, text, repaired, after) => {
+    'treats a state file that %s as a full scan only when it cannot be read',
+    async (_n, text, repaired) => {
       await saveAsBefore(polluted);
-      fs.writeFileSync(marker(), text);
+      fs.writeFileSync(stateFile(), text);
 
-      expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(repaired);
-      expect(fs.readFileSync(marker(), 'utf-8')).toBe(after);
+      expect((await recover()).repaired).toBe(repaired);
+      if (repaired === 0) expect(fs.readFileSync(stateFile(), 'utf-8')).toBe(text);
     }
   );
 
-  it('leaves a session that has no answered turn once the copies are dropped', async () => {
-    await saveAsBefore([
-      ['api-request-blob', 'user', COPY],
-      ['assistant', 'assistant', 'a'],
-    ]);
+  it('reports a failure of the repair itself without failing recover', async () => {
+    await saveAsBefore(polluted);
+    for (const f of listJsonlFiles(jsonlDir)) fs.chmodSync(f, 0o000);
 
-    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
-    expect(contents()).toContain('requestcopy');
+    const result = await recover();
+
+    for (const f of listJsonlFiles(jsonlDir)) fs.chmodSync(f, 0o600);
+    expect(result.details).toContainEqual(expect.stringMatching(/^request copies: error - /));
+    expect(result.errors).toBe(1);
+  });
+
+  it("reads Claude Code's own transcript before the archived copy", async () => {
+    await saveAsBefore(polluted);
+    write(path.join(archiveDir, '-work', `${SID}.jsonl`), polluted, true);
+
+    expect((await recover()).details).toEqual(['blobfix- (repaired)']);
+    expect(contents()).not.toContain('requestcopy');
+  });
+
+  it('ignores a symlinked transcript and a file that only looks like one', async () => {
+    await saveAsBefore(polluted);
+    const outside = path.join(tmpDir, 'outside.jsonl');
+    write(outside, polluted, true);
+    fs.rmSync(file);
+    fs.symlinkSync(outside, file);
+    write(path.join(projectsDir, '-work', `${SID}.jsonx`), polluted, true);
+    write(path.join(archiveDir, '-work', `${SID}.jsonl`), polluted);
+
+    expect((await recover()).details).toContainEqual('blobfix- (repaired)');
+    expect(contents()).not.toContain('requestcopy');
+  });
+
+  it('compacts on the first run a JSONL store that still holds copies an earlier repair left', async () => {
+    await saveAsBefore(polluted);
+    const db = getDatabase(dbPath);
+    try {
+      const store = new Store(db);
+      await replaceFromTranscript(
+        {
+          config: loadConfig(configPath),
+          store,
+          sessionId: SID,
+          transcriptPath: file,
+          marks: new Map(),
+          deletedChunkDigests: new Set(),
+        },
+        fs.realpathSync(cwd)
+      );
+    } finally {
+      db.close();
+    }
+    expect(contents()).not.toContain('requestcopy');
+    expect(jsonlText()).toContain('requestcopy');
+
+    expect((await recover()).repaired).toBe(0);
+
+    expect(jsonlText()).not.toContain('requestcopy');
+  });
+});
+
+describe('repairRequestCopies with a compaction that does not finish', () => {
+  let tmp: string;
+  let close: () => void;
+  let input: Parameters<typeof repairRequestCopies>[0];
+  const stateFile = () => path.join(tmp, 'recover-request-copies.json');
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-copies-compact-'));
+    const d = getDefaultConfig();
+    const config = {
+      ...d,
+      database: { path: path.join(tmp, 'memory.db') },
+      storage: { ...d.storage, jsonlDir: path.join(tmp, 'jsonl') },
+    };
+    const db = getDatabase(config.database.path);
+    initializeSchema(db);
+    close = () => db.close();
+    input = {
+      config,
+      store: new Store(db),
+      marks: new Map(),
+      deletedChunkDigests: new Set(),
+      projectsDir: path.join(tmp, 'projects'),
+      resolveProjectPath: async () => '/p',
+      compact: async () => 'compacted',
+    };
+    fs.writeFileSync(stateFile(), JSON.stringify({ retry: [], compact: ['s1'] }));
+  });
+  afterEach(() => {
+    close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('keeps the session for the next run when the swap was skipped', async () => {
+    input.compact = async () => 'retry';
+
+    const result = await repairRequestCopies(input);
+
+    expect(result).toEqual({ repaired: 0, errors: 0, details: [] });
+    expect(JSON.parse(fs.readFileSync(stateFile(), 'utf-8'))).toEqual({
+      retry: [],
+      compact: ['s1'],
+    });
+  });
+
+  it('reports a compaction error and keeps the session for the next run', async () => {
+    input.compact = async () => {
+      throw new Error('broken store');
+    };
+
+    const result = await repairRequestCopies(input);
+
+    expect(result).toEqual({
+      repaired: 0,
+      errors: 1,
+      details: ['JSONL compaction: error - Error: broken store'],
+    });
+    expect(JSON.parse(fs.readFileSync(stateFile(), 'utf-8')).compact).toEqual(['s1']);
+  });
+
+  it('forgets the session once the compaction finished', async () => {
+    input.compact = async () => 'unchanged';
+
+    await repairRequestCopies(input);
+
+    expect(JSON.parse(fs.readFileSync(stateFile(), 'utf-8'))).toEqual({ retry: [], compact: [] });
   });
 });

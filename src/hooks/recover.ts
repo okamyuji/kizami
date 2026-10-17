@@ -21,12 +21,11 @@ import {
   saveRecoverMarks,
   refreshIfGrown,
   repairIfMisdated,
-  repairIfRequestCopies,
   isRepairDone,
   markRepairDone,
-  loadCopyRepairRetries,
-  saveCopyRepairRetries,
 } from '@/hooks/refresh';
+import { repairRequestCopies } from '@/hooks/request-copies';
+import { compactSessions } from '@/jsonl/compact';
 
 export interface RecoverResult {
   recovered: number;
@@ -88,9 +87,6 @@ interface Scan {
   result: RecoverResult;
   repairDone: boolean;
   repairFailed: boolean;
-  /** undefined なら全件を確かめる。 */
-  copyRetries: Set<string> | undefined;
-  copyRetryNext: Set<string>;
 }
 
 /** 保存済みのセッションを、修復が要れば作り直し、生ログが伸びていれば反映する。 */
@@ -109,8 +105,6 @@ async function syncSavedSession(
     marks,
     deletedChunkDigests: scan.deleted.chunkDigests,
   };
-  const checkCopies = scan.copyRetries?.has(sessionId) ?? true;
-  if (checkCopies && (await repairRequestCopies(scan, ctx, dirName))) return;
   if (!scan.repairDone) {
     let repaired: boolean;
     try {
@@ -134,29 +128,6 @@ async function syncSavedSession(
   } else {
     result.skipped++;
   }
-}
-
-/** api-request-blob の写しを発言として保存したセッションを作り直す。直したら true。 */
-async function repairRequestCopies(
-  scan: Scan,
-  ctx: Parameters<typeof repairIfRequestCopies>[0],
-  dirName: string
-): Promise<boolean> {
-  let outcome: Awaited<ReturnType<typeof repairIfRequestCopies>>;
-  try {
-    outcome = await repairIfRequestCopies(
-      ctx,
-      await resolveProjectPath(scan.config, ctx.transcriptPath, dirName)
-    );
-  } catch (err) {
-    scan.copyRetryNext.add(ctx.sessionId);
-    throw err;
-  }
-  if (outcome === 'deferred') scan.copyRetryNext.add(ctx.sessionId);
-  if (outcome !== 'repaired') return false;
-  scan.result.repaired++;
-  scan.result.details.push(`${ctx.sessionId.slice(0, 8)} (repaired)`);
-  return true;
 }
 
 /** DB に無いセッションを生ログから取り込む。 */
@@ -216,6 +187,29 @@ async function importTranscript(
   result.details.push(`${sessionId.slice(0, 8)} (${chunks.length} chunks)`);
 }
 
+/** api-request-blob の写しを保存したセッションを直す。失敗しても取り込みの結果は返す。 */
+async function repairCopies(scan: Scan, projectsDir: string): Promise<void> {
+  const { config, result } = scan;
+  try {
+    const copies = await repairRequestCopies({
+      config,
+      store: scan.store,
+      marks: scan.marks,
+      deletedChunkDigests: scan.deleted.chunkDigests,
+      projectsDir,
+      resolveProjectPath: (transcriptPath, dirName) =>
+        resolveProjectPath(config, transcriptPath, dirName),
+      compact: compactSessions,
+    });
+    result.repaired += copies.repaired;
+    result.errors += copies.errors;
+    result.details.push(...copies.details);
+  } catch (err) {
+    result.errors++;
+    result.details.push(`request copies: error - ${String(err)}`);
+  }
+}
+
 /**
  * ~/.claude/projects/ 配下のトランスクリプトファイルを走査し、
  * DBに未保存のセッションを検出して保存する。
@@ -246,12 +240,11 @@ export async function recoverTranscripts(
       result,
       repairDone: isRepairDone(config),
       repairFailed: false,
-      copyRetries: loadCopyRepairRetries(config),
-      copyRetryNext: new Set(),
     };
 
     const projectsDir = claudeProjectsDir ?? getClaudeProjectsDir();
     if (!fs.existsSync(projectsDir)) {
+      await repairCopies(scan, projectsDir);
       return result;
     }
 
@@ -294,10 +287,10 @@ export async function recoverTranscripts(
       }
     }
 
-    saveRecoverMarks(config, scan.marks);
     // 修復の判定に失敗したセッションがあれば次回も判定し直す。取り込みの失敗は関係ない
     if (!scan.repairDone && !scan.repairFailed) markRepairDone(config);
-    if (scan.copyRetries?.size !== 0) saveCopyRepairRetries(config, scan.copyRetryNext);
+    await repairCopies(scan, projectsDir);
+    saveRecoverMarks(config, scan.marks);
     return result;
   } finally {
     db.close();

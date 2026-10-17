@@ -6,7 +6,6 @@ import {
   parseTranscript,
   parseTranscriptText,
   conversationTime,
-  hasRequestCopies,
 } from '../../src/parser/transcript';
 import type { AssistantMessage } from '../../src/parser/transcript';
 
@@ -274,25 +273,6 @@ describe('parseTranscriptText', () => {
       ])
     );
     expect(messages).toEqual([]);
-  });
-});
-
-describe('hasRequestCopies', () => {
-  const write = (lines: string[]) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-copies-'));
-    const file = path.join(dir, 't.jsonl');
-    fs.writeFileSync(file, lines.join('\n'));
-    return file;
-  };
-  const user = JSON.stringify({ type: 'user', message: { role: 'user', content: 'q' } });
-
-  it('finds an api-request-blob line after blank and malformed lines', async () => {
-    const blob = JSON.stringify({ type: 'api-request-blob', message: { role: 'system' } });
-    expect(await hasRequestCopies(write(['', '{oops', user, blob]))).toBe(true);
-  });
-
-  it('returns false for a transcript without api-request-blob lines', async () => {
-    expect(await hasRequestCopies(write(['{oops', user]))).toBe(false);
   });
 });
 

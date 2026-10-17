@@ -162,11 +162,36 @@ export class Store {
   }
 
   hasChunkContaining(sessionId: string, text: string): boolean {
-    // LIKE は本文の % と _ を特別扱いするので、文字列のまま探す instr を使う
     const row = this.db
       .prepare('SELECT 1 FROM chunks WHERE session_id = ? AND instr(content, ?) > 0 LIMIT 1')
       .get(sessionId, text);
     return row !== undefined;
+  }
+
+  sessionsWithChunkContaining(text: string): string[] {
+    // LIKE は本文の % と _ を特別扱いするので、文字列のまま探す instr を使う
+    const rows = this.db
+      .prepare('SELECT DISTINCT session_id FROM chunks WHERE instr(content, ?) > 0')
+      .all(text) as Array<{ session_id: string }>;
+    return rows.map((row) => row.session_id);
+  }
+
+  /** text を含むチャンクと、同じターンの残りのチャンク。長いターンは分けて保存され、後ろの部品は text を含まない。 */
+  getChunksOfTurnsContaining(sessionId: string, text: string): Array<Chunk & { id: number }> {
+    const rows = this.db
+      .prepare(
+        `
+      SELECT id, external_id, session_id, project_path, chunk_index, content, role, metadata, created_at, token_count
+      FROM chunks
+      WHERE session_id = ? AND (
+        instr(content, ?) > 0
+        OR turn_key IN (SELECT turn_key FROM chunks WHERE session_id = ? AND instr(content, ?) > 0)
+      )
+      ORDER BY id
+    `
+      )
+      .all(sessionId, text, sessionId, text) as Record<string, unknown>[];
+    return rows.map((row) => this.rowToChunk(row) as Chunk & { id: number });
   }
 
   getSessionTurnKeys(sessionId: string): string[] {

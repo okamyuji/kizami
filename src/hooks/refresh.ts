@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { EngramConfig } from '@/config';
 import type { Session, Store } from '@/db/store';
-import { parseTranscript, conversationTime, hasRequestCopies } from '@/parser/transcript';
+import { parseTranscript, conversationTime } from '@/parser/transcript';
 import type { TranscriptMessage } from '@/parser/transcript';
 import { isAgedOut } from '@/maintenance/auto';
 import { buildChunks } from '@/parser/chunker';
@@ -36,7 +36,7 @@ export function loadRecoverMarks(config: EngramConfig): RecoverMarks {
 export function saveRecoverMarks(config: EngramConfig, marks: RecoverMarks): void {
   const file = marksFile(config);
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ sizes: Object.fromEntries(marks) }));
+  fs.writeFileSync(tmp, JSON.stringify({ sizes: Object.fromEntries(marks) }), { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 
@@ -58,35 +58,9 @@ export function markRepairDone(config: EngramConfig): void {
   }
 }
 
-function copyRetriesFile(config: EngramConfig): string {
-  return path.join(path.dirname(config.database.path), 'recover-request-copies.json');
-}
-
-/**
- * api-request-blob の写しの修復で、確かめ直すセッション。ファイルが無いか壊れていれば undefined を返し、全件を確かめる。
- * 一度確かめたセッションを毎回置き換えると JSONL が伸び続けるので、見送ったものと失敗したものだけを残す。
- */
-export function loadCopyRepairRetries(config: EngramConfig): Set<string> | undefined {
-  let raw: unknown;
-  try {
-    // Stryker disable next-line StringLiteral: 文字コードを外すと Buffer が返り、JSON.parse は同じ文字列として読む
-    raw = JSON.parse(fs.readFileSync(copyRetriesFile(config), 'utf-8'));
-  } catch {
-    return undefined;
-  }
-  return new Set(Array.isArray(raw) ? (raw as string[]) : []);
-}
-
-export function saveCopyRepairRetries(config: EngramConfig, sessionIds: Set<string>): void {
-  const file = copyRetriesFile(config);
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify([...sessionIds]));
-  fs.renameSync(tmp, file);
-}
-
 export type RefreshOutcome = 'refreshed' | 'unchanged' | 'skipped';
 
-interface RefreshContext {
+export interface RefreshContext {
   config: EngramConfig;
   store: Store;
   sessionId: string;
@@ -145,24 +119,6 @@ export async function repairIfMisdated(ctx: RefreshContext, projectPath: string)
   return replaceFromTranscript(ctx, projectPath);
 }
 
-export type RequestCopyRepair = 'repaired' | 'skipped' | 'deferred';
-
-/**
- * 0.8.5 以前は api-request-blob 行（API へ送った本文の写し）を発言として保存した。写しは system-reminder を含む。
- * system-reminder を含むチャンクがあり、生ログに写しの行があるセッションを、生ログから作り直した全ターンで置き換える。
- * 写しで行の番号がずれ、保存済みの turnKey は作り直したターンと合わないので、hook の管理下のセッションも置き換える。
- * 書きかけのターンがあれば deferred を返す。呼び出し側は確かめ直す一覧に残す。
- */
-export async function repairIfRequestCopies(
-  ctx: RefreshContext,
-  projectPath: string
-): Promise<RequestCopyRepair> {
-  if (!ctx.store.hasChunkContaining(ctx.sessionId, '<system-reminder>')) return 'skipped';
-  if (!(await hasRequestCopies(ctx.transcriptPath))) return 'skipped';
-  if (hasPendingPrompt(ctx)) return 'deferred';
-  return (await replaceFromTranscript(ctx, projectPath)) ? 'repaired' : 'skipped';
-}
-
 function hasPendingPrompt(ctx: RefreshContext): boolean {
   const stateRoot = path.dirname(ctx.config.database.path);
   return readPendingPrompts(stateRoot, 'claude', ctx.sessionId).length > 0;
@@ -172,7 +128,10 @@ function hasPendingPrompt(ctx: RefreshContext): boolean {
  * セッションを、生ログから作り直した全ターンで置き換える。削除したチャンクを戻す場合と、応答のあるターンが無い場合は何もしない。
  * 置き換えは legacy_mismatch の reset として JSONL に残るので、rebuild しても直した値が残る。
  */
-async function replaceFromTranscript(ctx: RefreshContext, projectPath: string): Promise<boolean> {
+export async function replaceFromTranscript(
+  ctx: RefreshContext,
+  projectPath: string
+): Promise<boolean> {
   const { config, sessionId, transcriptPath, marks } = ctx;
   const { size, mtime } = fs.statSync(transcriptPath);
   const messages = await parseTranscript(transcriptPath);

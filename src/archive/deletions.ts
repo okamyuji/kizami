@@ -2,6 +2,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { splitTurnText } from '@/parser/chunker';
+import type { EngramConfig } from '@/config';
+import type { Chunk, Store } from '@/db/store';
+import { appendChunkDeletion } from '@/jsonl/deletion';
 
 export interface Deletions {
   sessions: Set<string>;
@@ -56,6 +59,23 @@ export function recordChunkDeletion(file: string, content: string): void {
   const d = loadDeletions(file);
   d.chunkDigests.add(contentDigest(content));
   save(file, d);
+}
+
+/**
+ * チャンクを JSONL 正本、DB、削除の記録から消す。正本を先に書き、失敗したら何も消さない。
+ * external id の無い古いチャンクは正本に記録できないので false を返す。
+ */
+export function deleteChunkEverywhere(
+  store: Store,
+  config: EngramConfig,
+  chunk: Chunk & { id: number }
+): boolean {
+  if (chunk.externalId) {
+    appendChunkDeletion(config.storage.jsonlDir, chunk.sessionId, chunk.externalId);
+  }
+  store.deleteChunk(chunk.id);
+  recordChunkDeletion(deletionsFile(config.database.path), chunk.content);
+  return chunk.externalId !== undefined;
 }
 
 /**

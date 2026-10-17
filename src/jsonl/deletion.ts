@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { getJsonlFilePath } from '@/jsonl/path';
+import { getJsonlFilePath, listJsonlFiles } from '@/jsonl/path';
+import { readJsonlLines } from '@/jsonl/reader';
 import { serializeV2Transaction } from '@/jsonl/transaction';
 import { JsonlTransactionWriter } from '@/jsonl/writer';
 import type { LockedJsonlWriter } from '@/jsonl/writer';
@@ -68,4 +69,30 @@ export function appendChunkDeletion(jsonlDir: string, sessionId: string, externa
     // Stryker disable next-line StringLiteral: txId は serializeV2Transaction が上書きする
     payload: { v: 2, type: 'chunk_delete', txId: '', sessionId, externalId },
   }));
+}
+
+/** 手でチャンクを消したセッションと、本文に text を含む記録を持つセッションを、正本から集める。 */
+export async function scanSessions(
+  jsonlDir: string,
+  text: string
+): Promise<{ handDeleted: Set<string>; containing: Set<string> }> {
+  const handDeleted = new Set<string>();
+  const containing = new Set<string>();
+  for (const file of listJsonlFiles(jsonlDir)) {
+    for await (const result of readJsonlLines(file)) {
+      if (result.kind !== 'record') continue;
+      const record = result.record;
+      if (record.type === 'chunk_delete') {
+        handDeleted.add(record.sessionId);
+      } else if (record.type === 'chunk' && record.content.includes(text)) {
+        containing.add(record.sessionId);
+      } else if (
+        record.type === 'turn_checkpoint' &&
+        record.parts.some((p) => p.content.includes(text))
+      ) {
+        containing.add(record.sessionId);
+      }
+    }
+  }
+  return { handDeleted, containing };
 }
