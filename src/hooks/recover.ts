@@ -162,7 +162,7 @@ export async function recoverTranscripts(
           }
 
           // 解析より先に測る。解析中に追記された分を、取り込み済みとして記録しないため。
-          const size = fs.statSync(transcriptPath).size;
+          const { size, mtime } = fs.statSync(transcriptPath);
           const messages = await parseTranscript(transcriptPath);
           if (messages.length === 0) {
             result.skipped++;
@@ -170,12 +170,14 @@ export async function recoverTranscripts(
           }
 
           // 保持期間より古い会話は、入れても次の整理で消えてまた入る。生ログは保管側の検索で読める
-          if (isAgedOut(config, messages[messages.length - 1].timestamp)) {
+          if (isAgedOut(config, messages[messages.length - 1].timestamp ?? mtime.toISOString())) {
             result.skipped++;
             continue;
           }
           const projectPath = await resolveProjectPath(config, transcriptPath, dirent.name);
           const chunks = buildChunks(messages, sessionId, projectPath);
+          // 時刻の無いターンに取り込み時刻を刻むと、古い会話が最新として並ぶ。生ログの更新時刻を使う
+          for (const c of chunks) c.createdAt ??= mtime.toISOString();
           // rebuild で全チャンクを消したセッションは行ごと無くなる。取り込み直すと削除した本文が戻る。
           if (
             chunks.length === 0 ||

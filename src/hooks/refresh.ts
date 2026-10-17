@@ -88,9 +88,9 @@ async function commit(
   );
 }
 
-/** 時刻の無いターンには会話の最後の時刻を使う。取り込み時刻を使うと古い会話が新しく見える。 */
-function fallbackTime(messages: TranscriptMessage[]): string {
-  return [...messages].reverse().find((m) => m.timestamp)?.timestamp ?? new Date().toISOString();
+/** 時刻の無いターンには会話の最後の時刻を使う。どの行にも無ければ生ログの更新時刻を使う。取り込み時刻だと古い会話が新しく見える。 */
+function fallbackTime(messages: TranscriptMessage[], mtime: Date): string {
+  return [...messages].reverse().find((m) => m.timestamp)?.timestamp ?? mtime.toISOString();
 }
 
 // 取り込み時刻が刻まれた v1 の行を見分ける閾値。hook の保存は会話の終了から数分以内に着く。
@@ -106,20 +106,21 @@ function needsRepair(store: Store, session: Session, projectPath: string): boole
 /**
  * 古い実装は projectPath をディレクトリ名から誤って復号し、チャンクに取り込み時刻を刻んだ。
  * そのセッションを、生ログから作り直した全ターンで置き換える。判定が外れれば何もしない。
- * v1 の行だけか、生ログ由来の鍵だけのセッションに限る。
+ * v1 の行だけのセッションに限る。hook は同じ offset 鍵を付けるため、鍵を持つセッションは hook の管理下にあり触らない。
  * 置き換えは legacy_mismatch の reset として JSONL に残るので、rebuild しても直した値が残る。
  */
 export async function repairIfMisdated(ctx: RefreshContext, projectPath: string): Promise<boolean> {
   const { config, store, sessionId, transcriptPath, marks } = ctx;
   const session = store.getSession(sessionId);
-  if (!session || !needsRepair(store, session, projectPath)) return false;
+  if (!session || store.getSessionTurnKeys(sessionId).length > 0) return false;
+  if (!needsRepair(store, session, projectPath)) return false;
+  const { size, mtime } = fs.statSync(transcriptPath);
   // 保持期間より古い会話は、直しても整理で消える。取り込み時刻の行は保持期間の後に消え、入れ直されない
-  if (isAgedOut(config, session.endedAt)) return false;
+  if (isAgedOut(config, session.endedAt ?? mtime.toISOString())) return false;
   if (readPendingPrompts(path.dirname(config.database.path), 'claude', sessionId).length > 0) {
     return false;
   }
 
-  const size = fs.statSync(transcriptPath).size;
   const messages = await parseTranscript(transcriptPath);
   const chunks = buildChunks(messages, sessionId, projectPath);
   if (chunks.some((c) => ctx.deletedChunkDigests.has(contentDigest(c.content)))) return false;
@@ -128,11 +129,9 @@ export async function repairIfMisdated(ctx: RefreshContext, projectPath: string)
     sessionId,
     projectPath,
     size,
-    fallbackTime(messages)
+    fallbackTime(messages, mtime)
   );
   if (candidates.length === 0) return false;
-  // hook が管理するセッションは、projectPath が違っても置き換えない
-  if (!followsOffsetRule(new Set(store.getSessionTurnKeys(sessionId)), candidates)) return false;
 
   await commit(config, sessionId, candidates, true);
   marks.set(sessionId, size);
@@ -149,7 +148,7 @@ export async function repairIfMisdated(ctx: RefreshContext, projectPath: string)
  */
 export async function refreshIfGrown(ctx: RefreshContext): Promise<RefreshOutcome> {
   const { config, store, sessionId, transcriptPath, marks } = ctx;
-  const size = fs.statSync(transcriptPath).size;
+  const { size, mtime } = fs.statSync(transcriptPath);
   if (marks.get(sessionId) === size) return 'unchanged';
   const stateRoot = path.dirname(config.database.path);
   if (readPendingPrompts(stateRoot, 'claude', sessionId).length > 0) return 'skipped';
@@ -166,7 +165,7 @@ export async function refreshIfGrown(ctx: RefreshContext): Promise<RefreshOutcom
     sessionId,
     session.projectPath,
     size,
-    fallbackTime(messages)
+    fallbackTime(messages, mtime)
   );
 
   // hook が後から足した v2 の行は数えない。混在していれば v1 より生ログのチャンクが多くなり、置き換わる。
@@ -188,18 +187,13 @@ async function replaceLegacy(
   return 'refreshed';
 }
 
-/** 生ログから作った turnKey だけで成り立つか。hook が付けた鍵が混ざるセッションは hook の管理下にある。 */
-function followsOffsetRule(existing: Set<string>, candidates: TurnCheckpointCandidate[]): boolean {
-  const known = new Set(candidates.map((c) => c.turnKey));
-  return [...existing].every((key) => known.has(key));
-}
-
 async function appendMissingTurns(
   ctx: RefreshContext,
   candidates: TurnCheckpointCandidate[]
 ): Promise<RefreshOutcome> {
+  const known = new Set(candidates.map((c) => c.turnKey));
   const existing = new Set(ctx.store.getSessionTurnKeys(ctx.sessionId));
-  if (existing.size === 0 || !followsOffsetRule(existing, candidates)) return 'skipped';
+  if (existing.size === 0 || [...existing].some((key) => !known.has(key))) return 'skipped';
   const missing = candidates.filter((c) => !existing.has(c.turnKey));
   if (missing.length === 0) return 'unchanged';
   await commit(ctx.config, ctx.sessionId, missing, false);

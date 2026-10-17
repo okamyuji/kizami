@@ -4,6 +4,12 @@ import type { ScoredResult } from '@/search/hybrid';
 const MAX_CONTENT_LENGTH = 360;
 const DEFAULT_LIMIT = 10;
 
+/** 端末への制御文字(ESC、BEL、OSC 52 など)を落とす。改行とタブは残す。 */
+export function stripControlChars(text: string): string {
+  // eslint-disable-next-line no-control-regex -- 制御文字を落とすのが目的
+  return text.replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '');
+}
+
 function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   return text.slice(0, maxLength) + '...';
@@ -42,5 +48,5 @@ export function formatResults(results: ScoredResult[], limit?: number): string {
     return `[${date} ${sessionShort}${projectTag} s=${score}]\n${content}`;
   });
 
-  return '[Mem]\n' + entries.join('\n---\n') + '\n';
+  return stripControlChars('[Mem]\n' + entries.join('\n---\n') + '\n');
 }

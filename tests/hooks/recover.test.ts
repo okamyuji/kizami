@@ -1040,17 +1040,53 @@ describe('recoverTranscripts repairs sessions imported with the wrong time or pr
     ]);
   });
 
-  it('repairs a session whose turn keys all follow the transcript offset rule', async () => {
-    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z' });
-    await recoverTranscripts(configPath, projectsDir);
-    sql('UPDATE chunks SET project_path = ?', WRONG);
-    sql('UPDATE sessions SET project_path = ?', WRONG);
-    fs.rmSync(marker(), { force: true });
+  it('does not repair a session saved by the Stop hook, even when its keys follow the offset rule', async () => {
+    const dirA = path.join(tmpDir, 'A');
+    const dirB = path.join(tmpDir, 'B');
+    fs.mkdirSync(dirA);
+    fs.mkdirSync(dirB);
+    const now = new Date().toISOString();
+    fs.writeFileSync(
+      file,
+      [
+        JSON.stringify({
+          type: 'user',
+          sessionId: SID,
+          cwd: dirA,
+          timestamp: now,
+          message: { role: 'user', content: 'q1' },
+        }),
+        line('assistant', 'a1', now),
+      ].join('\n') + '\n'
+    );
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        database: { path: dbPath },
+        storage: { jsonlDir, transcriptArchiveDir: path.join(tmpDir, 'archive') },
+        maintenance: { enabled: false },
+      })
+    );
+    await checkpointStop(
+      'claude',
+      JSON.stringify({
+        hook_event_name: 'Stop',
+        session_id: SID,
+        transcript_path: file,
+        cwd: dirB,
+      }),
+      configPath
+    );
+    const before = all<{ project_path: string; turn_key: string | null }>(
+      'SELECT project_path, turn_key FROM chunks'
+    );
+    expect(before.map((r) => r.project_path)).toEqual([fs.realpathSync(dirB)]);
+    expect(before[0].turn_key).not.toBeNull();
 
     const result = await recoverTranscripts(configPath, projectsDir);
 
-    expect(result.repaired).toBe(1);
-    expect(all('SELECT DISTINCT project_path FROM chunks')).toEqual([{ project_path: CWD }]);
+    expect(result.repaired).toBe(0);
+    expect(all('SELECT project_path, turn_key FROM chunks')).toEqual(before);
   });
 
   it('does not repair a session that already aged out of retention', async () => {
@@ -1078,6 +1114,49 @@ describe('recoverTranscripts repairs sessions imported with the wrong time or pr
 
     expect(result.repaired).toBe(0);
     expect(all('SELECT project_path FROM sessions')).toEqual([{ project_path: WRONG }]);
+  });
+
+  it('stamps chunks of a transcript without valid timestamps with the file mtime', async () => {
+    const mtime = new Date(Date.now() - 10 * 86400000);
+    mtime.setMilliseconds(0);
+    fs.writeFileSync(
+      file,
+      [line('user', 'q', 'zzz-not-a-date'), line('assistant', 'a', 'zzz-not-a-date')].join('\n') +
+        '\n'
+    );
+    fs.utimesSync(file, mtime, mtime);
+
+    await recoverTranscripts(configPath, projectsDir);
+
+    expect(all('SELECT created_at FROM chunks')).toEqual([{ created_at: mtime.toISOString() }]);
+  });
+
+  it('does not import an untimed transcript whose file is older than the retention window', async () => {
+    const mtime = new Date(Date.now() - 120 * 86400000);
+    fs.writeFileSync(file, [line('user', 'q'), line('assistant', 'a')].join('\n') + '\n');
+    fs.utimesSync(file, mtime, mtime);
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.recovered).toBe(0);
+    expect(all('SELECT * FROM sessions')).toEqual([]);
+  });
+
+  it('uses the file mtime for untimed turns when a grown session is refreshed', async () => {
+    fs.writeFileSync(file, [line('user', 'q1'), line('assistant', 'a1')].join('\n') + '\n');
+    await recoverTranscripts(configPath, projectsDir);
+    const mtime = new Date(Date.now() - 5 * 86400000);
+    mtime.setMilliseconds(0);
+    fs.appendFileSync(file, [line('user', 'q2'), line('assistant', 'a2')].join('\n') + '\n');
+    fs.utimesSync(file, mtime, mtime);
+
+    await recoverTranscripts(configPath, projectsDir);
+
+    expect(
+      all<{ created_at: string }>('SELECT created_at FROM chunks ORDER BY id').map(
+        (r) => r.created_at
+      )
+    ).toEqual([mtime.toISOString(), mtime.toISOString()]);
   });
 
   it('stamps a turn without timestamps with the last conversation time, not the import time', async () => {

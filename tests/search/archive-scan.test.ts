@@ -254,3 +254,18 @@ describe('scanArchive', () => {
     );
   });
 });
+
+describe('formatArchiveHits control characters', () => {
+  it('drops C0 controls except newline and tab, and DEL', () => {
+    const out = formatArchiveHits([
+      {
+        sessionId: 'abcdefgh',
+        dirName: '-x\u001b',
+        mtime: new Date('2026-10-05T00:00:00Z'),
+        snippet: 'a\u001b]52;c;x\u0007b\u007fc\r\u0000d\ne\tf',
+      },
+    ]);
+
+    expect(out).toBe('[2026-10-05 abcdef from=-x archived]\na]52;c;xbcd\ne\tf\n');
+  });
+});

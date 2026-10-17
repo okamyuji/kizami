@@ -148,3 +148,39 @@ describe('formatResults', () => {
     expect(compact.length).toBeLessThanOrEqual(Math.floor(legacy.length * 0.8));
   });
 });
+
+describe('formatResults control characters', () => {
+  const result = (content: string, projectPath = '/p/proj') =>
+    ({
+      id: 1,
+      content,
+      sessionId: 'abcdefgh',
+      projectPath,
+      chunkIndex: 0,
+      role: 'human',
+      metadata: '{}',
+      createdAt: '2026-10-05T00:00:00Z',
+      score: 0.5,
+      isLocalProject: false,
+    }) as unknown as Parameters<typeof formatResults>[0][number];
+
+  it('drops C0 controls except newline and tab, and DEL', () => {
+    const out = formatResults([result('a\u001b]52;c;x\u0007\u001b[2Jb\u007fc\r\u0000d\ne\tf')]);
+
+    expect(out).toContain('a]52;c;x[2Jbcd\ne\tf');
+    expect([...out].every((ch) => ch === '\n' || ch === '\t' || ch.charCodeAt(0) >= 0x20)).toBe(
+      true
+    );
+    expect(out).not.toContain('\u007f');
+  });
+
+  it('keeps the exact layout around the entries', () => {
+    expect(formatResults([result('x'), result('y')])).toBe(
+      '[Mem]\n[2026-10-05 abcdef from=proj s=0.50]\nx\n---\n[2026-10-05 abcdef from=proj s=0.50]\ny\n'
+    );
+  });
+
+  it('cleans the project name in the header too', () => {
+    expect(formatResults([result('x', '/p/pro\u001bj')])).toContain('from=proj ');
+  });
+});
