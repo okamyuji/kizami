@@ -139,7 +139,8 @@ async function importTranscript(
   // 解析より先に測る。解析中に追記された分を、取り込み済みとして記録しないため。
   const { size, mtime } = fs.statSync(transcriptPath);
   // 取り込まないと決めた生ログ、整理や削除で行が消えた生ログは、伸びるまで読み直さない。recover は毎プロンプト走る
-  if (marks.get(sessionId) === size) {
+  // 保持期間を無効にした後は、期間外として見送った生ログも取り込むので目印を見ない
+  if (config.maintenance.enabled && marks.get(sessionId) === size) {
     result.skipped++;
     return;
   }

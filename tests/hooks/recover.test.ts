@@ -306,6 +306,24 @@ describe('recoverTranscripts', () => {
       expect((await recoverTranscripts(configPath, fakeProjectsDir)).recovered).toBe(1);
     });
 
+    it('imports a conversation skipped as aged once retention is disabled', async () => {
+      writeSession('-tmp-p', 'old00003', turn(undefined, at(-1)));
+      expect((await recoverTranscripts(configPath, fakeProjectsDir)).skipped).toBe(1);
+
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          database: { path: dbPath },
+          storage: { jsonlDir },
+          maintenance: { enabled: false },
+        }),
+        'utf-8'
+      );
+
+      expect((await recoverTranscripts(configPath, fakeProjectsDir)).recovered).toBe(1);
+      expect(sessionCount()).toBe(1);
+    });
+
     // 整理はチャンクの created_at（ターン先頭の時刻）で消す。最後の行の時刻で判定すると、消えては入るを繰り返す
     it('does not import a conversation whose newest turn started before the cutoff', async () => {
       const [question, answer] = turn(undefined, at(-1000));
