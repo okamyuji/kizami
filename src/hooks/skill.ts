@@ -8,6 +8,8 @@ const MARKER = '<!-- kizami-managed -->';
 // Claude は手順 5 の案内を回答へそのまま書き写すため、実ホームのパス（ユーザー名）が会話に出る。
 // "$HOME" と単一引用符の連結にすれば、シェルでそのまま実行でき、実パスも出ない。
 function homeRelative(cmd: string, home: string): string {
+  // 空の HOME だと `'/` に一致し、ホーム外のパスまで "$HOME" 配下に見せてしまう。
+  if (!home) return cmd;
   return cmd.split(`'${home}/`).join(`"$HOME"'/`);
 }
 

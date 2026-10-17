@@ -1482,6 +1482,17 @@ describe('parseInvocation', () => {
     expect(errorSpy.mock.calls[1]?.[0]).toBe('Run kizami --help for usage.');
   });
 
+  it('strips terminal control characters from the reported option name', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    parseInvocation(['--\u001b]0;pwn\u0007']);
+
+    const message = String(errorSpy.mock.calls[0]?.[0]);
+    expect(message).not.toContain('\u001b');
+    expect(message).not.toContain('\u0007');
+    expect(process.exitCode).toBe(1);
+  });
+
   it('reports a string option given without its value', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 

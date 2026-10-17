@@ -117,6 +117,14 @@ describe('recall skill resume hint', () => {
     expect(resumeLine(md)).toContain("`'/Users/alice2/cli.js' resume <id>`");
   });
 
+  it('leaves the command unchanged when the home directory is empty or the root', () => {
+    for (const home of ['', '/']) {
+      const md = renderRecallSkill("'/usr/local/bin/node' '/x/cli.js'", home);
+
+      expect(resumeLine(md)).toContain("`'/usr/local/bin/node' '/x/cli.js' resume <id>`");
+    }
+  });
+
   it('leaves a bare kizami command unchanged', () => {
     expect(resumeLine(renderRecallSkill('kizami', '/Users/alice'))).toContain(
       '`kizami resume <id>`'

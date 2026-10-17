@@ -824,7 +824,7 @@ export function parseInvocation(args: string[]): ReturnType<typeof parseCliArgs>
   try {
     parsed = parseCliArgs(args);
   } catch (err) {
-    console.error(`kizami: ${(err as Error).message}`);
+    console.error(`kizami: ${stripControlChars((err as Error).message)}`);
     console.error('Run kizami --help for usage.');
     process.exitCode = 1;
     return undefined;
