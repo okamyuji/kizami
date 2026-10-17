@@ -1,12 +1,6 @@
 autoInstallPeers: true
 engineStrict: true
 minimumReleaseAge: 10080
-minimumReleaseAgeExclude:
-  # nanoid 3.3.17 は 2026-08-03 公開の GHSA 修正版。公開7日未満だが脆弱性解消を優先。
-  - nanoid
-  - qs
-  - esbuild
-  - '@esbuild/*'
 allowBuilds:
   better-sqlite3: true
   onnxruntime-node: true
