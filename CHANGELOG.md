@@ -1,3 +1,9 @@
+## [0.8.2](https://github.com/okamyuji/kizami/compare/v0.8.1...v0.8.2) (2026-10-17)
+
+### Bug Fixes
+
+- **jsonl:** migrate the writer lock schema and align line rules between reader and writer ([#40](https://github.com/okamyuji/kizami/issues/40)) ([c40be68](https://github.com/okamyuji/kizami/commit/c40be6852a12417c61d91e50c82fc9a99cf508dc)), closes [#38](https://github.com/okamyuji/kizami/issues/38) [#39](https://github.com/okamyuji/kizami/issues/39)
+
 ## [0.8.1](https://github.com/okamyuji/kizami/compare/v0.8.0...v0.8.1) (2026-10-17)
 
 ### Bug Fixes
