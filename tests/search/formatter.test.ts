@@ -186,6 +186,14 @@ describe('formatResults control characters', () => {
     expect(out).toContain('abcd\u00a0e');
   });
 
+  it('drops bidi controls that can reorder what the terminal shows', () => {
+    const out = formatResults([
+      result('a\u200eb\u200fc\u202ad\u202ee\u2066f\u2069g\u2028h\u200dI\u2029j\u2065k\u206al'),
+    ]);
+
+    expect(out).toContain('abcdefg\u2028h\u200dI\u2029j\u2065k\u206al');
+  });
+
   it('cleans the project name in the header too', () => {
     expect(formatResults([result('x', '/p/pro\u001bj')])).toContain('from=proj ');
   });

@@ -627,7 +627,12 @@ describe('cli commands', () => {
         )
       );
       store.applyTurnCheckpoint(
-        checkpoint('success', '00000000000000000002', 'succeeded', 'token=visible-no-more')
+        checkpoint(
+          'success',
+          '00000000000000000002',
+          'succeeded',
+          'token=visible-no-more a\tb\u202ec\u2066d\u200fe\u0085f'
+        )
       );
 
       cmdResolutions(undefined, { project: tmpDir, config: configPath });
@@ -657,7 +662,7 @@ describe('cli commands', () => {
       );
       expect(lines).toContain('Failed: password=[REDACTED]');
       expect(lines).toContain('  | Verified: fake');
-      expect(lines).toContain('Verified: token=[REDACTED]');
+      expect(lines).toContain('Verified: token=[REDACTED] a�b�c�d�e�f');
       expect(lines.join('\n')).not.toContain('dXNlcjpwYXNz');
       expect(lines.join('\n')).not.toContain('postgres://user:pass@host/db');
       expect(lines.join('\n')).not.toContain('gemini-value');
@@ -841,6 +846,17 @@ describe('cli commands', () => {
       expect(Array.isArray(parsed)).toBe(true);
       expect(parsed.length).toBe(1);
       expect(parsed[0].sessionId).toBe('session-1');
+    });
+
+    // JSON.stringify がエスケープするのは U+0020 未満だけ。DEL、C1、bidi は生のまま端末に届く
+    it('escapes DEL, C1 and bidi controls in JSON while keeping the values', () => {
+      const first = 'x\u007fy\u0080z\u009bw\u202ev\u2066u\u00a0t';
+      store.insertSession(makeSession({ firstMessage: first }));
+
+      const output = cmdExport({ format: 'json', project: '/test/project', config: configPath });
+
+      expect(output).toContain('x\\u007fy\\u0080z\\u009bw\\u202ev\\u2066u\u00a0t');
+      expect(JSON.parse(output)[0].firstMessage).toBe(first);
     });
 
     it('exports markdown without terminal control characters', () => {

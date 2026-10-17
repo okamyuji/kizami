@@ -10,7 +10,12 @@ import type { StoreStats, Session } from '@/db/store';
 import { searchFts } from '@/search/fts';
 import { rankResults } from '@/search/hybrid';
 import type { ScoredResult } from '@/search/hybrid';
-import { formatResults, stripControlChars } from '@/search/formatter';
+import {
+  formatResults,
+  stripControlChars,
+  escapeControlChars,
+  TERMINAL_CONTROL,
+} from '@/search/formatter';
 import { scanArchive, formatArchiveHits } from '@/search/archive-scan';
 import { archiveAll, getClaudeProjectsDir, removeArchivedTranscript } from '@/archive/store';
 import { resolveSession, SessionLookupError } from '@/archive/resolve';
@@ -284,20 +289,9 @@ function maskCredentials(value: string): string {
     .replace(/\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[REDACTED]');
 }
 
+/** 1 行に収める表示なので、タブと改行も置き換える。 */
 function safeTerminalLine(value: string): string {
-  return [...value]
-    .map((character) => {
-      const code = character.codePointAt(0) ?? 0;
-      return code < 32 ||
-        (code >= 127 && code <= 159) ||
-        code === 0x200e ||
-        code === 0x200f ||
-        (code >= 0x202a && code <= 0x202e) ||
-        (code >= 0x2066 && code <= 0x2069)
-        ? '�'
-        : character;
-    })
-    .join('');
+  return value.replace(/[\t\n]/g, '�').replace(TERMINAL_CONTROL, '�');
 }
 
 function printResolutionField(label: string, value: string, singleLine = false): void {
@@ -551,7 +545,7 @@ export function cmdExport(options: {
     }
 
     // Default: JSON
-    const output = JSON.stringify(sessions, null, 2);
+    const output = escapeControlChars(JSON.stringify(sessions, null, 2));
     console.log(output);
     return output;
   } finally {

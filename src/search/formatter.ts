@@ -4,10 +4,21 @@ import type { ScoredResult } from '@/search/hybrid';
 const MAX_CONTENT_LENGTH = 360;
 const DEFAULT_LIMIT = 10;
 
-/** 端末への制御文字(ESC、BEL、OSC 52 など)を落とす。C1(U+0080〜009F)も落とす。改行とタブは残す。 */
+// 端末を操作する制御文字(ESC、BEL、OSC 52 など)、C1、表示順を入れ替える bidi 制御。改行とタブは含めない
+export const TERMINAL_CONTROL =
+  // eslint-disable-next-line no-control-regex -- 制御文字を見つけるのが目的
+  /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
 export function stripControlChars(text: string): string {
-  // eslint-disable-next-line no-control-regex -- 制御文字を落とすのが目的
-  return text.replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, '');
+  return text.replace(TERMINAL_CONTROL, '');
+}
+
+/** JSON の文字列中の制御文字を \uXXXX にする。値は変わらない。JSON.stringify は U+0020 未満しかエスケープしない。 */
+export function escapeControlChars(json: string): string {
+  return json.replace(
+    TERMINAL_CONTROL,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`
+  );
 }
 
 function truncate(text: string, maxLength: number): string {
