@@ -1,3 +1,9 @@
+## [0.8.6](https://github.com/okamyuji/kizami/compare/v0.8.5...v0.8.6) (2026-10-17)
+
+### Bug Fixes
+
+- stop saving Claude Code request copies as turns and remove the saved ones ([#44](https://github.com/okamyuji/kizami/issues/44)) ([c1b7ca4](https://github.com/okamyuji/kizami/commit/c1b7ca4f47d397703924ae6b25d49d8200381be5))
+
 ## [0.8.5](https://github.com/okamyuji/kizami/compare/v0.8.4...v0.8.5) (2026-10-17)
 
 ### Bug Fixes
