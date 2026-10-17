@@ -1,3 +1,9 @@
+## [0.8.1](https://github.com/okamyuji/kizami/compare/v0.8.0...v0.8.1) (2026-10-17)
+
+### Bug Fixes
+
+- recover imports with real time and path, keep old sessions searchable, fence past-session text ([#37](https://github.com/okamyuji/kizami/issues/37)) ([fc17f85](https://github.com/okamyuji/kizami/commit/fc17f850642d2c9734c4dc7b68577a395bdf98dc))
+
 ## [0.8.0](https://github.com/okamyuji/kizami/compare/v0.7.4...v0.8.0) (2026-10-04)
 
 ### Features
