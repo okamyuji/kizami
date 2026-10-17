@@ -24,6 +24,17 @@ describe('resolveSession', () => {
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
+  it('reads cwd from a line that holds a raw U+2028', async () => {
+    put(
+      projectsDir,
+      '-p',
+      'abcd1111-0000-0000-0000-000000000000',
+      line({ type: 'user', text: 'a\u2028b', cwd: '/w' })
+    );
+    const r = await resolveSession('abcd1111', roots());
+    expect(r.cwd).toBe('/w');
+  });
+
   it('resolves a unique prefix and reads cwd and gitBranch from the first line that has them', async () => {
     put(
       projectsDir,

@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import * as readline from 'node:readline';
+import { readLines, withoutTrailingCr } from '@/storage/lines';
 import type {
   JsonlChunkRecord,
   JsonlLineResult,
@@ -41,9 +41,7 @@ export async function* readJsonlFile(
 ): AsyncGenerator<JsonlChunkRecord, void, void> {
   if (!fs.existsSync(filePath)) return;
 
-  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  for await (const line of rl) {
+  for await (const line of readLines(filePath)) {
     if (!line.trim()) continue;
     let parsed: unknown;
     try {
@@ -162,13 +160,12 @@ export function readTailDeletions(
 export async function* readJsonlLines(filePath: string): AsyncGenerator<JsonlLineResult> {
   if (!fs.existsSync(filePath)) return;
 
-  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   let offset = 0;
 
-  for await (const line of rl) {
-    const lineBytes = Buffer.byteLength(line, 'utf-8');
-    const endOffset = offset + lineBytes + 1;
+  for await (const raw of readLines(filePath)) {
+    const endOffset = offset + Buffer.byteLength(raw) + 1;
+    // CRLF の \r はバイト位置には数え、digest を取る行からは外す
+    const line = withoutTrailingCr(raw);
     if (!line.trim()) {
       offset = endOffset;
       continue;

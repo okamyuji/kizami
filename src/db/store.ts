@@ -154,6 +154,13 @@ export class Store {
     return row.n;
   }
 
+  getLegacyChunkStart(sessionId: string): string | undefined {
+    const row = this.db
+      .prepare('SELECT MIN(created_at) AS t FROM chunks WHERE session_id = ? AND turn_key IS NULL')
+      .get(sessionId) as { t: string | null };
+    return row.t ?? undefined;
+  }
+
   getSessionTurnKeys(sessionId: string): string[] {
     const rows = this.db
       .prepare('SELECT DISTINCT turn_key FROM chunks WHERE session_id = ? AND turn_key IS NOT NULL')
@@ -413,6 +420,13 @@ export class Store {
       .prepare('SELECT 1 FROM sessions WHERE session_id = ? LIMIT 1')
       .get(sessionId);
     return !!row;
+  }
+
+  getSessionIds(): Set<string> {
+    const rows = this.db.prepare('SELECT session_id FROM sessions').all() as Array<{
+      session_id: string;
+    }>;
+    return new Set(rows.map((r) => r.session_id));
   }
 
   getChunkIdsWithoutEmbedding(): number[] {

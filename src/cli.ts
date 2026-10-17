@@ -10,7 +10,14 @@ import type { StoreStats, Session } from '@/db/store';
 import { searchFts } from '@/search/fts';
 import { rankResults } from '@/search/hybrid';
 import type { ScoredResult } from '@/search/hybrid';
-import { formatResults } from '@/search/formatter';
+import {
+  formatResults,
+  stripControlChars,
+  escapeControlChars,
+  TERMINAL_CONTROL,
+  fenceUntrusted,
+  sanitizeQuoted,
+} from '@/search/formatter';
 import { scanArchive, formatArchiveHits } from '@/search/archive-scan';
 import { archiveAll, getClaudeProjectsDir, removeArchivedTranscript } from '@/archive/store';
 import { resolveSession, SessionLookupError } from '@/archive/resolve';
@@ -210,10 +217,8 @@ export function cmdSearch(
       if (ranked.length > 0)
         console.log('No results in this project. Results from other projects:');
     }
-    if (ranked.length > 0) {
-      console.log(formatResults(ranked, config.search.defaultLimit));
-      return ranked;
-    }
+    const shown = ranked.slice(0, config.search.defaultLimit);
+    if (ranked.length > 0) console.log(formatResults(ranked, config.search.defaultLimit));
 
     const deleted = loadDeletions(deletionsFile(config.database.path));
     const hits = scanArchive(
@@ -222,16 +227,21 @@ export function cmdSearch(
       config.maintenance.maxChunkAgeDays * 86400000,
       Date.now(),
       10,
-      deleted.sessions,
-      deleted.chunkDigests
+      new Set([...deleted.sessions, ...shown.map((r) => r.sessionId)]),
+      deleted.chunkDigests,
+      store.getSessionIds()
     );
     if (hits.length > 0) {
-      console.log('No indexed results. Matches in archived transcripts:');
+      console.log(
+        shown.length > 0
+          ? 'Matches in archived transcripts:'
+          : 'No indexed results. Matches in archived transcripts:'
+      );
       console.log(formatArchiveHits(hits));
-    } else {
+    } else if (ranked.length === 0) {
       console.log('No results found.');
     }
-    return [];
+    return ranked;
   } finally {
     close();
   }
@@ -281,32 +291,22 @@ function maskCredentials(value: string): string {
     .replace(/\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[REDACTED]');
 }
 
+/** 1 行に収める表示なので、タブと改行も置き換える。 */
 function safeTerminalLine(value: string): string {
-  return [...value]
-    .map((character) => {
-      const code = character.codePointAt(0) ?? 0;
-      return code < 32 ||
-        (code >= 127 && code <= 159) ||
-        code === 0x200e ||
-        code === 0x200f ||
-        (code >= 0x202a && code <= 0x202e) ||
-        (code >= 0x2066 && code <= 0x2069)
-        ? '�'
-        : character;
-    })
-    .join('');
+  return value.replace(/[\t\n]/g, '�').replace(TERMINAL_CONTROL, '�');
 }
 
-function printResolutionField(label: string, value: string, singleLine = false): void {
+function resolutionField(label: string, value: string, singleLine = false): string[] {
   const masked = maskCredentials(value);
   if (singleLine) {
     const line = masked.replace(/\r\n|[\n\r\u2028\u2029]/g, ' ↵ ');
-    console.log(`${label}: ${safeTerminalLine(line)}`);
-    return;
+    return [`${label}: ${safeTerminalLine(line)}`];
   }
-  const lines = masked.split(/\r\n|[\n\r\u2028\u2029]/);
-  console.log(`${label}: ${safeTerminalLine(lines[0] ?? '')}`);
-  for (const line of lines.slice(1)) console.log(`  | ${safeTerminalLine(line)}`);
+  const [first, ...rest] = masked.split(/\r\n|[\n\r\u2028\u2029]/) as [string, ...string[]];
+  return [
+    `${label}: ${safeTerminalLine(first)}`,
+    ...rest.map((line) => `  | ${safeTerminalLine(line)}`),
+  ];
 }
 
 export function cmdResolutions(
@@ -333,18 +333,26 @@ export function cmdResolutions(
     if (options.showEvidence) {
       console.log('Warning: evidence masking is best-effort; review output before sharing.');
     }
+    // 証拠は過去の実行結果の引用なので、1 つの囲みにまとめて出す
+    const evidence: string[] = [];
     for (const result of results) {
-      console.log(safeTerminalLine(`[${result.verifiedAt}] failures=${result.failureCount}`));
+      const header = safeTerminalLine(`[${result.verifiedAt}] failures=${result.failureCount}`);
       if (options.showEvidence) {
-        printResolutionField('Command', result.command, true);
-        printResolutionField('Failed', result.failureOutputExcerpt);
-        printResolutionField('Verified', result.successOutputExcerpt);
-      } else {
-        console.log(
-          'Evidence: hidden (use --show-evidence to display best-effort-masked excerpts)'
+        evidence.push(
+          header,
+          ...resolutionField('Command', result.command, true),
+          ...resolutionField('Failed', result.failureOutputExcerpt),
+          ...resolutionField('Verified', result.successOutputExcerpt),
+          ''
         );
+        continue;
       }
+      console.log(header);
+      console.log('Evidence: hidden (use --show-evidence to display best-effort-masked excerpts)');
       console.log('');
+    }
+    if (options.showEvidence) {
+      console.log(fenceUntrusted(sanitizeQuoted(evidence.join('\n') + '\n')));
     }
     return results;
   } finally {
@@ -445,7 +453,9 @@ export function cmdList(options: {
       const chunks = String(s.chunkCount ?? 0);
       const msg = (s.firstMessage ?? '').slice(0, 40);
       console.log(
-        `${id.padEnd(10)} ${proj.padEnd(30)} ${date.padEnd(12)} ${chunks.padEnd(8)} ${msg}`
+        stripControlChars(
+          `${id.padEnd(10)} ${proj.padEnd(30)} ${date.padEnd(12)} ${chunks.padEnd(8)} ${msg}`
+        )
       );
     }
 
@@ -540,13 +550,13 @@ export function cmdExport(options: {
         if (s.firstMessage) lines.push(`- First: ${s.firstMessage}`);
         lines.push('');
       }
-      const output = lines.join('\n');
+      const output = stripControlChars(lines.join('\n'));
       console.log(output);
       return output;
     }
 
     // Default: JSON
-    const output = JSON.stringify(sessions, null, 2);
+    const output = escapeControlChars(JSON.stringify(sessions, null, 2));
     console.log(output);
     return output;
   } finally {
@@ -642,7 +652,7 @@ export async function cmdShow(
     process.stdout.write(await renderSession(session, maxChars, deleted.chunkDigests));
   } catch (err) {
     if (!(err instanceof SessionLookupError)) throw err;
-    console.error(err.message);
+    console.error(stripControlChars(err.message));
     process.exitCode = 1;
   }
 }
@@ -666,24 +676,30 @@ export async function cmdResume(
     });
   } catch (err) {
     if (!(err instanceof SessionLookupError)) throw err;
-    console.error(err.message);
+    console.error(stripControlChars(err.message));
     process.exitCode = 1;
   }
 }
 
 export async function cmdRecover(options: { config?: string }): Promise<RecoverResult> {
   const result = await recoverTranscripts(options.config);
-  if (result.recovered === 0 && result.refreshed === 0 && result.errors === 0) {
+  if (
+    result.recovered === 0 &&
+    result.refreshed === 0 &&
+    result.repaired === 0 &&
+    result.errors === 0
+  ) {
     console.log('No unsaved transcripts found.');
   } else {
     console.log(`Recovered: ${result.recovered}`);
     console.log(`Refreshed: ${result.refreshed}`);
+    console.log(`Repaired:  ${result.repaired}`);
     console.log(`Skipped:   ${result.skipped}`);
     console.log(`Errors:    ${result.errors}`);
     if (result.details.length > 0) {
       console.log('\nDetails:');
       for (const d of result.details) {
-        console.log(`  ${d}`);
+        console.log(`  ${safeTerminalLine(d)}`);
       }
     }
   }

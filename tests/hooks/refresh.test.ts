@@ -7,7 +7,13 @@ import type { EngramConfig } from '../../src/config';
 import { getDatabase } from '../../src/db/connection';
 import { initializeSchema } from '../../src/db/schema';
 import { Store } from '../../src/db/store';
-import { loadRecoverMarks, saveRecoverMarks, refreshIfGrown } from '../../src/hooks/refresh';
+import {
+  loadRecoverMarks,
+  saveRecoverMarks,
+  refreshIfGrown,
+  isRepairDone,
+  markRepairDone,
+} from '../../src/hooks/refresh';
 import { contentDigest } from '../../src/archive/deletions';
 import { createTurnKey } from '../../src/checkpoint/identity';
 import { writePendingPrompt } from '../../src/checkpoint/state';
@@ -280,5 +286,58 @@ describe('refreshIfGrown outcomes', () => {
       },
     ]);
     expect(await run()).toBe('skipped');
+  });
+});
+
+describe('repair marker', () => {
+  let tmp: string;
+  let config: EngramConfig;
+  const marker = () => path.join(tmp, 'recover-repaired');
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-marker-'));
+    config = { ...getDefaultConfig(), database: { path: path.join(tmp, 'memory.db') } };
+  });
+  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('creates an owner-only marker that isRepairDone sees', () => {
+    expect(isRepairDone(config)).toBe(false);
+
+    markRepairDone(config);
+
+    expect(isRepairDone(config)).toBe(true);
+    expect(fs.statSync(marker()).mode & 0o777).toBe(0o600);
+  });
+
+  it('keeps an existing marker as it is', () => {
+    fs.writeFileSync(marker(), 'keep');
+
+    markRepairDone(config);
+
+    expect(fs.readFileSync(marker(), 'utf-8')).toBe('keep');
+  });
+
+  it('does not truncate the target of a symlinked marker', () => {
+    const victim = path.join(tmp, 'victim.txt');
+    fs.writeFileSync(victim, 'important data');
+    fs.symlinkSync(victim, marker());
+
+    markRepairDone(config);
+
+    expect(fs.readFileSync(victim, 'utf-8')).toBe('important data');
+  });
+
+  it('does not create the target of a dangling symlinked marker', () => {
+    const missing = path.join(tmp, 'missing.txt');
+    fs.symlinkSync(missing, marker());
+
+    markRepairDone(config);
+
+    expect(fs.existsSync(missing)).toBe(false);
+  });
+
+  it('rethrows errors other than an existing marker', () => {
+    config = { ...config, database: { path: path.join(tmp, 'no-such-dir', 'memory.db') } };
+
+    expect(() => markRepairDone(config)).toThrow(/ENOENT/);
   });
 });

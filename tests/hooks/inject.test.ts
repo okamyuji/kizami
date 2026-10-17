@@ -1,3 +1,4 @@
+import { unfence } from '../helpers/fence';
 import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -87,6 +88,7 @@ describe('handleInject', () => {
     // injectRecentCount=2 なので最新2件 (third, second) が含まれるはず
     expect(result).toContain('third');
     expect(result).toContain('second');
+    expect(unfence(String(result))).toMatch(/^\[Mem\]\n/);
     expect(result).not.toContain('first');
   });
 

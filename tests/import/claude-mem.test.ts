@@ -328,4 +328,101 @@ describe('importClaudeMem', () => {
     expect(result.sessionsImported).toBe(2);
     expect(result.skipped).toBe(1);
   });
+
+  it('uses the source created_at for chunks and the latest one for a session without completed_at', async () => {
+    const result = await importClaudeMem({
+      sourcePath: sourceDbPath,
+      configPath: kizamiConfigPath,
+    });
+    expect(result.chunksImported).toBe(4);
+    const kizamiDb = getDatabase(kizamiDbPath);
+    try {
+      const rows = kizamiDb
+        .prepare(
+          'SELECT session_id AS s, chunk_index AS i, created_at AS c FROM chunks ORDER BY s, i'
+        )
+        .all();
+      expect(rows).toEqual([
+        { s: 'mem-session-1', i: 0, c: '2024-06-01T10:15:00Z' },
+        { s: 'mem-session-1', i: 1, c: '2024-06-01T10:30:00Z' },
+        { s: 'mem-session-1', i: 10000, c: '2024-06-01T11:00:00Z' },
+        { s: 'mem-session-2', i: 0, c: '2024-06-02T10:15:00Z' },
+      ]);
+      const ends = kizamiDb
+        .prepare('SELECT session_id AS s, ended_at AS e FROM sessions ORDER BY s')
+        .all();
+      expect(ends).toEqual([
+        { s: 'mem-session-1', e: '2024-06-01T11:00:00Z' },
+        { s: 'mem-session-2', e: '2024-06-02T10:15:00Z' },
+      ]);
+    } finally {
+      kizamiDb.close();
+    }
+  });
+
+  it('ends a session without completed_at at its latest created_at whatever the row order', async () => {
+    const sourceDb = new Database(sourceDbPath);
+    const add = sourceDb.prepare(
+      `INSERT INTO observations (memory_session_id, project, type, created_at, created_at_epoch)
+       VALUES ('mem-session-2', 'other-project', 'note', ?, 0)`
+    );
+    add.run('2024-06-02T12:00:00Z');
+    add.run('2024-06-02T09:00:00Z');
+    add.run('garbage');
+    sourceDb.close();
+    await importClaudeMem({ sourcePath: sourceDbPath, configPath: kizamiConfigPath });
+    const kizamiDb = getDatabase(kizamiDbPath);
+    try {
+      const row = kizamiDb
+        .prepare("SELECT ended_at AS e FROM sessions WHERE session_id = 'mem-session-2'")
+        .get();
+      expect(row).toEqual({ e: '2024-06-02T12:00:00Z' });
+    } finally {
+      kizamiDb.close();
+    }
+  });
+
+  it('compares created_at as instants when the fraction digits differ', async () => {
+    const sourceDb = new Database(sourceDbPath);
+    const add = sourceDb.prepare(
+      `INSERT INTO observations (memory_session_id, project, type, created_at, created_at_epoch)
+       VALUES ('mem-session-2', 'other-project', 'note', ?, 0)`
+    );
+    add.run('2024-06-02T10:15:00.5Z');
+    add.run('2024-06-02T10:15:00Z');
+    sourceDb.close();
+    await importClaudeMem({ sourcePath: sourceDbPath, configPath: kizamiConfigPath });
+    const kizamiDb = getDatabase(kizamiDbPath);
+    try {
+      const row = kizamiDb
+        .prepare("SELECT ended_at AS e FROM sessions WHERE session_id = 'mem-session-2'")
+        .get();
+      expect(row).toEqual({ e: '2024-06-02T10:15:00.5Z' });
+    } finally {
+      kizamiDb.close();
+    }
+  });
+
+  it('normalizes non-ISO created_at to UTC and falls back to import time for unparseable ones', async () => {
+    const sourceDb = new Database(sourceDbPath);
+    sourceDb
+      .prepare("UPDATE observations SET created_at = '2024-06-02 03:04:05Z' WHERE id = 3")
+      .run();
+    sourceDb.prepare("UPDATE observations SET created_at = 'garbage' WHERE id = 2").run();
+    sourceDb.close();
+    await importClaudeMem({ sourcePath: sourceDbPath, configPath: kizamiConfigPath });
+    const kizamiDb = getDatabase(kizamiDbPath);
+    try {
+      const created = (s: string, i: number) =>
+        (
+          kizamiDb
+            .prepare('SELECT created_at AS c FROM chunks WHERE session_id = ? AND chunk_index = ?')
+            .get(s, i) as { c: string }
+        ).c;
+      expect(created('mem-session-2', 0)).toBe('2024-06-02T03:04:05.000Z');
+      expect(created('mem-session-1', 1)).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    } finally {
+      kizamiDb.close();
+    }
+  });
 });

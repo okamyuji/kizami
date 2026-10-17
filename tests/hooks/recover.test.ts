@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
+import { copyRecentTranscript } from '../helpers/recent-transcript';
 import { getDatabase } from '../../src/db/connection';
 import { initializeSchema } from '../../src/db/schema';
 import { Store } from '../../src/db/store';
@@ -53,13 +54,11 @@ describe('recoverTranscripts', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  const fixtureTranscript = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
-
   it('should recover unsaved transcript files', async () => {
     // フェイクプロジェクトディレクトリにトランスクリプトを配置
     const projectDir = path.join(fakeProjectsDir, '-tmp-testproject');
     fs.mkdirSync(projectDir, { recursive: true });
-    fs.copyFileSync(fixtureTranscript, path.join(projectDir, 'unsaved-session-1.jsonl'));
+    copyRecentTranscript(path.join(projectDir, 'unsaved-session-1.jsonl'));
 
     const result = await recoverTranscripts(configPath, fakeProjectsDir);
 
@@ -84,6 +83,307 @@ describe('recoverTranscripts', () => {
     db.close();
   });
 
+  const line = (obj: Record<string, unknown>) => JSON.stringify(obj);
+  const writeSession = (dirName: string, sessionId: string, lines: string[]) => {
+    const dir = path.join(fakeProjectsDir, dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), lines.join('\n') + '\n', 'utf-8');
+  };
+  const queryRows = <T>(sql: string): T[] => {
+    const db = getDatabase(dbPath);
+    try {
+      return db.prepare(sql).all() as T[];
+    } finally {
+      db.close();
+    }
+  };
+  const turn = (cwd: string | undefined, ts: string) => [
+    line({
+      type: 'user',
+      ...(cwd ? { cwd } : {}),
+      message: { role: 'user', content: [{ type: 'text', text: 'question' }] },
+      sessionId: 's',
+      timestamp: ts,
+    }),
+    line({
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'answer' }] },
+      sessionId: 's',
+      timestamp: ts,
+    }),
+  ];
+
+  it('should store the conversation time as chunk created_at, not the import time', async () => {
+    writeSession('-tmp-p', 'aaaa1111', turn(undefined, '2026-10-05T06:44:12.345Z'));
+
+    await recoverTranscripts(configPath, fakeProjectsDir);
+
+    expect(queryRows<{ created_at: string }>('SELECT created_at FROM chunks')).toEqual([
+      { created_at: '2026-10-05T06:44:12.345Z' },
+    ]);
+    const records = fs
+      .readdirSync(jsonlDir)
+      .flatMap((f) => fs.readFileSync(path.join(jsonlDir, f), 'utf-8').trim().split('\n'))
+      .map((l) => JSON.parse(l) as { createdAt: string });
+    expect(records.map((r) => r.createdAt)).toEqual(['2026-10-05T06:44:12.345Z']);
+  });
+
+  it('should fall back to the import time when the transcript has no timestamps', async () => {
+    const noTs = turn(undefined, 'x').map((l) => {
+      const o = JSON.parse(l);
+      delete o.timestamp;
+      return line(o);
+    });
+    // 時刻は生ログの更新時刻から取るので、基準はファイルを書く前に取る。ファイルシステムの時計の粒度を 50ms 見込む
+    const before = Date.now() - 50;
+    writeSession('-tmp-p', 'bbbb2222', noTs);
+
+    await recoverTranscripts(configPath, fakeProjectsDir);
+
+    const [row] = queryRows<{ created_at: string }>('SELECT created_at FROM chunks');
+    expect(Date.parse(row.created_at)).toBeGreaterThanOrEqual(before);
+  });
+
+  it.each([
+    ['-Users-me-devs-golang-go-llm-agent', '/Users/me/devs/golang/go-llm-agent'],
+    ['-Users-me-devs-my-app-v1-2', '/Users/me/devs/my.app_v1-2'],
+    ['-Users-me--claude', '/Users/me/.claude'],
+  ])('should use the transcript cwd for %s instead of decoding the dir name', async (dir, cwd) => {
+    writeSession(dir, 'cccc3333', turn(cwd, '2026-10-05T06:44:12.345Z'));
+
+    await recoverTranscripts(configPath, fakeProjectsDir);
+
+    expect(queryRows<{ project_path: string }>('SELECT project_path FROM sessions')).toEqual([
+      { project_path: cwd },
+    ]);
+    expect(queryRows<{ project_path: string }>('SELECT DISTINCT project_path FROM chunks')).toEqual(
+      [{ project_path: cwd }]
+    );
+  });
+
+  it('should use the Windows cwd as recorded', async () => {
+    const cwd = 'C:\\Users\\me\\my-proj';
+    writeSession('C--Users-me-my-proj', 'dddd4444', turn(cwd, '2026-10-05T06:44:12.345Z'));
+
+    await recoverTranscripts(configPath, fakeProjectsDir);
+
+    expect(queryRows<{ project_path: string }>('SELECT project_path FROM sessions')).toEqual([
+      { project_path: cwd },
+    ]);
+  });
+
+  it('should fall back to the decoded dir name when no line has a cwd', async () => {
+    writeSession('C--Users-me-proj', 'eeee5555', turn(undefined, '2026-10-05T06:44:12.345Z'));
+    writeSession('-tmp-nocwd', 'ffff6666', turn(undefined, '2026-10-05T06:44:12.345Z'));
+
+    await recoverTranscripts(configPath, fakeProjectsDir);
+
+    expect(
+      queryRows<{ project_path: string }>('SELECT project_path FROM sessions ORDER BY session_id')
+    ).toEqual([{ project_path: 'C:\\Users\\me\\proj' }, { project_path: '/tmp/nocwd' }]);
+  });
+
+  it('should read cwd per session when one directory holds sessions of different cwd', async () => {
+    writeSession('-tmp-x', 'aaaa0001', turn('/tmp/x-one', '2026-10-05T06:44:12.345Z'));
+    writeSession('-tmp-x', 'aaaa0002', turn('/tmp/x.two', '2026-10-05T06:44:12.345Z'));
+
+    await recoverTranscripts(configPath, fakeProjectsDir);
+
+    expect(
+      queryRows<{ project_path: string }>('SELECT project_path FROM sessions ORDER BY session_id')
+    ).toEqual([{ project_path: '/tmp/x-one' }, { project_path: '/tmp/x.two' }]);
+  });
+
+  it('should apply projectAliases on top of the transcript cwd', async () => {
+    const aliasConfig = path.join(tmpDir, 'config-alias2.json');
+    fs.writeFileSync(
+      aliasConfig,
+      JSON.stringify({
+        database: { path: dbPath },
+        storage: { jsonlDir, projectAliases: { '/Users/me/go-llm-agent': '/canonical/agent' } },
+      }),
+      'utf-8'
+    );
+    writeSession(
+      '-Users-me-go-llm-agent',
+      'aaaa7777',
+      turn('/Users/me/go-llm-agent', '2026-10-05T06:44:12.345Z')
+    );
+
+    await recoverTranscripts(aliasConfig, fakeProjectsDir);
+
+    expect(queryRows<{ project_path: string }>('SELECT project_path FROM sessions')).toEqual([
+      { project_path: '/canonical/agent' },
+    ]);
+  });
+
+  it('records the first and last questions, cut to 200 characters, and an 8-character id in details', async () => {
+    const ts = new Date().toISOString();
+    const ask = (text: string) =>
+      line({
+        type: 'user',
+        sessionId: 's',
+        timestamp: ts,
+        message: { role: 'user', content: text },
+      });
+    const [, answer] = turn(undefined, ts);
+    writeSession('-tmp-p', 'abcdefgh-long-id', [
+      ask('a'.repeat(250)),
+      answer,
+      ask('b'.repeat(250)),
+      answer,
+    ]);
+
+    const result = await recoverTranscripts(configPath, fakeProjectsDir);
+
+    expect(result.details).toEqual([expect.stringMatching(/^abcdefgh \(\d+ chunks\)$/)]);
+    expect(
+      queryRows<{ first_message: string; last_message: string }>(
+        'SELECT first_message, last_message FROM sessions'
+      )
+    ).toEqual([{ first_message: 'a'.repeat(200), last_message: 'b'.repeat(200) }]);
+  });
+
+  it('imports a transcript without any question, leaving the first and last questions empty', async () => {
+    writeSession('-tmp-p', 'noask001', [turn(undefined, new Date().toISOString())[1]]);
+
+    expect((await recoverTranscripts(configPath, fakeProjectsDir)).recovered).toBe(1);
+    expect(
+      queryRows<{ first_message: string | null; last_message: string | null }>(
+        'SELECT first_message, last_message FROM sessions'
+      )
+    ).toEqual([{ first_message: null, last_message: null }]);
+  });
+
+  describe('retention', () => {
+    const NOW = new Date('2026-10-17T12:00:00.000Z');
+    const cutoff = new Date(NOW);
+    cutoff.setDate(cutoff.getDate() - 90);
+    const at = (ms: number) => new Date(cutoff.getTime() + ms).toISOString();
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const sessionCount = () => queryRows<{ n: number }>('SELECT COUNT(*) AS n FROM sessions')[0].n;
+
+    it('does not import a conversation that ended before the retention cutoff', async () => {
+      writeSession('-tmp-p', 'old00001', turn(undefined, at(-1)));
+
+      const result = await recoverTranscripts(configPath, fakeProjectsDir);
+
+      expect(result.recovered).toBe(0);
+      expect(result.skipped).toBe(1);
+      expect(sessionCount()).toBe(0);
+    });
+
+    it('imports a conversation that ended exactly at the cutoff', async () => {
+      writeSession('-tmp-p', 'edge0001', turn(undefined, at(0)));
+
+      const result = await recoverTranscripts(configPath, fakeProjectsDir);
+
+      expect(result.recovered).toBe(1);
+      expect(queryRows<{ created_at: string }>('SELECT created_at FROM chunks')).toEqual([
+        { created_at: at(0) },
+      ]);
+    });
+
+    it('imports an old conversation when retention is disabled', async () => {
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          database: { path: dbPath },
+          storage: { jsonlDir },
+          maintenance: { enabled: false },
+        }),
+        'utf-8'
+      );
+      writeSession('-tmp-p', 'old00002', turn(undefined, at(-1)));
+
+      expect((await recoverTranscripts(configPath, fakeProjectsDir)).recovered).toBe(1);
+    });
+
+    it('imports a conversation skipped as aged once retention is disabled', async () => {
+      writeSession('-tmp-p', 'old00003', turn(undefined, at(-1)));
+      expect((await recoverTranscripts(configPath, fakeProjectsDir)).skipped).toBe(1);
+
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          database: { path: dbPath },
+          storage: { jsonlDir },
+          maintenance: { enabled: false },
+        }),
+        'utf-8'
+      );
+
+      expect((await recoverTranscripts(configPath, fakeProjectsDir)).recovered).toBe(1);
+      expect(sessionCount()).toBe(1);
+    });
+
+    // 整理はチャンクの created_at（ターン先頭の時刻）で消す。最後の行の時刻で判定すると、消えては入るを繰り返す
+    it('does not import a conversation whose newest turn started before the cutoff', async () => {
+      const [question, answer] = turn(undefined, at(-1000));
+      const lateAnswer = answer.replace(at(-1000), at(1000));
+      writeSession('-tmp-p', 'late0001', [question, lateAnswer]);
+      writeSession('-tmp-p', 'nots0001', [question, answer.replace(/,"timestamp":"[^"]+"/, '')]);
+
+      const result = await recoverTranscripts(configPath, fakeProjectsDir);
+
+      expect(result.recovered).toBe(0);
+      expect(sessionCount()).toBe(0);
+    });
+
+    it('imports a conversation whose earlier turn is newer than the cutoff even when the last one is not', async () => {
+      writeSession('-tmp-p', 'skew0001', [
+        ...turn(undefined, at(1000)),
+        ...turn(undefined, at(-1000)),
+      ]);
+
+      expect((await recoverTranscripts(configPath, fakeProjectsDir)).recovered).toBe(1);
+    });
+
+    it('remembers a skipped aged transcript by size so the next run does not parse it again', async () => {
+      writeSession('-tmp-p', 'old00004', turn(undefined, at(-1)));
+      const file = path.join(fakeProjectsDir, '-tmp-p', 'old00004.jsonl');
+      await recoverTranscripts(configPath, fakeProjectsDir);
+      const marks = () =>
+        JSON.parse(fs.readFileSync(path.join(tmpDir, 'recover-state.json'), 'utf-8')).sizes;
+      expect(marks()).toEqual({ old00004: fs.statSync(file).size });
+
+      // 同じサイズのまま中身を最近の会話に変えても、目印があれば読まない
+      fs.writeFileSync(file, turn(undefined, at(1)).join('\n') + '\n', 'utf-8');
+      const again = await recoverTranscripts(configPath, fakeProjectsDir);
+      expect(again.recovered).toBe(0);
+      expect(again.skipped).toBe(1);
+
+      fs.appendFileSync(file, '\n');
+      expect((await recoverTranscripts(configPath, fakeProjectsDir)).recovered).toBe(1);
+    });
+
+    it('stops re-importing after maintenance deleted the aged session', async () => {
+      writeSession('-tmp-p', 'keep0001', turn(undefined, at(1000)));
+      writeSession('-tmp-p', 'old00003', turn(undefined, at(-1000)));
+      await recoverTranscripts(configPath, fakeProjectsDir);
+      const db = getDatabase(dbPath);
+      initializeSchema(db);
+      const store = new Store(db);
+      store.deleteChunksBefore(cutoff.toISOString());
+      store.deleteOrphanedSessions();
+      db.close();
+
+      const again = await recoverTranscripts(configPath, fakeProjectsDir);
+
+      expect(again.recovered).toBe(0);
+      expect(queryRows<{ session_id: string }>('SELECT session_id FROM sessions')).toEqual([
+        { session_id: 'keep0001' },
+      ]);
+    });
+  });
+
   it('should apply storage.projectAliases to the recovered projectPath', async () => {
     // 共有JSONLを複数ホストで同期していると、同じ論理プロジェクトでも
     // ホストごとにプロジェクトディレクトリ名が変わる。save / recall / inject と同じく
@@ -100,7 +400,7 @@ describe('recoverTranscripts', () => {
 
     const projectDir = path.join(fakeProjectsDir, '-tmp-testproject');
     fs.mkdirSync(projectDir, { recursive: true });
-    fs.copyFileSync(fixtureTranscript, path.join(projectDir, 'aliased-session.jsonl'));
+    copyRecentTranscript(path.join(projectDir, 'aliased-session.jsonl'));
 
     const result = await recoverTranscripts(aliasConfig, fakeProjectsDir);
     expect(result.recovered).toBe(1);
@@ -127,7 +427,7 @@ describe('recoverTranscripts', () => {
 
     const projectDir = path.join(fakeProjectsDir, '-tmp-testproject');
     fs.mkdirSync(projectDir, { recursive: true });
-    fs.copyFileSync(fixtureTranscript, path.join(projectDir, 'unaliased-session.jsonl'));
+    copyRecentTranscript(path.join(projectDir, 'unaliased-session.jsonl'));
 
     const result = await recoverTranscripts(aliasConfig, fakeProjectsDir);
     expect(result.recovered).toBe(1);
@@ -144,7 +444,7 @@ describe('recoverTranscripts', () => {
   it('skips sessions recorded as deleted', async () => {
     const projectDir = path.join(fakeProjectsDir, '-tmp-testproject');
     fs.mkdirSync(projectDir, { recursive: true });
-    fs.copyFileSync(fixtureTranscript, path.join(projectDir, 'deleted-session-1.jsonl'));
+    copyRecentTranscript(path.join(projectDir, 'deleted-session-1.jsonl'));
     recordSessionDeletion(deletionsFile(dbPath), 'deleted-session-1');
 
     const result = await recoverTranscripts(configPath, fakeProjectsDir);
@@ -171,7 +471,7 @@ describe('recoverTranscripts', () => {
     // 同じセッションIDのトランスクリプトファイルを配置
     const projectDir = path.join(fakeProjectsDir, '-tmp-testproject');
     fs.mkdirSync(projectDir, { recursive: true });
-    fs.copyFileSync(fixtureTranscript, path.join(projectDir, 'already-saved.jsonl'));
+    copyRecentTranscript(path.join(projectDir, 'already-saved.jsonl'));
 
     const result = await recoverTranscripts(configPath, fakeProjectsDir);
 
@@ -196,8 +496,8 @@ describe('recoverTranscripts', () => {
     fs.mkdirSync(projectDir1, { recursive: true });
     fs.mkdirSync(projectDir2, { recursive: true });
 
-    fs.copyFileSync(fixtureTranscript, path.join(projectDir1, 'session-a.jsonl'));
-    fs.copyFileSync(fixtureTranscript, path.join(projectDir2, 'session-b.jsonl'));
+    copyRecentTranscript(path.join(projectDir1, 'session-a.jsonl'));
+    copyRecentTranscript(path.join(projectDir2, 'session-b.jsonl'));
 
     const result = await recoverTranscripts(configPath, fakeProjectsDir);
 
@@ -239,7 +539,7 @@ describe('recoverTranscripts', () => {
   it('should set correct projectPath from directory name', async () => {
     const projectDir = path.join(fakeProjectsDir, '-Users-testuser-devs-myapp');
     fs.mkdirSync(projectDir, { recursive: true });
-    fs.copyFileSync(fixtureTranscript, path.join(projectDir, 'path-test-session.jsonl'));
+    copyRecentTranscript(path.join(projectDir, 'path-test-session.jsonl'));
 
     await recoverTranscripts(configPath, fakeProjectsDir);
 
@@ -258,7 +558,7 @@ describe('recoverTranscripts', () => {
   it('should not re-recover on second run', async () => {
     const projectDir = path.join(fakeProjectsDir, '-tmp-testproject');
     fs.mkdirSync(projectDir, { recursive: true });
-    fs.copyFileSync(fixtureTranscript, path.join(projectDir, 'idempotent-session.jsonl'));
+    copyRecentTranscript(path.join(projectDir, 'idempotent-session.jsonl'));
 
     const result1 = await recoverTranscripts(configPath, fakeProjectsDir);
     expect(result1.recovered).toBe(1);
@@ -439,6 +739,8 @@ describe('recoverTranscripts refreshes grown legacy sessions', () => {
     initializeSchema(db);
     new Store(db).deleteSession(SID);
     db.close();
+    // 伸びた生ログは目印で省かれず、削除した本文の判定まで進む
+    appendTurn();
 
     const result = await recoverTranscripts(configPath, projectsDir);
 
@@ -591,5 +893,453 @@ describe('recoverTranscripts refreshes grown legacy sessions', () => {
 
     expect(result.refreshed).toBe(0);
     expect(rows().map((row) => row.turn_key)).toEqual(['tk-hook']);
+  });
+});
+
+describe('recoverTranscripts repairs sessions imported with the wrong time or project path', () => {
+  let tmpDir: string;
+  let dbPath: string;
+  let jsonlDir: string;
+  let configPath: string;
+  let projectsDir: string;
+  let file: string;
+  const SID = 'repair-0001';
+  const CWD = '/w/go-llm-agent';
+  const WRONG = '/w/go/llm/agent';
+
+  const line = (type: 'user' | 'assistant', text: string, ts?: string) =>
+    JSON.stringify({
+      type,
+      sessionId: SID,
+      cwd: CWD,
+      ...(ts ? { timestamp: ts } : {}),
+      message:
+        type === 'user'
+          ? { role: 'user', content: text }
+          : { role: 'assistant', content: [{ type: 'text', text }] },
+    });
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-repair-'));
+    dbPath = path.join(tmpDir, 'test.db');
+    jsonlDir = path.join(tmpDir, 'jsonl');
+    configPath = path.join(tmpDir, 'config.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ database: { path: dbPath }, storage: { jsonlDir } })
+    );
+    projectsDir = path.join(tmpDir, 'projects');
+    fs.mkdirSync(path.join(projectsDir, '-w-go-llm-agent'), { recursive: true });
+    file = path.join(projectsDir, '-w-go-llm-agent', `${SID}.jsonl`);
+    fs.writeFileSync(
+      file,
+      [
+        line('user', 'first question', '2026-09-01T00:00:00Z'),
+        line('assistant', 'first answer', '2026-09-01T00:01:00Z'),
+      ].join('\n') + '\n'
+    );
+  });
+
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const sql = (statement: string, ...params: string[]) => {
+    const db = getDatabase(dbPath);
+    try {
+      initializeSchema(db);
+      db.prepare(statement).run(...params);
+    } finally {
+      db.close();
+    }
+  };
+  const all = <T>(statement: string): T[] => {
+    const db = getDatabase(dbPath);
+    try {
+      initializeSchema(db);
+      return db.prepare(statement).all() as T[];
+    } finally {
+      db.close();
+    }
+  };
+  const marker = () => path.join(tmpDir, 'recover-repaired');
+
+  // 修復前の実装が作った状態を再現する。取り込みは正しく行われるので、後から壊す。
+  async function importThenCorrupt(
+    corrupt: { createdAt?: string; projectPath?: string } = {}
+  ): Promise<void> {
+    await recoverTranscripts(configPath, projectsDir);
+    if (corrupt.createdAt) sql('UPDATE chunks SET created_at = ?', corrupt.createdAt);
+    if (corrupt.projectPath) {
+      sql('UPDATE chunks SET project_path = ?', corrupt.projectPath);
+      sql('UPDATE sessions SET project_path = ?', corrupt.projectPath);
+    }
+    fs.rmSync(marker(), { force: true });
+  }
+
+  it('replaces chunks stamped with the import time by the conversation time', async () => {
+    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z' });
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.repaired).toBe(1);
+    expect(result.details).toEqual(['repair-0 (repaired)']);
+    expect(
+      all<{ created_at: string; turn_key: string | null }>(
+        'SELECT created_at, turn_key FROM chunks'
+      ).map((r) => [r.created_at, r.turn_key !== null])
+    ).toEqual([['2026-09-01T00:01:00Z', true]]);
+  });
+
+  it('repairs a project path that was decoded from the directory name', async () => {
+    await importThenCorrupt({ projectPath: WRONG });
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.repaired).toBe(1);
+    expect(all('SELECT project_path FROM sessions')).toEqual([{ project_path: CWD }]);
+    expect(all('SELECT DISTINCT project_path FROM chunks')).toEqual([{ project_path: CWD }]);
+  });
+
+  it('detects nothing on the next run, even when the repair marker is gone', async () => {
+    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z', projectPath: WRONG });
+    await recoverTranscripts(configPath, projectsDir);
+    fs.rmSync(marker());
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.repaired).toBe(0);
+  });
+
+  it('keeps the repaired rows after a rebuild from the JSONL store', async () => {
+    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z', projectPath: WRONG });
+    await recoverTranscripts(configPath, projectsDir);
+
+    const history = await foldCanonicalHistory(listJsonlFiles(jsonlDir));
+
+    expect(history.errors).toEqual([]);
+    expect(history.legacyChunks.filter((c) => c.sessionId === SID)).toEqual([]);
+    const turns = [...history.turns.values()].filter((t) => t.sessionId === SID);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].projectPath).toBe(CWD);
+  });
+
+  it.each([
+    ['exactly one hour after the end', '2026-09-01T01:01:00.000Z', 0],
+    ['one millisecond over an hour after the end', '2026-09-01T01:01:00.001Z', 1],
+    ['within the hour', '2026-09-01T00:30:00.000Z', 0],
+  ])('handles a first chunk stamped %s', async (_name, createdAt, repaired) => {
+    await importThenCorrupt({ createdAt });
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.repaired).toBe(repaired);
+  });
+
+  it('does not repair a v2 session by timestamp alone', async () => {
+    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z' });
+    sql('UPDATE chunks SET turn_key = ?', 'claude:turn');
+
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+  });
+
+  it('skips the scan once the repair marker exists', async () => {
+    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z' });
+    fs.writeFileSync(marker(), '');
+
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+  });
+
+  it('writes the repair marker only after every saved session was checked', async () => {
+    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z' });
+    fs.chmodSync(file, 0o000);
+
+    const failing = await recoverTranscripts(configPath, projectsDir);
+    expect(failing.errors).toBe(1);
+    expect(fs.existsSync(marker())).toBe(false);
+
+    fs.chmodSync(file, 0o600);
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(1);
+    expect(fs.existsSync(marker())).toBe(true);
+  });
+
+  it('writes the repair marker even when a transcript not yet saved fails to import', async () => {
+    const unreadable = path.join(projectsDir, '-w-go-llm-agent', 'broken-0001.jsonl');
+    fs.writeFileSync(unreadable, 'x\n');
+    fs.chmodSync(unreadable, 0o000);
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.errors).toBe(1);
+    expect(fs.existsSync(marker())).toBe(true);
+  });
+
+  it('leaves a session with a pending prompt to the hooks', async () => {
+    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z' });
+    writePendingPrompt(tmpDir, {
+      version: 2,
+      runtime: 'claude',
+      sessionId: SID,
+      projectPath: CWD,
+      prompt: 'live',
+      source: {},
+      pendingKey: 'pk-1',
+      turnSequence: 1,
+      sourceOrder: '00000000000000000003',
+      createdAt: '2026-09-02T00:00:00Z',
+    });
+
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+  });
+
+  it('does not repair a session with a deleted chunk, so the deleted text stays out', async () => {
+    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z' });
+    recordChunkDeletion(
+      deletionsFile(dbPath),
+      '[User]\nfirst question\n\n[Assistant]\nfirst answer'
+    );
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.repaired).toBe(0);
+    expect(all<{ turn_key: string | null }>('SELECT turn_key FROM chunks')).toEqual([
+      { turn_key: null },
+    ]);
+  });
+
+  it('does not repair when only one of several chunks was deleted', async () => {
+    fs.appendFileSync(
+      file,
+      [
+        line('user', 'second question', '2026-09-01T00:02:00Z'),
+        line('assistant', 'second answer', '2026-09-01T00:03:00Z'),
+      ].join('\n') + '\n'
+    );
+    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z' });
+    recordChunkDeletion(
+      deletionsFile(dbPath),
+      '[User]\nfirst question\n\n[Assistant]\nfirst answer'
+    );
+
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+    expect(all<{ turn_key: string | null }>('SELECT turn_key FROM chunks')).toEqual([
+      { turn_key: null },
+      { turn_key: null },
+    ]);
+  });
+
+  it('leaves a session without any answered turn untouched', async () => {
+    fs.writeFileSync(file, line('user', 'unanswered', '2026-09-01T00:00:00Z') + '\n');
+    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z' });
+
+    expect((await recoverTranscripts(configPath, projectsDir)).repaired).toBe(0);
+    expect(all<{ turn_key: string | null }>('SELECT turn_key FROM chunks')).toEqual([
+      { turn_key: null },
+    ]);
+  });
+
+  it('does not repair a hook-managed session only because its project path differs', async () => {
+    await importThenCorrupt();
+    sql('UPDATE chunks SET turn_key = ?, project_path = ?', 'tk-hook', '/elsewhere');
+    sql('UPDATE sessions SET project_path = ?', '/elsewhere');
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.repaired).toBe(0);
+    expect(all('SELECT turn_key, project_path FROM chunks')).toEqual([
+      { turn_key: 'tk-hook', project_path: '/elsewhere' },
+    ]);
+  });
+
+  it('does not repair a session saved by the Stop hook, even when its keys follow the offset rule', async () => {
+    const dirA = path.join(tmpDir, 'A');
+    const dirB = path.join(tmpDir, 'B');
+    fs.mkdirSync(dirA);
+    fs.mkdirSync(dirB);
+    const now = new Date().toISOString();
+    fs.writeFileSync(
+      file,
+      [
+        JSON.stringify({
+          type: 'user',
+          sessionId: SID,
+          cwd: dirA,
+          timestamp: now,
+          message: { role: 'user', content: 'q1' },
+        }),
+        line('assistant', 'a1', now),
+      ].join('\n') + '\n'
+    );
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        database: { path: dbPath },
+        storage: { jsonlDir, transcriptArchiveDir: path.join(tmpDir, 'archive') },
+        maintenance: { enabled: false },
+      })
+    );
+    await checkpointStop(
+      'claude',
+      JSON.stringify({
+        hook_event_name: 'Stop',
+        session_id: SID,
+        transcript_path: file,
+        cwd: dirB,
+      }),
+      configPath
+    );
+    const before = all<{ project_path: string; turn_key: string | null }>(
+      'SELECT project_path, turn_key FROM chunks'
+    );
+    expect(before.map((r) => r.project_path)).toEqual([fs.realpathSync(dirB)]);
+    expect(before[0].turn_key).not.toBeNull();
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.repaired).toBe(0);
+    expect(all('SELECT project_path, turn_key FROM chunks')).toEqual(before);
+  });
+
+  it('does not repair a session that already aged out of retention', async () => {
+    const old = new Date();
+    old.setDate(old.getDate() - 120);
+    fs.writeFileSync(
+      file,
+      [
+        line('user', 'old question', old.toISOString()),
+        line('assistant', 'old answer', old.toISOString()),
+      ].join('\n') + '\n'
+    );
+    const db = getDatabase(dbPath);
+    initializeSchema(db);
+    const store = new Store(db);
+    store.insertSession({
+      sessionId: SID,
+      projectPath: WRONG,
+      startedAt: old.toISOString(),
+      endedAt: old.toISOString(),
+    });
+    db.close();
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.repaired).toBe(0);
+    expect(all('SELECT project_path FROM sessions')).toEqual([{ project_path: WRONG }]);
+  });
+
+  it('stamps chunks of a transcript without valid timestamps with the file mtime', async () => {
+    const mtime = new Date(Date.now() - 10 * 86400000);
+    mtime.setMilliseconds(0);
+    fs.writeFileSync(
+      file,
+      [line('user', 'q', 'zzz-not-a-date'), line('assistant', 'a', 'zzz-not-a-date')].join('\n') +
+        '\n'
+    );
+    fs.utimesSync(file, mtime, mtime);
+
+    await recoverTranscripts(configPath, projectsDir);
+
+    expect(all('SELECT created_at FROM chunks')).toEqual([{ created_at: mtime.toISOString() }]);
+  });
+
+  it('does not import an untimed transcript whose file is older than the retention window', async () => {
+    const mtime = new Date(Date.now() - 120 * 86400000);
+    fs.writeFileSync(file, [line('user', 'q'), line('assistant', 'a')].join('\n') + '\n');
+    fs.utimesSync(file, mtime, mtime);
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.recovered).toBe(0);
+    expect(all('SELECT * FROM sessions')).toEqual([]);
+  });
+
+  it('clamps a future file mtime when stamping untimed chunks and the session row', async () => {
+    const future = new Date(Date.now() + 3650 * 86400000);
+    fs.writeFileSync(file, [line('user', 'q'), line('assistant', 'a')].join('\n') + '\n');
+    fs.utimesSync(file, future, future);
+
+    await recoverTranscripts(configPath, projectsDir);
+
+    const limit = Date.now() + 86400000;
+    const [chunk] = all<{ created_at: string }>('SELECT created_at FROM chunks');
+    const [session] = all<{ started_at: string; ended_at: string }>(
+      'SELECT started_at, ended_at FROM sessions'
+    );
+    for (const value of [chunk.created_at, session.started_at, session.ended_at]) {
+      expect(Date.parse(value)).toBeLessThanOrEqual(limit);
+      expect(Date.parse(value)).toBeGreaterThan(limit - 60000);
+    }
+  });
+
+  it('records the file mtime as the session time when the transcript has no timestamps', async () => {
+    const mtime = new Date(Date.now() - 10 * 86400000);
+    mtime.setMilliseconds(0);
+    fs.writeFileSync(file, [line('user', 'q'), line('assistant', 'a')].join('\n') + '\n');
+    fs.utimesSync(file, mtime, mtime);
+
+    await recoverTranscripts(configPath, projectsDir);
+
+    expect(all('SELECT started_at, ended_at FROM sessions')).toEqual([
+      { started_at: mtime.toISOString(), ended_at: mtime.toISOString() },
+    ]);
+  });
+
+  it('keeps the transcript timestamps for the session row when they exist', async () => {
+    await recoverTranscripts(configPath, projectsDir);
+
+    expect(all('SELECT started_at, ended_at FROM sessions')).toEqual([
+      { started_at: '2026-09-01T00:00:00Z', ended_at: '2026-09-01T00:01:00Z' },
+    ]);
+  });
+
+  it('uses the file mtime for untimed turns when a grown session is refreshed', async () => {
+    fs.writeFileSync(file, [line('user', 'q1'), line('assistant', 'a1')].join('\n') + '\n');
+    await recoverTranscripts(configPath, projectsDir);
+    const mtime = new Date(Date.now() - 5 * 86400000);
+    mtime.setMilliseconds(0);
+    fs.appendFileSync(file, [line('user', 'q2'), line('assistant', 'a2')].join('\n') + '\n');
+    fs.utimesSync(file, mtime, mtime);
+
+    await recoverTranscripts(configPath, projectsDir);
+
+    expect(
+      all<{ created_at: string }>('SELECT created_at FROM chunks ORDER BY id').map(
+        (r) => r.created_at
+      )
+    ).toEqual([mtime.toISOString(), mtime.toISOString()]);
+  });
+
+  it('stamps a turn without timestamps with the last conversation time, not the import time', async () => {
+    await recoverTranscripts(configPath, projectsDir);
+    fs.appendFileSync(
+      file,
+      [line('user', 'untimed question'), line('assistant', 'untimed answer')].join('\n') + '\n'
+    );
+
+    await recoverTranscripts(configPath, projectsDir);
+
+    expect(
+      all<{ created_at: string }>('SELECT created_at FROM chunks ORDER BY id').map(
+        (r) => r.created_at
+      )
+    ).toEqual(['2026-09-01T00:01:00Z', '2026-09-01T00:01:00Z']);
+  });
+
+  it('resolves a symlinked cwd to the real path, like the save hook', async () => {
+    const real = path.join(tmpDir, 'real-proj');
+    const link = path.join(tmpDir, 'link-proj');
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, link);
+    fs.writeFileSync(
+      file,
+      [
+        line('user', 'q', '2026-09-01T00:00:00Z').replace(CWD, link),
+        line('assistant', 'a', '2026-09-01T00:01:00Z'),
+      ].join('\n') + '\n'
+    );
+
+    await recoverTranscripts(configPath, projectsDir);
+
+    expect(all('SELECT project_path FROM sessions')).toEqual([
+      { project_path: fs.realpathSync(real) },
+    ]);
   });
 });

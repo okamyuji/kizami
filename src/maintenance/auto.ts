@@ -20,6 +20,24 @@ function shouldRunMaintenance(store: Store, intervalHours: number): boolean {
   return elapsedHours >= intervalHours;
 }
 
+function retentionCutoff(maxChunkAgeDays: number, now: Date): Date {
+  const cutoff = new Date(now);
+  cutoff.setDate(cutoff.getDate() - maxChunkAgeDays);
+  return cutoff;
+}
+
+/**
+ * 保持期間より前に終わった会話か。自動メンテナンスはその会話のチャンクを消し、行の無いセッションも消す。
+ * 取り込み側が同じ会話を入れ直すと、整理のたびに消えては戻る。
+ */
+export function isAgedOut(config: EngramConfig, endedAt: string | undefined, now = new Date()) {
+  if (!config.maintenance.enabled) return false;
+  // 終了時刻が無ければ NaN になり、比較は false になる
+  return (
+    Date.parse(String(endedAt)) < retentionCutoff(config.maintenance.maxChunkAgeDays, now).getTime()
+  );
+}
+
 export function runAutoMaintenance(store: Store, config: EngramConfig): MaintenanceResult {
   if (!config.maintenance.enabled) {
     return {
@@ -47,8 +65,7 @@ export function runAutoMaintenance(store: Store, config: EngramConfig): Maintena
   let totalChunksDeleted = 0;
 
   // 1. 古いチャンクを削除
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - config.maintenance.maxChunkAgeDays);
+  const cutoffDate = retentionCutoff(config.maintenance.maxChunkAgeDays, new Date());
   const cutoffStr = cutoffDate
     .toISOString()
     .replace('T', ' ')

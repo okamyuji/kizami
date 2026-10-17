@@ -1,8 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { EngramConfig } from '@/config';
-import type { Store } from '@/db/store';
-import { parseTranscript } from '@/parser/transcript';
+import type { Session, Store } from '@/db/store';
+import { parseTranscript, conversationTime } from '@/parser/transcript';
+import type { TranscriptMessage } from '@/parser/transcript';
+import { isAgedOut } from '@/maintenance/auto';
 import { buildChunks } from '@/parser/chunker';
 import { contentDigest } from '@/archive/deletions';
 import { readPendingPrompts } from '@/checkpoint/state';
@@ -38,6 +40,24 @@ export function saveRecoverMarks(config: EngramConfig, marks: RecoverMarks): voi
   fs.renameSync(tmp, file);
 }
 
+function repairMarkerFile(config: EngramConfig): string {
+  return path.join(path.dirname(config.database.path), 'recover-repaired');
+}
+
+/** 時刻と projectPath の修復を済ませたか。済みなら保存済みセッションの cwd を読み直さない。 */
+export function isRepairDone(config: EngramConfig): boolean {
+  return fs.existsSync(repairMarkerFile(config));
+}
+
+export function markRepairDone(config: EngramConfig): void {
+  try {
+    // 'wx' は既存のパスに失敗する。目印の位置に置かれたシンボリックリンクの先を、切り詰めない
+    fs.closeSync(fs.openSync(repairMarkerFile(config), 'wx', 0o600));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+  }
+}
+
 export type RefreshOutcome = 'refreshed' | 'unchanged' | 'skipped';
 
 interface RefreshContext {
@@ -68,6 +88,56 @@ async function commit(
   );
 }
 
+/** 時刻の無いターンには会話の最後の時刻を使う。どの行にも無ければ生ログの更新時刻を使う。 */
+function fallbackTime(messages: TranscriptMessage[], mtime: Date): string {
+  return conversationTime([...messages].reverse().find((m) => m.timestamp)?.timestamp, mtime);
+}
+
+// 取り込み時刻が刻まれた v1 の行を見分ける閾値。hook の保存は会話の終了から数分以内に着く。
+const IMPORT_STAMP_GAP_MS = 60 * 60 * 1000;
+
+function needsRepair(store: Store, session: Session, projectPath: string): boolean {
+  if (session.projectPath !== projectPath) return true;
+  // v1 の行が無いと開始時刻は undefined になり、NaN との比較は false になる
+  const start = Date.parse(String(store.getLegacyChunkStart(session.sessionId)));
+  return start - Date.parse(String(session.endedAt)) > IMPORT_STAMP_GAP_MS;
+}
+
+/**
+ * 古い実装は projectPath をディレクトリ名から誤って復号し、チャンクに取り込み時刻を刻んだ。
+ * そのセッションを、生ログから作り直した全ターンで置き換える。判定が外れれば何もしない。
+ * v1 の行だけのセッションに限る。hook は同じ offset 鍵を付けるため、鍵を持つセッションは hook の管理下にあり触らない。
+ * 置き換えは legacy_mismatch の reset として JSONL に残るので、rebuild しても直した値が残る。
+ */
+export async function repairIfMisdated(ctx: RefreshContext, projectPath: string): Promise<boolean> {
+  const { config, store, sessionId, transcriptPath, marks } = ctx;
+  const session = store.getSession(sessionId);
+  if (!session || store.getSessionTurnKeys(sessionId).length > 0) return false;
+  if (!needsRepair(store, session, projectPath)) return false;
+  const { size, mtime } = fs.statSync(transcriptPath);
+  // 保持期間より古い会話は、直しても整理で消える。取り込み時刻の行は保持期間の後に消え、入れ直されない
+  if (isAgedOut(config, session.endedAt)) return false;
+  if (readPendingPrompts(path.dirname(config.database.path), 'claude', sessionId).length > 0) {
+    return false;
+  }
+
+  const messages = await parseTranscript(transcriptPath);
+  const chunks = buildChunks(messages, sessionId, projectPath);
+  if (chunks.some((c) => ctx.deletedChunkDigests.has(contentDigest(c.content)))) return false;
+  const candidates = buildClaudeTurnCandidates(
+    messages,
+    sessionId,
+    projectPath,
+    size,
+    fallbackTime(messages, mtime)
+  );
+  if (candidates.length === 0) return false;
+
+  await commit(config, sessionId, candidates, true);
+  marks.set(sessionId, size);
+  return true;
+}
+
 /**
  * recover が取り込んだ後に生ログが伸びたセッションへ、伸びた分を反映する。
  * v1 の行が残るセッションは全ターンの v2 baseline で置き換える。v2 だけのセッションは、
@@ -78,7 +148,7 @@ async function commit(
  */
 export async function refreshIfGrown(ctx: RefreshContext): Promise<RefreshOutcome> {
   const { config, store, sessionId, transcriptPath, marks } = ctx;
-  const size = fs.statSync(transcriptPath).size;
+  const { size, mtime } = fs.statSync(transcriptPath);
   if (marks.get(sessionId) === size) return 'unchanged';
   const stateRoot = path.dirname(config.database.path);
   if (readPendingPrompts(stateRoot, 'claude', sessionId).length > 0) return 'skipped';
@@ -95,7 +165,7 @@ export async function refreshIfGrown(ctx: RefreshContext): Promise<RefreshOutcom
     sessionId,
     session.projectPath,
     size,
-    new Date().toISOString()
+    fallbackTime(messages, mtime)
   );
 
   // hook が後から足した v2 の行は数えない。混在していれば v1 より生ログのチャンクが多くなり、置き換わる。

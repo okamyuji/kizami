@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { parseTranscriptText } from '@/parser/transcript';
 import { buildTurns, turnToText } from '@/parser/chunker';
 import { redactTurnText } from '@/archive/deletions';
+import { fenceUntrusted, sanitizeQuoted } from '@/search/formatter';
 
 export interface ArchiveHit {
   sessionId: string;
@@ -30,8 +31,10 @@ function keptSnippet(raw: string, terms: string[], deleted: Set<string>): string
 }
 
 /**
- * FTS のチャンクは maintenance で消える。消えた期間のセッションだけを生ログから探す。
- * ponytail: 1 回の検索で対象ファイルを全文読む。保管が数 GB を超えて遅くなったら索引を作る。
+ * FTS に無い会話を生ログから探す。maintenance で消えた期間と、取り込まなかった会話が対象。
+ * indexedSessions を渡すと、そこに無いセッションは新しいファイルでも読む。渡さなければ古いファイルだけを読む。
+ * ponytail: 1 回の検索で対象ファイルを全文読む。索引が空だと保管の全ファイルを読み、実測で 2.1 GB が 6〜9 秒・RSS 約 1.4 GB。
+ * 保管がこれより増えたら索引を作る。
  */
 export function scanArchive(
   query: string,
@@ -40,7 +43,8 @@ export function scanArchive(
   now = Date.now(),
   limit = 10,
   deletedSessions: Set<string> = new Set(),
-  deletedChunkDigests: Set<string> = new Set()
+  deletedChunkDigests: Set<string> = new Set(),
+  indexedSessions?: ReadonlySet<string>
 ): ArchiveHit[] {
   if (!query.trim()) return [];
   const terms = query.toLowerCase().match(/\S+/g) as string[];
@@ -66,7 +70,8 @@ export function scanArchive(
       let raw: string;
       try {
         ({ mtimeMs } = fs.statSync(file));
-        if (now - mtimeMs <= olderThanMs) continue;
+        if (now - mtimeMs <= olderThanMs && (!indexedSessions || indexedSessions.has(sessionId)))
+          continue;
         raw = fs.readFileSync(file, 'utf-8');
       } catch {
         continue;
@@ -84,10 +89,12 @@ export function scanArchive(
 }
 
 export function formatArchiveHits(hits: ArchiveHit[]): string {
-  return hits
+  if (hits.length === 0) return '';
+  const text = hits
     .map(
       (h) =>
         `[${h.mtime.toISOString().slice(0, 10)} ${h.sessionId.slice(0, 6)} from=${h.dirName} archived]\n${h.snippet}\n`
     )
     .join('---\n');
+  return fenceUntrusted(sanitizeQuoted(text));
 }

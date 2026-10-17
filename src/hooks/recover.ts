@@ -3,19 +3,32 @@ import * as path from 'node:path';
 import { loadConfig, applyProjectAlias } from '@/config';
 import type { EngramConfig } from '@/config';
 import { getClaudeProjectsDir } from '@/archive/store';
+import { readHeader } from '@/archive/resolve';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
 import { Store } from '@/db/store';
-import { parseTranscript } from '@/parser/transcript';
+import { parseTranscript, conversationTime } from '@/parser/transcript';
+import type { UserMessage } from '@/parser/transcript';
 import { buildChunks } from '@/parser/chunker';
 import { JsonlWriter } from '@/jsonl/writer';
 import { chunksToJsonlRecords } from '@/jsonl/converter';
 import { loadDeletions, deletionsFile, contentDigest } from '@/archive/deletions';
-import { loadRecoverMarks, saveRecoverMarks, refreshIfGrown } from '@/hooks/refresh';
+import type { Deletions } from '@/archive/deletions';
+import { isAgedOut } from '@/maintenance/auto';
+import type { RecoverMarks } from '@/hooks/refresh';
+import {
+  loadRecoverMarks,
+  saveRecoverMarks,
+  refreshIfGrown,
+  repairIfMisdated,
+  isRepairDone,
+  markRepairDone,
+} from '@/hooks/refresh';
 
 export interface RecoverResult {
   recovered: number;
   refreshed: number;
+  repaired: number;
   skipped: number;
   errors: number;
   details: string[];
@@ -45,6 +58,134 @@ export function projectDirToPath(dirName: string): string {
 }
 
 /**
+ * 生ログに記録された cwd を優先し、無いときだけディレクトリ名から復号する。
+ * hook の保存と同じく realpath を通し、同じプロジェクトが別のパスに分かれないようにする。
+ */
+async function resolveProjectPath(
+  config: EngramConfig,
+  transcriptPath: string,
+  dirName: string
+): Promise<string> {
+  const { cwd } = await readHeader(transcriptPath);
+  if (!cwd) return applyProjectAlias(config.storage.projectAliases, projectDirToPath(dirName));
+  let resolved = cwd;
+  try {
+    resolved = fs.realpathSync(cwd);
+  } catch {
+    // 別マシンで記録されたパスなど、このホストに無い cwd はそのまま使う
+  }
+  return applyProjectAlias(config.storage.projectAliases, resolved);
+}
+
+interface Scan {
+  config: EngramConfig;
+  store: Store;
+  marks: RecoverMarks;
+  deleted: Deletions;
+  result: RecoverResult;
+  repairDone: boolean;
+  repairFailed: boolean;
+}
+
+/** 保存済みのセッションを、修復が要れば作り直し、生ログが伸びていれば反映する。 */
+async function syncSavedSession(
+  scan: Scan,
+  sessionId: string,
+  transcriptPath: string,
+  dirName: string
+): Promise<void> {
+  const { config, store, marks, result } = scan;
+  const ctx = {
+    config,
+    store,
+    sessionId,
+    transcriptPath,
+    marks,
+    deletedChunkDigests: scan.deleted.chunkDigests,
+  };
+  if (!scan.repairDone) {
+    let repaired: boolean;
+    try {
+      repaired = await repairIfMisdated(
+        ctx,
+        await resolveProjectPath(config, transcriptPath, dirName)
+      );
+    } catch (err) {
+      scan.repairFailed = true;
+      throw err;
+    }
+    if (repaired) {
+      result.repaired++;
+      result.details.push(`${sessionId.slice(0, 8)} (repaired)`);
+      return;
+    }
+  }
+  if ((await refreshIfGrown(ctx)) === 'refreshed') {
+    result.refreshed++;
+    result.details.push(`${sessionId.slice(0, 8)} (refreshed)`);
+  } else {
+    result.skipped++;
+  }
+}
+
+/** DB に無いセッションを生ログから取り込む。 */
+async function importTranscript(
+  scan: Scan,
+  sessionId: string,
+  transcriptPath: string,
+  dirName: string
+): Promise<void> {
+  const { config, store, marks, result } = scan;
+  // 解析より先に測る。解析中に追記された分を、取り込み済みとして記録しないため。
+  const { size, mtime } = fs.statSync(transcriptPath);
+  // 取り込まないと決めた生ログ、整理や削除で行が消えた生ログは、伸びるまで読み直さない。recover は毎プロンプト走る
+  // 保持期間を無効にした後は、期間外として見送った生ログも取り込むので目印を見ない
+  if (config.maintenance.enabled && marks.get(sessionId) === size) {
+    result.skipped++;
+    return;
+  }
+  const messages = await parseTranscript(transcriptPath);
+  const projectPath = await resolveProjectPath(config, transcriptPath, dirName);
+  const chunks = buildChunks(messages, sessionId, projectPath);
+  // 時刻の無いターンに取り込み時刻を刻むと、古い会話が最新として並ぶ。生ログの更新時刻を使う
+  for (const c of chunks) c.createdAt ??= conversationTime(undefined, mtime);
+  const newest = chunks
+    .map((c) => c.createdAt)
+    .sort()
+    .pop();
+  if (
+    chunks.length === 0 ||
+    // 整理はチャンクの created_at で消すので、最も新しいチャンクで判定する。外れると消えては入るを繰り返す
+    isAgedOut(config, newest) ||
+    // rebuild で全チャンクを消したセッションは行ごと無くなる。取り込み直すと削除した本文が戻る。
+    chunks.some((c) => scan.deleted.chunkDigests.has(contentDigest(c.content)))
+  ) {
+    marks.set(sessionId, size);
+    result.skipped++;
+    return;
+  }
+
+  const writer = new JsonlWriter(config.storage.jsonlDir);
+  writer.appendRecords(chunksToJsonlRecords(chunks));
+  store.insertChunks(chunks);
+
+  const humans = messages.filter((m): m is UserMessage => m.kind === 'user');
+  store.insertSession({
+    sessionId,
+    projectPath,
+    startedAt: conversationTime(messages[0].timestamp, mtime),
+    endedAt: conversationTime(messages[messages.length - 1].timestamp, mtime),
+    chunkCount: chunks.length,
+    firstMessage: humans[0]?.text.slice(0, 200),
+    lastMessage: humans[humans.length - 1]?.text.slice(0, 200),
+  });
+
+  marks.set(sessionId, size);
+  result.recovered++;
+  result.details.push(`${sessionId.slice(0, 8)} (${chunks.length} chunks)`);
+}
+
+/**
  * ~/.claude/projects/ 配下のトランスクリプトファイルを走査し、
  * DBに未保存のセッションを検出して保存する。
  */
@@ -58,6 +199,7 @@ export async function recoverTranscripts(
   const result: RecoverResult = {
     recovered: 0,
     refreshed: 0,
+    repaired: 0,
     skipped: 0,
     errors: 0,
     details: [],
@@ -65,9 +207,15 @@ export async function recoverTranscripts(
 
   try {
     initializeSchema(db);
-    const store = new Store(db);
-    const deleted = loadDeletions(deletionsFile(config.database.path));
-    const marks = loadRecoverMarks(config);
+    const scan: Scan = {
+      config,
+      store: new Store(db),
+      marks: loadRecoverMarks(config),
+      deleted: loadDeletions(deletionsFile(config.database.path)),
+      result,
+      repairDone: isRepairDone(config),
+      repairFailed: false,
+    };
 
     const projectsDir = claudeProjectsDir ?? getClaudeProjectsDir();
     if (!fs.existsSync(projectsDir)) {
@@ -80,10 +228,6 @@ export async function recoverTranscripts(
       if (!dirent.isDirectory()) continue;
 
       const projectDir = path.join(projectsDir, dirent.name);
-      const projectPath = applyProjectAlias(
-        config.storage.projectAliases,
-        projectDirToPath(dirent.name)
-      );
 
       let entries: fs.Dirent[];
       try {
@@ -98,77 +242,28 @@ export async function recoverTranscripts(
         const sessionId = entry.name.replace(/\.jsonl$/, '');
         const transcriptPath = path.join(projectDir, entry.name);
 
-        if (deleted.sessions.has(sessionId)) {
+        if (scan.deleted.sessions.has(sessionId)) {
           result.skipped++;
           continue;
         }
         try {
-          if (store.hasSession(sessionId)) {
-            const outcome = await refreshIfGrown({
-              config,
-              store,
-              sessionId,
-              transcriptPath,
-              marks,
-              deletedChunkDigests: deleted.chunkDigests,
-            });
-            if (outcome === 'refreshed') {
-              result.refreshed++;
-              result.details.push(`${sessionId.slice(0, 8)} (refreshed)`);
-            } else {
-              result.skipped++;
-            }
-            continue;
+          if (scan.store.hasSession(sessionId)) {
+            await syncSavedSession(scan, sessionId, transcriptPath, dirent.name);
+          } else {
+            await importTranscript(scan, sessionId, transcriptPath, dirent.name);
           }
-
-          // 解析より先に測る。解析中に追記された分を、取り込み済みとして記録しないため。
-          const size = fs.statSync(transcriptPath).size;
-          const messages = await parseTranscript(transcriptPath);
-          if (messages.length === 0) {
-            result.skipped++;
-            continue;
-          }
-
-          const chunks = buildChunks(messages, sessionId, projectPath);
-          // rebuild で全チャンクを消したセッションは行ごと無くなる。取り込み直すと削除した本文が戻る。
-          if (
-            chunks.length === 0 ||
-            chunks.some((c) => deleted.chunkDigests.has(contentDigest(c.content)))
-          ) {
-            result.skipped++;
-            continue;
-          }
-
-          const writer = new JsonlWriter(config.storage.jsonlDir);
-          writer.appendRecords(chunksToJsonlRecords(chunks));
-          store.insertChunks(chunks);
-
-          const firstHuman = messages.find((m) => m.kind === 'user');
-          const lastHuman = [...messages].reverse().find((m) => m.kind === 'user');
-
-          store.insertSession({
-            sessionId,
-            projectPath,
-            startedAt: messages[0].timestamp,
-            endedAt: messages[messages.length - 1].timestamp,
-            chunkCount: chunks.length,
-            firstMessage: firstHuman?.kind === 'user' ? firstHuman.text.slice(0, 200) : undefined,
-            lastMessage: lastHuman?.kind === 'user' ? lastHuman.text.slice(0, 200) : undefined,
-          });
-
-          marks.set(sessionId, size);
-          result.recovered++;
-          result.details.push(`${sessionId.slice(0, 8)} (${chunks.length} chunks)`);
         } catch (err) {
           // refresh は解析した時点で目印を立てる。反映に失敗したら外し、次の実行で再試行させる。
-          marks.delete(sessionId);
+          scan.marks.delete(sessionId);
           result.errors++;
           result.details.push(`${sessionId.slice(0, 8)}: error - ${String(err)}`);
         }
       }
     }
 
-    saveRecoverMarks(config, marks);
+    saveRecoverMarks(config, scan.marks);
+    // 修復の判定に失敗したセッションがあれば次回も判定し直す。取り込みの失敗は関係ない
+    if (!scan.repairDone && !scan.repairFailed) markRepairDone(config);
     return result;
   } finally {
     db.close();

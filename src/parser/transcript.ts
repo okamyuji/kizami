@@ -1,5 +1,4 @@
-import { createReadStream } from 'node:fs';
-import { createInterface } from 'node:readline';
+import { readLines } from '@/storage/lines';
 
 export interface TextContent {
   type: 'text';
@@ -111,6 +110,31 @@ function parseContentBlocks(value: unknown): ContentBlock[] {
   return blocks;
 }
 
+// 時計のずれは許すが、これを超えて未来の時刻は信じない。最新として固定され、保持期間の整理からも逃れるため。
+const MAX_FUTURE_SKEW_MS = 24 * 60 * 60 * 1000;
+
+// created_at は文字列のまま比べるので、UTC の ISO 形式以外はそろえる。この形式は書かれたまま残し、既存の鍵を変えない。
+// Stryker disable next-line Regex: 前後に文字の付いた ISO 形式は Date.parse が NaN にするので、^ と $ を外しても結果は変わらない
+const UTC_ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
+export function validTimestamp(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const ms = Date.parse(value);
+  // 解釈できない文字列は NaN になり、比較が false になって捨てられる
+  if (!(ms <= Date.now() + MAX_FUTURE_SKEW_MS)) return undefined;
+  return UTC_ISO_RE.test(value) ? value : new Date(ms).toISOString();
+}
+
+/**
+ * ターンや会話の時刻。行の時刻が無ければ生ログの更新時刻を使い、行の時刻と同じ上限で切る。
+ * 取り込み時刻を使うと古い会話が新しく見え、未来の更新時刻は最新として固定されるため。
+ */
+export function conversationTime(timestamp: string | undefined, mtime: Date): string {
+  return (
+    timestamp ?? new Date(Math.min(mtime.getTime(), Date.now() + MAX_FUTURE_SKEW_MS)).toISOString()
+  );
+}
+
 /** 1 行を解釈して messages に足す。ツール結果は直前の assistant に付ける。 */
 function appendLine(messages: TranscriptMessage[], line: string): void {
   // JSON.parse は BOM と NBSP を空白として扱わないので、先に trim で落とす。
@@ -128,7 +152,7 @@ function appendLine(messages: TranscriptMessage[], line: string): void {
   if (raw.isCompactSummary) return;
 
   const sessionId = typeof raw.sessionId === 'string' ? raw.sessionId : '';
-  const timestamp = typeof raw.timestamp === 'string' ? raw.timestamp : undefined;
+  const timestamp = validTimestamp(raw.timestamp);
 
   // Tool result: attach to preceding assistant message
   if (isRecord(raw.toolUseResult)) {
@@ -205,14 +229,7 @@ export function parseTranscriptText(text: string): TranscriptMessage[] {
 
 export async function parseTranscript(filePath: string): Promise<TranscriptMessage[]> {
   const messages: TranscriptMessage[] = [];
-
-  const rl = createInterface({
-    input: createReadStream(filePath, { encoding: 'utf-8' }),
-    crlfDelay: Infinity,
-  });
-
-  for await (const line of rl) appendLine(messages, line);
-
+  for await (const line of readLines(filePath)) appendLine(messages, line);
   return messages;
 }
 

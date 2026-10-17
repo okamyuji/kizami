@@ -41,6 +41,7 @@ export default defineConfig({
       'tests/archive/resume.test.ts',
       'tests/hooks/save.test.ts',
       'tests/search/archive-scan.test.ts',
+      'tests/search/formatter.test.ts',
       'tests/archive/deletions.test.ts',
       'tests/jsonl/deletion.test.ts',
       'tests/hooks/refresh.test.ts',
@@ -51,6 +52,8 @@ export default defineConfig({
       'tests/hooks/skill.test.ts',
       'tests/test-env.test.ts',
       'tests/hooks/setup.test.ts',
+      'tests/import/claude-mem.test.ts',
+      'tests/storage/lines.test.ts',
     ],
   },
 });

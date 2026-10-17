@@ -1,13 +1,40 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parseTranscript, parseTranscriptText } from '../../src/parser/transcript';
+import {
+  parseTranscript,
+  parseTranscriptText,
+  conversationTime,
+} from '../../src/parser/transcript';
 import type { AssistantMessage } from '../../src/parser/transcript';
 
 const FIXTURE = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
 
 describe('parseTranscript', () => {
+  it('keeps a line that holds a raw U+2028 or U+2029 and handles CRLF and a missing final newline', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-transcript-'));
+    const file = path.join(dir, 'sep.jsonl');
+    const user = (text: string) =>
+      JSON.stringify({ type: 'user', message: { role: 'user', content: text } });
+    fs.writeFileSync(file, `${user('a\u2028b\u2029c')}\r\n${user('second')}`);
+    const messages = await parseTranscript(file);
+    expect(messages).toMatchObject([{ text: 'a\u2028b\u2029c' }, { text: 'second' }]);
+    expect(messages).toHaveLength(2);
+    expect(messages).toEqual(parseTranscriptText(fs.readFileSync(file, 'utf-8')));
+  });
+
+  it('parses lines that span stream chunks', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-transcript-'));
+    const file = path.join(dir, 'big.jsonl');
+    const text = '\u20ac'.repeat(100_000);
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n'
+    );
+    expect(await parseTranscript(file)).toMatchObject([{ text }]);
+  });
+
   it('skips malformed external content blocks without throwing', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-transcript-'));
     const file = path.join(dir, 'malformed.jsonl');
@@ -155,5 +182,78 @@ describe('parseTranscriptText', () => {
     expect(parseTranscriptText(`null\n42\n${summary}\n${line}`)).toEqual([
       expect.objectContaining({ kind: 'user', text: 'hi' }),
     ]);
+  });
+});
+
+describe('parseTranscriptText timestamps', () => {
+  const line = (timestamp: unknown) =>
+    JSON.stringify({
+      type: 'user',
+      sessionId: 's',
+      timestamp,
+      message: { role: 'user', content: 'hello' },
+    });
+  const stamp = (timestamp: unknown) => parseTranscriptText(line(timestamp))[0].timestamp;
+
+  it('keeps a valid ISO timestamp as written', () => {
+    expect(stamp('2026-10-05T06:44:12.345Z')).toBe('2026-10-05T06:44:12.345Z');
+    expect(stamp('2024-06-15T10:00:00Z')).toBe('2024-06-15T10:00:00Z');
+    expect(stamp('2026-10-05T06:44:12.345678Z')).toBe('2026-10-05T06:44:12.345678Z');
+  });
+
+  it('ignores a timestamp that is not a date', () => {
+    expect(stamp('zzz-not-a-date')).toBeUndefined();
+    expect(stamp('')).toBeUndefined();
+    expect(stamp(2020)).toBeUndefined();
+  });
+
+  it('normalizes a parseable timestamp that is not in UTC ISO form', () => {
+    expect(stamp('Oct 5 2026 10:00:00 GMT')).toBe('2026-10-05T10:00:00.000Z');
+    expect(stamp('2026-10-05T19:00:00+09:00')).toBe('2026-10-05T10:00:00.000Z');
+  });
+
+  it('ignores a timestamp far in the future', () => {
+    expect(stamp('9999-12-31T00:00:00Z')).toBeUndefined();
+  });
+
+  it('accepts a timestamp up to one day ahead and rejects anything later', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-17T12:00:00.000Z') });
+    try {
+      expect(stamp('2026-10-18T12:00:00.000Z')).toBe('2026-10-18T12:00:00.000Z');
+      expect(stamp('2026-10-18T12:00:00.001Z')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('conversationTime', () => {
+  const NOW = new Date('2026-10-17T12:00:00.000Z');
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it('prefers the transcript timestamp', () => {
+    expect(conversationTime('2026-09-01T00:00:00Z', new Date('2026-10-01T00:00:00Z'))).toBe(
+      '2026-09-01T00:00:00Z'
+    );
+  });
+
+  it('falls back to the file mtime as ISO', () => {
+    expect(conversationTime(undefined, new Date('2026-10-01T00:00:00.123Z'))).toBe(
+      '2026-10-01T00:00:00.123Z'
+    );
+  });
+
+  it('clamps an mtime beyond one day ahead to the same bound as timestamps', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+    try {
+      const bound = new Date(NOW.getTime() + DAY);
+      expect(conversationTime(undefined, bound)).toBe(bound.toISOString());
+      expect(conversationTime(undefined, new Date(bound.getTime() + 1))).toBe(bound.toISOString());
+      expect(conversationTime(undefined, new Date('2036-10-14T00:00:00Z'))).toBe(
+        bound.toISOString()
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

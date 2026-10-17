@@ -10,6 +10,7 @@ import { extractMetadata } from '@/parser/metadata';
 export interface Turn {
   human: string;
   assistant: string;
+  timestamp?: string;
 }
 
 export const MAX_TOOL_HEAD = 20;
@@ -114,24 +115,32 @@ export function buildTurns(messages: TranscriptMessage[]): Turn[] {
   const turns: Turn[] = [];
   let currentHuman = '';
   let currentAssistant = '';
+  let currentTimestamp: string | undefined;
 
   for (const msg of messages) {
     if (msg.kind === 'user') {
       // If we have a pending turn, push it
       if (currentHuman || currentAssistant) {
-        turns.push({ human: currentHuman, assistant: currentAssistant });
+        turns.push({
+          human: currentHuman,
+          assistant: currentAssistant,
+          timestamp: currentTimestamp,
+        });
         currentAssistant = '';
       }
       currentHuman = msg.text;
+      currentTimestamp = msg.timestamp;
     } else {
       const formatted = formatAssistant(msg);
       currentAssistant = currentAssistant ? `${currentAssistant}\n${formatted}` : formatted;
+      // ターンの時刻は先頭メッセージのもの。user に時刻が無いときだけ assistant で補う
+      currentTimestamp ??= msg.timestamp;
     }
   }
 
   // Push final turn
   if (currentHuman || currentAssistant) {
-    turns.push({ human: currentHuman, assistant: currentAssistant });
+    turns.push({ human: currentHuman, assistant: currentAssistant, timestamp: currentTimestamp });
   }
 
   return turns;
@@ -208,6 +217,7 @@ export function buildChunks(
         role,
         metadata,
         tokenCount: estimateTokens(content),
+        createdAt: turn.timestamp,
       });
       chunkIndex++;
     }

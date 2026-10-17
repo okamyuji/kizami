@@ -346,6 +346,51 @@ describe('JsonlTransactionWriter', () => {
     }
   });
 
+  it('recognizes a committed transaction in a file converted to CRLF', () => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const serialized = serializeV2Transaction([makePayload()], {
+      txId: 'tx-crlf',
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+    });
+    fs.writeFileSync(targetPath, `${serialized.allLines.join('\r\n')}\r\n`, { mode: 0o600 });
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      writer.withExclusiveTransaction((lockedWriter) => {
+        expect(lockedWriter.appendPrepared(serialized).receipt.status).toBe('already_committed');
+      });
+      expect(fs.readFileSync(targetPath, 'utf-8').match(/"tx_commit"/g)).toHaveLength(1);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it.each([
+    ['LF', '\n'],
+    ['CRLF', '\r\n'],
+  ])('skips a blank %s line inside a committed transaction like the reader does', (_, eol) => {
+    const dir = makeTmpDir();
+    const targetPath = path.join(dir, 'test.jsonl');
+    const serialized = serializeV2Transaction([makePayload()], {
+      txId: 'tx-blank',
+      createdAt: '2026-06-21T00:00:00.000Z',
+      targetPath,
+    });
+    const [begin, ...rest] = serialized.allLines;
+    fs.writeFileSync(targetPath, [begin, '', ...rest].join(eol) + eol, { mode: 0o600 });
+    const writer = new JsonlTransactionWriter(dir);
+
+    try {
+      writer.withExclusiveTransaction((lockedWriter) => {
+        expect(lockedWriter.appendPrepared(serialized).receipt.status).toBe('already_committed');
+      });
+    } finally {
+      writer.close();
+    }
+  });
+
   it('fails closed when an existing payload line exceeds the record limit by one byte', () => {
     const dir = makeTmpDir();
     const targetPath = path.join(dir, 'test.jsonl');

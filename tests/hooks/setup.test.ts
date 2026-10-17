@@ -1,3 +1,4 @@
+import { copyRecentTranscript } from '../helpers/recent-transcript';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -188,10 +189,7 @@ describe('setupHooks', () => {
   function putPastSession(id: string): void {
     const dir = path.join(process.env['HOME'] as string, '.claude', 'projects', '-w-proj');
     fs.mkdirSync(dir, { recursive: true });
-    fs.copyFileSync(
-      path.resolve(__dirname, '../fixtures/sample-transcript.jsonl'),
-      path.join(dir, `${id}.jsonl`)
-    );
+    copyRecentTranscript(path.join(dir, `${id}.jsonl`));
   }
 
   function storedSessionIds(): string[] {

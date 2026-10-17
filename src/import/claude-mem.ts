@@ -6,6 +6,7 @@ import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
 import { Store } from '@/db/store';
 import type { Chunk, Session } from '@/db/store';
+import { validTimestamp } from '@/parser/transcript';
 
 export interface ImportOptions {
   sourcePath?: string; // claude-mem DB path, default ~/.claude-mem/claude-mem.db
@@ -114,6 +115,7 @@ function observationToChunk(obs: ClaudeMemObservation, chunkIndex: number): Chun
       errorMessages: [],
     },
     tokenCount: Math.ceil(content.length / 4),
+    createdAt: validTimestamp(obs.created_at),
   };
 }
 
@@ -133,7 +135,16 @@ function summaryToChunk(summary: ClaudeMemSummary, chunkIndex: number): Chunk {
       errorMessages: [],
     },
     tokenCount: Math.ceil(content.length / 4),
+    createdAt: validTimestamp(summary.created_at),
   };
+}
+
+// 小数桁数の違う ISO 形式は文字列順が時刻順にならないので、Date.parse で比べる。無ければ undefined で、store が取り込み時刻を入れる
+function latestCreatedAt(chunks: Chunk[]): string | undefined {
+  return chunks
+    .flatMap((c) => c.createdAt ?? [])
+    .sort((a, b) => Date.parse(a) - Date.parse(b))
+    .at(-1);
 }
 
 export async function importClaudeMem(options?: ImportOptions): Promise<ImportResult> {
@@ -240,7 +251,7 @@ export async function importClaudeMem(options?: ImportOptions): Promise<ImportRe
         sessionId,
         projectPath,
         startedAt: sess.started_at,
-        endedAt: sess.completed_at ?? undefined,
+        endedAt: sess.completed_at ?? latestCreatedAt(chunks),
         chunkCount: chunks.length,
         firstMessage: sess.user_prompt ? sess.user_prompt.slice(0, 200) : undefined,
       };
