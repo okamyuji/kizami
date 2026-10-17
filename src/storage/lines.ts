@@ -5,11 +5,6 @@ import { createReadStream } from 'node:fs';
  * readline は U+2028/U+2029 でも区切り、JSON 文字列中の生の U+2028 で行が割れるため使わない。
  * 改行の探索は新しい chunk だけに行い、改行の無い長い行でも線形で済ませる。呼び出し側が途中で抜けるとストリームも閉じる。
  */
-/** readLines が残した行末の \r を外す。書き手は \r の無い行で digest を作るので、照合する側はこれを通す。 */
-export function withoutTrailingCr(line: string): string {
-  return line.endsWith('\r') ? line.slice(0, -1) : line;
-}
-
 export async function* readLines(filePath: string): AsyncGenerator<string> {
   const pending: string[] = [];
   for await (const chunk of createReadStream(filePath, { encoding: 'utf-8' })) {
@@ -24,4 +19,9 @@ export async function* readLines(filePath: string): AsyncGenerator<string> {
     pending.push(chunk.slice(from));
   }
   yield pending.join('');
+}
+
+/** readLines が残した行末の \r を外す。書き手は \r の無い行で digest を作るので、照合する側はこれを通す。 */
+export function withoutTrailingCr(line: string): string {
+  return line.endsWith('\r') ? line.slice(0, -1) : line;
 }
