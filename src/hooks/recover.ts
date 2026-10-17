@@ -24,6 +24,8 @@ import {
   isRepairDone,
   markRepairDone,
 } from '@/hooks/refresh';
+import { repairRequestCopies } from '@/hooks/request-copies';
+import { compactSessions } from '@/jsonl/compact';
 
 export interface RecoverResult {
   recovered: number;
@@ -102,6 +104,7 @@ async function syncSavedSession(
     transcriptPath,
     marks,
     deletedChunkDigests: scan.deleted.chunkDigests,
+    deletedChunkSessions: scan.deleted.chunkSessions,
   };
   if (!scan.repairDone) {
     let repaired: boolean;
@@ -185,6 +188,24 @@ async function importTranscript(
   result.details.push(`${sessionId.slice(0, 8)} (${chunks.length} chunks)`);
 }
 
+/** api-request-blob の写しを保存したセッションを直す。失敗しても取り込みの結果は返す。 */
+async function repairCopies(scan: Scan): Promise<void> {
+  const { config, result } = scan;
+  try {
+    const copies = await repairRequestCopies({
+      config,
+      store: scan.store,
+      compact: compactSessions,
+    });
+    result.repaired += copies.repaired;
+    result.errors += copies.errors;
+    result.details.push(...copies.details);
+  } catch (err) {
+    result.errors++;
+    result.details.push(`request copies: error - ${String(err)}`);
+  }
+}
+
 /**
  * ~/.claude/projects/ 配下のトランスクリプトファイルを走査し、
  * DBに未保存のセッションを検出して保存する。
@@ -219,6 +240,7 @@ export async function recoverTranscripts(
 
     const projectsDir = claudeProjectsDir ?? getClaudeProjectsDir();
     if (!fs.existsSync(projectsDir)) {
+      await repairCopies(scan);
       return result;
     }
 
@@ -261,9 +283,10 @@ export async function recoverTranscripts(
       }
     }
 
-    saveRecoverMarks(config, scan.marks);
     // 修復の判定に失敗したセッションがあれば次回も判定し直す。取り込みの失敗は関係ない
     if (!scan.repairDone && !scan.repairFailed) markRepairDone(config);
+    await repairCopies(scan);
+    saveRecoverMarks(config, scan.marks);
     return result;
   } finally {
     db.close();

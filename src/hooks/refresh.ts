@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { EngramConfig } from '@/config';
-import type { Session, Store } from '@/db/store';
+import type { Chunk, Session, Store } from '@/db/store';
 import { parseTranscript, conversationTime } from '@/parser/transcript';
 import type { TranscriptMessage } from '@/parser/transcript';
 import { isAgedOut } from '@/maintenance/auto';
@@ -36,7 +36,7 @@ export function loadRecoverMarks(config: EngramConfig): RecoverMarks {
 export function saveRecoverMarks(config: EngramConfig, marks: RecoverMarks): void {
   const file = marksFile(config);
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ sizes: Object.fromEntries(marks) }));
+  fs.writeFileSync(tmp, JSON.stringify({ sizes: Object.fromEntries(marks) }), { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 
@@ -67,6 +67,18 @@ interface RefreshContext {
   transcriptPath: string;
   marks: RecoverMarks;
   deletedChunkDigests: Set<string>;
+  deletedChunkSessions: Set<string>;
+}
+
+/**
+ * 手で消したチャンクが戻るか。本文の照合だけでは足りない。写しを読んだ版で消したチャンクは、
+ * 今の版で読み直すと本文が変わり、照合を素通りするため、セッションでも判定する。
+ */
+function removedByHand(ctx: RefreshContext, chunks: Chunk[]): boolean {
+  return (
+    ctx.deletedChunkSessions.has(ctx.sessionId) ||
+    chunks.some((c) => ctx.deletedChunkDigests.has(contentDigest(c.content)))
+  );
 }
 
 async function commit(
@@ -123,7 +135,7 @@ export async function repairIfMisdated(ctx: RefreshContext, projectPath: string)
 
   const messages = await parseTranscript(transcriptPath);
   const chunks = buildChunks(messages, sessionId, projectPath);
-  if (chunks.some((c) => ctx.deletedChunkDigests.has(contentDigest(c.content)))) return false;
+  if (removedByHand(ctx, chunks)) return false;
   const candidates = buildClaudeTurnCandidates(
     messages,
     sessionId,
@@ -159,7 +171,7 @@ export async function refreshIfGrown(ctx: RefreshContext): Promise<RefreshOutcom
   const chunks = buildChunks(messages, sessionId, session.projectPath);
   // 解析した時点のサイズを残し、変わらない生ログを次の検索で解析し直さない。
   marks.set(sessionId, size);
-  if (chunks.some((c) => ctx.deletedChunkDigests.has(contentDigest(c.content)))) return 'skipped';
+  if (removedByHand(ctx, chunks)) return 'skipped';
   const candidates = buildClaudeTurnCandidates(
     messages,
     sessionId,

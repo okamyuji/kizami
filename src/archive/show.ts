@@ -1,7 +1,6 @@
 import { parseTranscript } from '@/parser/transcript';
-import { buildTurns, turnToText } from '@/parser/chunker';
 import type { ResolvedSession } from '@/archive/resolve';
-import { redactTurnText } from '@/archive/deletions';
+import { redactTurns } from '@/archive/deletions';
 import { fenceUntrusted, sanitizeQuoted } from '@/search/formatter';
 
 const TURN_SEPARATOR = '\n\n---\n\n';
@@ -27,9 +26,13 @@ export async function renderSession(
   deletedChunkDigests: Set<string> = new Set()
 ): Promise<string> {
   const messages = await parseTranscript(session.path);
-  const texts = buildTurns(messages).map((turn) =>
-    redactTurnText(turnToText(turn), deletedChunkDigests)
-  );
+  // 削除が無ければ旧版の読み方は要らない
+  const legacy =
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: 削除が無いときに 2 回目の解析を省く近道。外しても旧版のターンは伏せる対象を持たない
+    deletedChunkDigests.size > 0
+      ? await parseTranscript(session.path, { requestCopies: true })
+      : [];
+  const texts = redactTurns(messages, legacy, deletedChunkDigests);
   const stamps = messages.map((m) => m.timestamp).filter((t): t is string => !!t);
   const kept = pickTail(texts, maxChars);
   const omittedEarlier = texts.length - kept.length;

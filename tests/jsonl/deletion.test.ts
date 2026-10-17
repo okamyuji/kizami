@@ -12,7 +12,13 @@ import { serializeV2Transaction, isJsonlV2Payload } from '@/jsonl/transaction';
 import { selfHealFromJsonl } from '@/jsonl/self_heal';
 import { readTailRecords, readTailDeletions } from '@/jsonl/reader';
 import { createHash } from 'node:crypto';
-import { appendSessionDeletion, appendChunkDeletion } from '@/jsonl/deletion';
+import {
+  appendSessionDeletion,
+  appendChunkDeletion,
+  appendChunkDeletions,
+  scanSessions,
+  turnRecordKey,
+} from '@/jsonl/deletion';
 import type { JsonlChunkRecord } from '@/jsonl/types';
 import type { TurnCheckpointV2 } from '@/checkpoint/types';
 
@@ -169,6 +175,27 @@ describe('appendChunkDeletion', () => {
     expect(turns[0].parts.map((p) => p.externalId)).toEqual(['p2']);
   });
 
+  it('writes several deletions as one transaction', async () => {
+    const dir = makeTmpDir();
+    new JsonlWriter(dir).appendRecords([record('a1', 's1', 0), record('a2', 's1', 1)]);
+    writeTurn(dir, 's1', 'tk-1', ['p1']);
+
+    appendChunkDeletions(dir, [
+      { sessionId: 's1', externalId: 'a1' },
+      { sessionId: 's1', externalId: 'p1' },
+    ]);
+
+    const history = await fold(dir);
+    expect(history.legacyChunks.map((c) => c.id)).toEqual(['a2']);
+    expect([...history.turns.values()]).toEqual([]);
+    const begins = fs
+      .readFileSync(listJsonlFiles(dir).at(-1)!, 'utf-8')
+      .split('\n')
+      .filter((l) => l.includes('"chunk_delete"'));
+    expect(new Set(begins.map((l) => (JSON.parse(l) as { txId: string }).txId)).size).toBe(1);
+    expect(begins).toHaveLength(2);
+  });
+
   it('is safe to record the same deletion twice', async () => {
     const dir = makeTmpDir();
     new JsonlWriter(dir).appendRecords([record('a1', 's1'), record('a2', 's1', 1)]);
@@ -261,5 +288,81 @@ describe('deletion writer lifecycle', () => {
     } finally {
       close.mockRestore();
     }
+  });
+});
+
+describe('scanSessions', () => {
+  function part(content: string) {
+    return {
+      partIndex: 0,
+      externalId: `ext-${content}`,
+      content,
+      role: 'mixed' as const,
+      metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+      tokenCount: 1,
+    };
+  }
+  function checkpointTx(sessionId: string, contents: string[]): string[] {
+    const payload = {
+      v: 2 as const,
+      type: 'turn_checkpoint' as const,
+      txId: '',
+      sessionId,
+      runtime: 'claude' as const,
+      turnKey: 't',
+      sourceOrder: '1',
+      observedThrough: { kind: 'source_offset' as const, generation: 0, offset: 1 },
+      historyEpoch: 0,
+      revision: 1,
+      contentHash: 'h',
+      completedAt: '2026-10-17T00:00:00Z',
+      projectPath: '/p',
+      parts: contents.map((c, i) => ({ ...part(c), partIndex: i })),
+    };
+    return serializeV2Transaction([payload], {
+      txId: `tx-${sessionId}`,
+      createdAt: '2026-10-17T00:00:00Z',
+      targetPath: 'x',
+    }).allLines;
+  }
+
+  it('collects deleted chunk ids with their sessions and sessions whose v1 or v2 body holds the text', async () => {
+    const dir = makeTmpDir();
+    const lines = [
+      '{not json',
+      JSON.stringify({ ...record('a', 'v1-hit'), content: 'has NEEDLE inside' }),
+      JSON.stringify(record('b', 'v1-miss')),
+      ...checkpointTx('v2-hit', ['plain', 'NEEDLE here']),
+      ...checkpointTx('v2-miss', ['plain', 'other']),
+    ];
+    fs.writeFileSync(path.join(dir, '2026-10-host.jsonl'), lines.join('\n') + '\n');
+    appendChunkDeletion(dir, 'hand', 'ext-x');
+
+    const found = await scanSessions(dir, 'NEEDLE');
+
+    expect([...found.deletedIds]).toEqual(['ext-x']);
+    expect([...found.deletedSessions]).toEqual(['hand']);
+    expect([...found.containing].sort()).toEqual(['v1-hit', 'v2-hit']);
+    expect(found.starting).toEqual({ turns: new Set(), chunks: [] });
+  });
+
+  it('takes as starting only the v1 rows and the first v2 part that begin with the text', async () => {
+    const dir = makeTmpDir();
+    const head = { ...record('a', 'v1-head'), content: 'NEEDLE first' };
+    const lines = [
+      JSON.stringify(head),
+      JSON.stringify({ ...record('b', 'v1-inside'), content: 'see NEEDLE here' }),
+      ...checkpointTx('v2-head', ['NEEDLE first', 'rest']),
+      ...checkpointTx('v2-inside', ['see NEEDLE here', 'rest']),
+      ...checkpointTx('v2-later', ['plain', 'NEEDLE in part 1']),
+    ];
+    fs.writeFileSync(path.join(dir, '2026-10-host.jsonl'), lines.join('\n') + '\n');
+
+    const found = await scanSessions(dir, 'NEEDLE');
+
+    expect(found.starting.chunks).toEqual([head]);
+    expect([...found.starting.turns]).toEqual([
+      turnRecordKey({ sessionId: 'v2-head', turnKey: 't', historyEpoch: 0, revision: 1 }),
+    ]);
   });
 });

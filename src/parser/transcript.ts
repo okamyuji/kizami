@@ -135,8 +135,7 @@ export function conversationTime(timestamp: string | undefined, mtime: Date): st
   );
 }
 
-/** 1 行を解釈して messages に足す。ツール結果は直前の assistant に付ける。 */
-function appendLine(messages: TranscriptMessage[], line: string): void {
+function parseRawLine(line: string): RawLine | undefined {
   // JSON.parse は BOM と NBSP を空白として扱わないので、先に trim で落とす。
   const trimmed = line.trim();
   let parsed: unknown;
@@ -145,91 +144,98 @@ function appendLine(messages: TranscriptMessage[], line: string): void {
   } catch {
     // 空行と壊れた行は parsed が undefined のまま、次の isRecord で読み飛ばす。
   }
-  if (!isRecord(parsed)) return;
-  const raw = parsed as RawLine;
+  return isRecord(parsed) ? (parsed as RawLine) : undefined;
+}
 
+function attachToLastAssistant(messages: TranscriptMessage[], toolResult: ToolResult): void {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].kind === 'assistant') {
+      (messages[i] as AssistantMessage).toolResults.push(toolResult);
+      return;
+    }
+  }
+}
+
+function fromToolUseResult(result: NonNullable<RawLine['toolUseResult']>): ToolResult {
+  return {
+    toolUseId: typeof result.tool_use_id === 'string' ? result.tool_use_id : '',
+    content: typeof result.content === 'string' ? result.content : '',
+    isError: typeof result.is_error === 'boolean' ? result.is_error : undefined,
+  };
+}
+
+function toolResultText(content: ToolResultContent['content']): string {
+  if (typeof content === 'string') return content;
+  return Array.isArray(content) ? content.map((part) => part.text ?? '').join('') : '';
+}
+
+function appendUser(
+  messages: TranscriptMessage[],
+  rawContent: ContentBlock[] | string | undefined,
+  sessionId: string,
+  timestamp: string | undefined
+): void {
+  const content = parseContentBlocks(rawContent);
+  for (const block of content) {
+    if (block.type !== 'tool_result') continue;
+    attachToLastAssistant(messages, {
+      toolUseId: block.tool_use_id,
+      content: toolResultText(block.content),
+      isError: block.is_error,
+    });
+  }
+  const text = extractText(typeof rawContent === 'string' ? rawContent : content);
+  if (text) messages.push({ kind: 'user', sessionId, timestamp, text });
+}
+
+export interface ParseOptions {
+  /** 0.8.5 以前の読み方。行の type を見ず、role を持つ行をすべて発言として読む。その版で消したチャンクと照合するためだけに使う。 */
+  requestCopies?: boolean;
+}
+
+/** 1 行を解釈して messages に足す。ツール結果は直前の assistant に付ける。 */
+function appendLine(messages: TranscriptMessage[], line: string, options: ParseOptions): void {
+  const raw = parseRawLine(line);
   // Skip compaction summaries
-  if (raw.isCompactSummary) return;
+  if (!raw || raw.isCompactSummary) return;
 
   const sessionId = typeof raw.sessionId === 'string' ? raw.sessionId : '';
   const timestamp = validTimestamp(raw.timestamp);
 
-  // Tool result: attach to preceding assistant message
   if (isRecord(raw.toolUseResult)) {
-    const toolResult: ToolResult = {
-      toolUseId:
-        typeof raw.toolUseResult.tool_use_id === 'string' ? raw.toolUseResult.tool_use_id : '',
-      content: typeof raw.toolUseResult.content === 'string' ? raw.toolUseResult.content : '',
-      isError:
-        typeof raw.toolUseResult.is_error === 'boolean' ? raw.toolUseResult.is_error : undefined,
-    };
-    // Find last assistant message and attach
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].kind === 'assistant') {
-        (messages[i] as AssistantMessage).toolResults.push(toolResult);
-        break;
-      }
-    }
+    attachToLastAssistant(messages, fromToolUseResult(raw.toolUseResult));
     return;
   }
 
+  // api-request-blob 行も message.role を持つが、API へ送った本文（system-reminder を含む）の写しで会話ではない
+  if (!options.requestCopies && raw.type !== 'user' && raw.type !== 'assistant') return;
   if (!isRecord(raw.message)) return;
-  const role = raw.message.role;
-  const rawContent = raw.message.content;
-  const content = parseContentBlocks(rawContent);
-
+  const { role, content } = raw.message;
   if (role === 'user') {
-    if (content.length > 0) {
-      for (const block of content) {
-        if (block.type !== 'tool_result') continue;
-        const result = block as ToolResultContent;
-        const content =
-          typeof result.content === 'string'
-            ? result.content
-            : Array.isArray(result.content)
-              ? result.content.map((part) => part.text ?? '').join('')
-              : '';
-        for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i].kind === 'assistant') {
-            (messages[i] as AssistantMessage).toolResults.push({
-              toolUseId: result.tool_use_id,
-              content,
-              isError: result.is_error,
-            });
-            break;
-          }
-        }
-      }
-    }
-    const text = extractText(typeof rawContent === 'string' ? rawContent : content);
-    if (text) {
-      messages.push({
-        kind: 'user',
-        sessionId,
-        timestamp,
-        text,
-      });
-    }
+    appendUser(messages, content, sessionId, timestamp);
   } else if (role === 'assistant') {
     messages.push({
       kind: 'assistant',
       sessionId,
       timestamp,
-      content,
+      content: parseContentBlocks(content),
       toolResults: [],
     });
   }
 }
 
-export function parseTranscriptText(text: string): TranscriptMessage[] {
+export function parseTranscriptText(text: string, options: ParseOptions = {}): TranscriptMessage[] {
   const messages: TranscriptMessage[] = [];
-  for (const line of text.split(/\r?\n/)) appendLine(messages, line);
+  for (const line of text.split(/\r?\n/)) appendLine(messages, line, options);
   return messages;
 }
 
-export async function parseTranscript(filePath: string): Promise<TranscriptMessage[]> {
+export async function parseTranscript(
+  filePath: string,
+  options: ParseOptions = {}
+): Promise<TranscriptMessage[]> {
   const messages: TranscriptMessage[] = [];
-  for await (const line of readLines(filePath)) appendLine(messages, line);
+  for await (const line of readLines(filePath)) appendLine(messages, line, options);
   return messages;
 }
 

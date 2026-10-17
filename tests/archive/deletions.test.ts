@@ -6,9 +6,17 @@ import {
   loadDeletions,
   recordSessionDeletion,
   recordChunkDeletion,
+  recordChunkSessions,
   contentDigest,
   redactTurnText,
+  deleteChunkEverywhere,
+  deletionsFile,
 } from '../../src/archive/deletions';
+import { getDefaultConfig } from '../../src/config';
+import { getDatabase } from '../../src/db/connection';
+import { initializeSchema } from '../../src/db/schema';
+import { Store } from '../../src/db/store';
+import { listJsonlFiles } from '../../src/jsonl/path';
 import { splitTurnText } from '../../src/parser/chunker';
 
 describe('deletions', () => {
@@ -24,6 +32,7 @@ describe('deletions', () => {
     const d = loadDeletions(file);
     expect([...d.sessions]).toEqual([]);
     expect([...d.chunkDigests]).toEqual([]);
+    expect([...d.chunkSessions]).toEqual([]);
   });
 
   it('records deleted sessions once each and creates the parent directory', () => {
@@ -44,6 +53,24 @@ describe('deletions', () => {
     recordChunkDeletion(file, 'secret token ABC');
     expect([...loadDeletions(file).chunkDigests]).toEqual([contentDigest('secret token ABC')]);
     expect(fs.readFileSync(file, 'utf-8')).not.toContain('secret token ABC');
+  });
+
+  it('records the session of a deleted chunk when it is given', () => {
+    recordChunkDeletion(file, 'x', 'dddd0004');
+    recordChunkDeletion(file, 'y');
+    expect([...loadDeletions(file).chunkSessions]).toEqual(['dddd0004']);
+    expect(JSON.parse(fs.readFileSync(file, 'utf-8')).chunkSessions).toEqual(['dddd0004']);
+  });
+
+  it('adds sessions with deleted chunks and rewrites the file only when one is new', () => {
+    recordChunkSessions(file, new Set(['eeee0005']));
+    const before = fs.statSync(file).mtimeMs;
+    fs.utimesSync(file, new Date(0), new Date(0));
+    recordChunkSessions(file, new Set(['eeee0005']));
+    expect(fs.statSync(file).mtimeMs).toBe(0);
+    recordChunkSessions(file, new Set(['eeee0005', 'ffff0006']));
+    expect([...loadDeletions(file).chunkSessions]).toEqual(['eeee0005', 'ffff0006']);
+    expect(before).toBeGreaterThan(0);
   });
 
   it('keeps sessions and chunks independent in one file', () => {
@@ -102,5 +129,68 @@ describe('deletions', () => {
       const text = '[User]\nhello\n\n[Assistant]\nhi';
       expect(redactTurnText(text, new Set([contentDigest(text)]))).toBe('[deleted]');
     });
+  });
+});
+
+describe('deleteChunkEverywhere', () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-delete-everywhere-'));
+  });
+  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  function setup(externalId: string | undefined) {
+    const d = getDefaultConfig();
+    const config = {
+      ...d,
+      database: { path: path.join(tmp, 'memory.db') },
+      storage: { ...d.storage, jsonlDir: path.join(tmp, 'jsonl') },
+    };
+    const db = getDatabase(config.database.path);
+    initializeSchema(db);
+    const store = new Store(db);
+    store.insertChunks([
+      {
+        externalId,
+        sessionId: 's1',
+        projectPath: '/p',
+        chunkIndex: 0,
+        content: 'body',
+        role: 'mixed',
+        metadata: { filePaths: [], toolNames: [], errorMessages: [] },
+        tokenCount: 1,
+      },
+    ]);
+    const chunk = { ...store.getChunk(1)!, id: 1 };
+    return { config, db, store, chunk };
+  }
+  const jsonl = (dir: string) =>
+    listJsonlFiles(dir)
+      .map((f) => fs.readFileSync(f, 'utf-8'))
+      .join('');
+
+  it('records the deletion in the JSONL store and the digest list when the chunk has an external id', () => {
+    const { config, db, store, chunk } = setup('ext-1');
+    try {
+      expect(deleteChunkEverywhere(store, config, chunk)).toBe(true);
+      expect(store.getChunk(chunk.id)).toBeUndefined();
+      expect(jsonl(config.storage.jsonlDir)).toContain('"externalId":"ext-1"');
+      expect([...loadDeletions(deletionsFile(config.database.path)).chunkDigests]).toEqual([
+        contentDigest('body'),
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('deletes a chunk without an external id from the DB only and reports it', () => {
+    const { config, db, store, chunk } = setup(undefined);
+    try {
+      expect(deleteChunkEverywhere(store, config, chunk)).toBe(false);
+      expect(store.getChunk(chunk.id)).toBeUndefined();
+      expect(jsonl(config.storage.jsonlDir)).toBe('');
+    } finally {
+      db.close();
+    }
   });
 });

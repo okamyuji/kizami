@@ -121,9 +121,8 @@ describe('recoverTranscripts', () => {
     expect(queryRows<{ created_at: string }>('SELECT created_at FROM chunks')).toEqual([
       { created_at: '2026-10-05T06:44:12.345Z' },
     ]);
-    const records = fs
-      .readdirSync(jsonlDir)
-      .flatMap((f) => fs.readFileSync(path.join(jsonlDir, f), 'utf-8').trim().split('\n'))
+    const records = listJsonlFiles(jsonlDir)
+      .flatMap((f) => fs.readFileSync(f, 'utf-8').trim().split('\n'))
       .map((l) => JSON.parse(l) as { createdAt: string });
     expect(records.map((r) => r.createdAt)).toEqual(['2026-10-05T06:44:12.345Z']);
   });

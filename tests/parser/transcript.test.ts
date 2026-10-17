@@ -156,6 +156,20 @@ describe('parseTranscript', () => {
 });
 
 describe('parseTranscriptText', () => {
+  it('reads request copies and every other line with a role only when asked, as versions before 0.8.6 did', () => {
+    const text = [
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'q' } }),
+      JSON.stringify({ type: 'api-request-blob', message: { role: 'user', content: 'copy' } }),
+      JSON.stringify({ type: 'api-request-blob', message: { role: 'system', content: 'sys' } }),
+      JSON.stringify({ type: 'attachment', message: { role: 'user', content: 'other' } }),
+    ].join('\n');
+
+    expect(parseTranscriptText(text).map((m) => m.kind === 'user' && m.text)).toEqual(['q']);
+    expect(
+      parseTranscriptText(text, { requestCopies: true }).map((m) => m.kind === 'user' && m.text)
+    ).toEqual(['q', 'copy', 'other']);
+  });
+
   it('gives the same messages as parseTranscript for the same file', async () => {
     const fixture = path.resolve(__dirname, '../fixtures/sample-transcript.jsonl');
     expect(parseTranscriptText(fs.readFileSync(fixture, 'utf-8'))).toEqual(
@@ -182,6 +196,97 @@ describe('parseTranscriptText', () => {
     expect(parseTranscriptText(`null\n42\n${summary}\n${line}`)).toEqual([
       expect.objectContaining({ kind: 'user', text: 'hi' }),
     ]);
+  });
+
+  it('reads only user and assistant lines and skips api-request-blob copies of the request', () => {
+    const lines = [
+      { type: 'user', message: { role: 'user', content: 'question' } },
+      {
+        type: 'api-request-blob',
+        message: { role: 'user', content: '<system-reminder>context</system-reminder>' },
+      },
+      {
+        type: 'api-request-blob',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'earlier answer' }] },
+      },
+      { message: { role: 'user', content: 'no type' } },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'a' }] } },
+    ];
+    const messages = parseTranscriptText(lines.map((l) => JSON.stringify(l)).join('\n'));
+    expect(messages).toEqual([
+      expect.objectContaining({ kind: 'user', text: 'question' }),
+      expect.objectContaining({ kind: 'assistant', content: [{ type: 'text', text: 'a' }] }),
+    ]);
+  });
+
+  const toText = (lines: unknown[]) => lines.map((l) => JSON.stringify(l)).join('\n');
+  const assistant = { type: 'assistant', message: { role: 'assistant', content: [] } };
+
+  it('attaches a toolUseResult to the last assistant even when a user turn follows it', () => {
+    const messages = parseTranscriptText(
+      toText([
+        assistant,
+        { type: 'user', message: { role: 'user', content: 'next' } },
+        {
+          type: 'user',
+          toolUseResult: { tool_use_id: 't1', content: 'out', is_error: true },
+        },
+      ])
+    );
+    expect((messages[0] as AssistantMessage).toolResults).toEqual([
+      { toolUseId: 't1', content: 'out', isError: true },
+    ]);
+  });
+
+  it('replaces toolUseResult fields of the wrong type with empty values', () => {
+    const messages = parseTranscriptText(
+      toText([
+        assistant,
+        { type: 'user', toolUseResult: { tool_use_id: 7, content: ['x'], is_error: 'yes' } },
+      ])
+    );
+    expect((messages[0] as AssistantMessage).toolResults).toEqual([
+      { toolUseId: '', content: '', isError: undefined },
+    ]);
+  });
+
+  it('joins array tool_result text, uses an empty string for missing content, and ignores text blocks', () => {
+    const messages = parseTranscriptText(
+      toText([
+        assistant,
+        {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'a',
+                content: [{ text: 'x' }, {}, { text: 'y' }],
+              },
+              { type: 'tool_result', tool_use_id: 'b' },
+              { type: 'text', text: 'typed' },
+            ],
+          },
+        },
+      ])
+    );
+    expect(messages).toHaveLength(2);
+    expect((messages[0] as AssistantMessage).toolResults).toEqual([
+      { toolUseId: 'a', content: 'xy', isError: undefined },
+      { toolUseId: 'b', content: '', isError: undefined },
+    ]);
+  });
+
+  it('skips user and assistant lines without a message object or with another role', () => {
+    const messages = parseTranscriptText(
+      toText([
+        { type: 'user' },
+        { type: 'user', message: null },
+        { type: 'assistant', message: { role: 'system', content: [{ type: 'text', text: 's' }] } },
+      ])
+    );
+    expect(messages).toEqual([]);
   });
 });
 

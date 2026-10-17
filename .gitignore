@@ -8,3 +8,5 @@ docs/_quality/
 docs/analysis/
 .stryker-tmp/
 reports/
+.DS_Store
+docs/superpowers/

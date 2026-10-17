@@ -87,6 +87,8 @@ describe('handleSave', () => {
 
   it('does not archive for other runtimes or when the payload names no existing file', () => {
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    // 文字列でない値を fs.existsSync に渡すと Node が DEP0187 を出す。将来は例外になる
+    const warn = vi.spyOn(process, 'emitWarning');
     const projDir = path.join(tmpDir, 'projects', '-proj');
     fs.mkdirSync(projDir, { recursive: true });
     const transcript = path.join(projDir, 'eeee5555.jsonl');
@@ -102,7 +104,9 @@ describe('handleSave', () => {
 
     expect(fs.existsSync(path.join(tmpDir, 'archive'))).toBe(false);
     expect(spy).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
     spy.mockRestore();
+    warn.mockRestore();
   });
 
   it('reports an archive failure on stderr without throwing', () => {

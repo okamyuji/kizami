@@ -1,11 +1,18 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { splitTurnText } from '@/parser/chunker';
+import { buildTurns, splitTurnText, turnToText } from '@/parser/chunker';
+import type { TranscriptMessage } from '@/parser/transcript';
+import { REQUEST_COPY_SIGNATURE, stripRequestCopy } from '@/parser/request-copy';
+import type { EngramConfig } from '@/config';
+import type { Chunk, Store } from '@/db/store';
+import { appendChunkDeletion } from '@/jsonl/deletion';
 
 export interface Deletions {
   sessions: Set<string>;
   chunkDigests: Set<string>;
+  /** 手でチャンクを消したセッション。生ログから作り直すと、消した本文が別の形で戻る。 */
+  chunkSessions: Set<string>;
 }
 
 const DELETED_MARK = '[deleted]';
@@ -24,8 +31,10 @@ function strings(value: unknown): string[] {
 }
 
 export function loadDeletions(file: string): Deletions {
-  if (!fs.existsSync(file)) return { sessions: new Set(), chunkDigests: new Set() };
-  let raw: { sessions?: unknown; chunkDigests?: unknown };
+  if (!fs.existsSync(file)) {
+    return { sessions: new Set(), chunkDigests: new Set(), chunkSessions: new Set() };
+  }
+  let raw: { sessions?: unknown; chunkDigests?: unknown; chunkSessions?: unknown };
   try {
     raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as typeof raw;
   } catch (err) {
@@ -34,12 +43,17 @@ export function loadDeletions(file: string): Deletions {
   return {
     sessions: new Set(strings(raw.sessions)),
     chunkDigests: new Set(strings(raw.chunkDigests)),
+    chunkSessions: new Set(strings(raw.chunkSessions)),
   };
 }
 
 function save(file: string, d: Deletions): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const body = { sessions: [...d.sessions], chunkDigests: [...d.chunkDigests] };
+  const body = {
+    sessions: [...d.sessions],
+    chunkDigests: [...d.chunkDigests],
+    chunkSessions: [...d.chunkSessions],
+  };
   // 途中で切れたファイルは loadDeletions が拒むので、書き終えてから置き換える。
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(body, null, 2), { mode: 0o600 });
@@ -52,10 +66,37 @@ export function recordSessionDeletion(file: string, sessionId: string): void {
   save(file, d);
 }
 
-export function recordChunkDeletion(file: string, content: string): void {
+export function recordChunkDeletion(file: string, content: string, sessionId?: string): void {
   const d = loadDeletions(file);
   d.chunkDigests.add(contentDigest(content));
+  if (sessionId !== undefined) d.chunkSessions.add(sessionId);
   save(file, d);
+}
+
+/** 正本に chunk_delete を持つセッションを書き足す。記録を持たない版で消したものを拾うため。 */
+export function recordChunkSessions(file: string, sessionIds: Set<string>): void {
+  const d = loadDeletions(file);
+  if ([...sessionIds].every((id) => d.chunkSessions.has(id))) return;
+  for (const id of sessionIds) d.chunkSessions.add(id);
+  save(file, d);
+}
+
+/**
+ * チャンクを JSONL 正本、DB、削除の記録から消す。正本を先に書き、失敗したら何も消さない。
+ * external id の無い古いチャンクは正本に記録できないので false を返す。
+ */
+export function deleteChunkEverywhere(
+  store: Store,
+  config: EngramConfig,
+  chunk: Chunk & { id: number }
+): boolean {
+  if (chunk.externalId) {
+    appendChunkDeletion(config.storage.jsonlDir, chunk.sessionId, chunk.externalId);
+  }
+  store.deleteChunk(chunk.id);
+  store.refreshSessionSummary(chunk.sessionId);
+  recordChunkDeletion(deletionsFile(config.database.path), chunk.content, chunk.sessionId);
+  return chunk.externalId !== undefined;
 }
 
 /**
@@ -68,4 +109,42 @@ export function redactTurnText(text: string, chunkDigests: Set<string>): string 
   const parts = splitTurnText(text, 512);
   if (!parts.some((p) => chunkDigests.has(contentDigest(p)))) return text;
   return parts.map((p) => (chunkDigests.has(contentDigest(p)) ? DELETED_MARK : p)).join('\n\n');
+}
+
+/**
+ * 0.8.5 以前は写しの行も発言として読んだので、その版で消したチャンクは今の読み方の本文と照合しても当たらない。
+ * 旧版の読み方で消されていたターンのうち、今の読み方では本文が変わるものを、今の形の本文で返す。
+ */
+function turnsDeletedAsReadBefore(
+  legacy: TranscriptMessage[],
+  current: Set<string>,
+  chunkDigests: Set<string>
+): string[] {
+  return buildTurns(legacy)
+    .map(turnToText)
+    .filter((text) => !current.has(text))
+    .filter((text) => splitTurnText(text, 512).some((p) => chunkDigests.has(contentDigest(p))))
+    .map((text) => {
+      if (!text.startsWith(REQUEST_COPY_SIGNATURE)) return text;
+      const { prompt, assistant } = stripRequestCopy(text);
+      return turnToText({ human: prompt, assistant });
+    });
+}
+
+/**
+ * 会話のターンを、削除したチャンクを伏せた本文にする。旧版で消されていたターンは、
+ * 今の本文と重なるターンごと伏せる。旧版のターンは写しとプロンプトを別のターンに分けていたので、片方だけを含むことがある。
+ */
+export function redactTurns(
+  messages: TranscriptMessage[],
+  legacy: TranscriptMessage[],
+  chunkDigests: Set<string>
+): string[] {
+  const texts = buildTurns(messages).map(turnToText);
+  const before = turnsDeletedAsReadBefore(legacy, new Set(texts), chunkDigests);
+  return texts.map((text) =>
+    before.some((d) => text.includes(d) || d.includes(text))
+      ? DELETED_MARK
+      : redactTurnText(text, chunkDigests)
+  );
 }

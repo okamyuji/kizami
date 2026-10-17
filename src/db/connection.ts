@@ -4,7 +4,7 @@ import { getDefaultDbPath } from '@/config';
 import {
   assertPrivateFileTarget,
   enforcePrivateDirectory,
-  enforcePrivateFile,
+  restrictSqliteFile,
 } from '@/storage/permissions';
 
 export function getDatabase(dbPath?: string): Database.Database {
@@ -23,10 +23,12 @@ export function getDatabase(dbPath?: string): Database.Database {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
+    // 消した行の本文がファイルの空きページに残らないよう、ページを 0 で埋める（会話の写しや手で消した秘密）
+    db.pragma('secure_delete = ON');
 
-    enforcePrivateFile(resolvedPath);
-    enforcePrivateFile(`${resolvedPath}-wal`);
-    enforcePrivateFile(`${resolvedPath}-shm`);
+    restrictSqliteFile(resolvedPath);
+    restrictSqliteFile(`${resolvedPath}-wal`);
+    restrictSqliteFile(`${resolvedPath}-shm`);
   } catch (error: unknown) {
     db.close();
     throw error;

@@ -115,6 +115,7 @@ describe('refreshIfGrown outcomes', () => {
       transcriptPath: transcript,
       marks,
       deletedChunkDigests: new Set(),
+      deletedChunkSessions: new Set(),
     });
 
   it('returns unchanged without looking further when the size matches the mark', async () => {
@@ -157,9 +158,24 @@ describe('refreshIfGrown outcomes', () => {
       transcriptPath: transcript,
       marks,
       deletedChunkDigests: new Set([contentDigest('[User]\nq\n\n[Assistant]\na')]),
+      deletedChunkSessions: new Set(),
     });
     expect(outcome).toBe('skipped');
     expect(marks.get('s1')).toBe(fs.statSync(transcript).size);
+  });
+
+  it('returns skipped for a session with a chunk deleted by hand even when no body matches', async () => {
+    legacySession(0);
+    const outcome = await refreshIfGrown({
+      config,
+      store,
+      sessionId: 's1',
+      transcriptPath: transcript,
+      marks: new Map(),
+      deletedChunkDigests: new Set(),
+      deletedChunkSessions: new Set(['s1']),
+    });
+    expect(outcome).toBe('skipped');
   });
 
   it('refreshes a grown session through a claude receipt and updates the session row', async () => {
