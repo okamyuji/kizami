@@ -79,3 +79,55 @@ describe('recall skill', () => {
     expect(fs.existsSync(installRecallSkill(nested, 'kizami'))).toBe(true);
   });
 });
+
+describe('recall skill resume hint', () => {
+  const resumeLine = (md: string): string =>
+    md.split('\n').find((line) => line.startsWith('5. ')) ?? '';
+
+  it('writes paths under the home directory as "$HOME" so the answer does not print it', () => {
+    const md = renderRecallSkill(
+      "'/Users/alice/.local/bin/node' '/Users/alice/kizami/dist/cli.js'",
+      '/Users/alice'
+    );
+
+    expect(resumeLine(md)).toContain(
+      `\`"$HOME"'/.local/bin/node' "$HOME"'/kizami/dist/cli.js' resume <id>\``
+    );
+    expect(resumeLine(md)).not.toContain('/Users/alice');
+  });
+
+  it('keeps the absolute command for allowed-tools and the search step', () => {
+    const cmd = "'/Users/alice/.local/bin/node' '/Users/alice/kizami/dist/cli.js'";
+
+    const md = renderRecallSkill(cmd, '/Users/alice');
+
+    expect(md).toContain(`allowed-tools: Bash(${cmd} search:*), Bash(${cmd} show:*)`);
+    expect(md).toContain(`Run \`${cmd} search "<keywords>"\``);
+  });
+
+  it('leaves paths outside the home directory unchanged', () => {
+    const md = renderRecallSkill("'/opt/node' '/x/cli.js'", '/Users/alice');
+
+    expect(resumeLine(md)).toContain("`'/opt/node' '/x/cli.js' resume <id>`");
+  });
+
+  it('does not rewrite a sibling directory that only shares the home prefix', () => {
+    const md = renderRecallSkill("'/Users/alice2/cli.js'", '/Users/alice');
+
+    expect(resumeLine(md)).toContain("`'/Users/alice2/cli.js' resume <id>`");
+  });
+
+  it('leaves the command unchanged when the home directory is empty or the root', () => {
+    for (const home of ['', '/']) {
+      const md = renderRecallSkill("'/usr/local/bin/node' '/x/cli.js'", home);
+
+      expect(resumeLine(md)).toContain("`'/usr/local/bin/node' '/x/cli.js' resume <id>`");
+    }
+  });
+
+  it('leaves a bare kizami command unchanged', () => {
+    expect(resumeLine(renderRecallSkill('kizami', '/Users/alice'))).toContain(
+      '`kizami resume <id>`'
+    );
+  });
+});

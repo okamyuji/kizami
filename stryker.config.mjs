@@ -152,6 +152,7 @@ export default {
     'src/parser/transcript.ts:155-155',
     'src/search/formatter.ts:8-40',
     'src/search/formatter.ts:82-82',
+    'src/cli.ts:785-845',
   ],
   reporters: ['clear-text', 'progress'],
   thresholds: { high: 100, low: 100, break: 100 },
