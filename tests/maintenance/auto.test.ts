@@ -350,6 +350,15 @@ describe('runAutoMaintenance', () => {
     expect(lastRun).not.toBeNull();
   });
 
+  it('vacuum truncates the WAL file to zero bytes', () => {
+    store.insertChunks([makeChunk('s-wal', 0, '/test', 'x'.repeat(2000))]);
+    expect(fs.statSync(dbPath + '-wal').size).toBeGreaterThan(0);
+
+    store.vacuum();
+
+    expect(fs.statSync(dbPath + '-wal').size).toBe(0);
+  });
+
   it('should delete by size limit when DB exceeds maxDbSizeMB', () => {
     // Insert many chunks to grow the DB
     const chunks: Chunk[] = [];
