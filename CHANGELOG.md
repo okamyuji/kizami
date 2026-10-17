@@ -1,3 +1,9 @@
+## [0.8.3](https://github.com/okamyuji/kizami/compare/v0.8.2...v0.8.3) (2026-10-17)
+
+### Bug Fixes
+
+- **deps:** bump handlebars, source-map-js and qs to patched versions ([#41](https://github.com/okamyuji/kizami/issues/41)) ([7b1238b](https://github.com/okamyuji/kizami/commit/7b1238b4d3adaf1c233008b9d1b9c78d15f29134))
+
 ## [0.8.2](https://github.com/okamyuji/kizami/compare/v0.8.1...v0.8.2) (2026-10-17)
 
 ### Bug Fixes
