@@ -1,3 +1,9 @@
+## [0.8.5](https://github.com/okamyuji/kizami/compare/v0.8.4...v0.8.5) (2026-10-17)
+
+### Bug Fixes
+
+- reject unknown CLI options and keep the home path out of the resume hint ([#43](https://github.com/okamyuji/kizami/issues/43)) ([f9f6469](https://github.com/okamyuji/kizami/commit/f9f64690a195df62203e506cd4353fb8606aa1af))
+
 ## [0.8.4](https://github.com/okamyuji/kizami/compare/v0.8.3...v0.8.4) (2026-10-17)
 
 ### Bug Fixes
