@@ -1,4 +1,5 @@
 import { unfence } from './helpers/fence';
+import { VERSION } from '../src/version';
 import { copyRecentTranscript } from './helpers/recent-transcript';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
@@ -33,6 +34,8 @@ import {
   cmdSetup,
   cmdSearchFresh,
   cmdRecover,
+  parseInvocation,
+  main,
 } from '../src/cli';
 
 // worker スレッドでは process.env.HOME を変えても os.homedir() に届かない。
@@ -1428,5 +1431,131 @@ describe('cli commands', () => {
 
       expect(results.map((r) => r.sessionId)).toContain('fresh-0001');
     });
+  });
+});
+
+describe('parseInvocation', () => {
+  afterEach(() => {
+    process.exitCode = undefined;
+    vi.restoreAllMocks();
+  });
+
+  it('returns the parsed options for a valid setup invocation', () => {
+    const parsed = parseInvocation(['setup', '--recall-only']);
+
+    expect(parsed?.positionals).toEqual(['setup']);
+    expect(parsed?.values['recall-only']).toBe(true);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('prints usage and stops for setup --help', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const parsed = parseInvocation(['setup', '--help']);
+
+    expect(parsed).toBeUndefined();
+    expect(String(logSpy.mock.calls[0]?.[0])).toContain('kizami <command> [options]');
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('prints usage and stops for -h', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    expect(parseInvocation(['-h'])).toBeUndefined();
+    expect(String(logSpy.mock.calls[0]?.[0])).toContain('-h, --help');
+  });
+
+  it('prints only the version when --version and --help are both given', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    expect(parseInvocation(['--version', '--help'])).toBeUndefined();
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy.mock.calls[0]?.[0]).toBe(VERSION);
+  });
+
+  it('reports an unknown option and sets a failing exit code', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(parseInvocation(['setup', '--recal-only'])).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+    expect(String(errorSpy.mock.calls[0]?.[0])).toMatch(/^kizami: .*'--recal-only'/);
+    expect(errorSpy.mock.calls[1]?.[0]).toBe('Run kizami --help for usage.');
+  });
+
+  it('reports a string option given without its value', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(parseInvocation(['search', 'retry', '--project'])).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain("'--project");
+  });
+
+  it('defaults every boolean option to false', () => {
+    const parsed = parseInvocation(['search', 'retry']);
+
+    expect(parsed?.values).toEqual({
+      stdin: false,
+      'all-projects': false,
+      'show-evidence': false,
+      'dry-run': false,
+      hybrid: false,
+      backfill: false,
+      'recall-only': false,
+      version: false,
+      help: false,
+    });
+  });
+
+  it('accepts every option that the usage text documents', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    parseInvocation(['--help']);
+    const usage = String(logSpy.mock.calls[0]?.[0]);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const documented = [...new Set(usage.match(/--[a-z][a-z-]*/g))];
+
+    const accepts = (args: string[]): boolean => {
+      process.exitCode = undefined;
+      parseInvocation(args);
+      return process.exitCode !== 1;
+    };
+
+    const rejected = documented.filter(
+      (flag) => !accepts(['search', flag]) && !accepts(['search', `${flag}=x`])
+    );
+
+    expect(documented.length).toBeGreaterThan(0);
+    expect(rejected).toEqual([]);
+  });
+
+  it('keeps arguments after -- as positionals for resume', () => {
+    const parsed = parseInvocation(['resume', 'abcd', '--', '-p', 'continue']);
+
+    expect(parsed?.positionals).toEqual(['resume', 'abcd', '-p', 'continue']);
+  });
+});
+
+describe('main', () => {
+  afterEach(() => {
+    process.exitCode = undefined;
+    vi.restoreAllMocks();
+  });
+
+  it('stops after printing usage for setup --help', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await main(['setup', '--help']);
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(String(logSpy.mock.calls[0]?.[0])).toContain('kizami <command> [options]');
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('dispatches a parsed command and reports an unknown one', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await main(['no-such-command']);
+
+    expect(errorSpy).toHaveBeenCalledWith('Unknown command: no-such-command');
+    expect(process.exitCode).toBe(1);
   });
 });

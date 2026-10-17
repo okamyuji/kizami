@@ -778,13 +778,17 @@ Options:
   --stdin             Read input from stdin (for hooks)
   --dry-run           rebuild: do not write SQLite
   --from-month <YYYY-MM>  rebuild: limit to a single month
-  -v, --version       Print version and exit`);
+  -v, --version       Print version and exit
+  -h, --help          Print this help and exit`);
 }
 
-async function main(): Promise<void> {
-  const { values, positionals } = parseArgs({
+// strict にしないと未知のオプション（--help の誤用や綴り誤り）が黙って捨てられ、
+// `setup` が自動注入付きの既定構成で走ってしまう。
+function parseCliArgs(args: string[]) {
+  return parseArgs({
+    args,
     allowPositionals: true,
-    strict: false,
+    strict: true,
     options: {
       stdin: { type: 'boolean', default: false },
       project: { type: 'string' },
@@ -809,13 +813,37 @@ async function main(): Promise<void> {
       'recall-only': { type: 'boolean', default: false },
       'max-chars': { type: 'string' },
       version: { type: 'boolean', short: 'v', default: false },
+      help: { type: 'boolean', short: 'h', default: false },
     },
   });
+}
 
-  if (values['version']) {
-    console.log(VERSION);
-    return;
+/** undefined を返したときは、解析エラー・--version・--help の処理を終えている。 */
+export function parseInvocation(args: string[]): ReturnType<typeof parseCliArgs> | undefined {
+  let parsed: ReturnType<typeof parseCliArgs>;
+  try {
+    parsed = parseCliArgs(args);
+  } catch (err) {
+    console.error(`kizami: ${(err as Error).message}`);
+    console.error('Run kizami --help for usage.');
+    process.exitCode = 1;
+    return undefined;
   }
+  if (parsed.values.version) {
+    console.log(VERSION);
+    return undefined;
+  }
+  if (parsed.values.help) {
+    showUsage();
+    return undefined;
+  }
+  return parsed;
+}
+
+export async function main(args: string[]): Promise<void> {
+  const parsed = parseInvocation(args);
+  if (!parsed) return;
+  const { values, positionals } = parsed;
 
   const command = positionals[0];
 
@@ -1066,7 +1094,7 @@ if (process.argv[2] === 'save' || process.argv[2] === 'recall' || process.argv[2
   process.on('SIGTERM', () => {});
 }
 
-main().catch((err) => {
+main(process.argv.slice(2)).catch((err) => {
   console.error(`kizami error: ${String(err)}`);
   process.exitCode = 1;
 });
