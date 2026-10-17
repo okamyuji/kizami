@@ -50,8 +50,12 @@ export function isRepairDone(config: EngramConfig): boolean {
 }
 
 export function markRepairDone(config: EngramConfig): void {
-  // Stryker disable next-line StringLiteral: 目印は存在だけを見る
-  fs.writeFileSync(repairMarkerFile(config), '');
+  try {
+    // 'wx' は既存のパスに失敗する。目印の位置に置かれたシンボリックリンクの先を、切り詰めない
+    fs.closeSync(fs.openSync(repairMarkerFile(config), 'wx', 0o600));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+  }
 }
 
 export type RefreshOutcome = 'refreshed' | 'unchanged' | 'skipped';
@@ -102,6 +106,7 @@ function needsRepair(store: Store, session: Session, projectPath: string): boole
 /**
  * 古い実装は projectPath をディレクトリ名から誤って復号し、チャンクに取り込み時刻を刻んだ。
  * そのセッションを、生ログから作り直した全ターンで置き換える。判定が外れれば何もしない。
+ * v1 の行だけか、生ログ由来の鍵だけのセッションに限る。
  * 置き換えは legacy_mismatch の reset として JSONL に残るので、rebuild しても直した値が残る。
  */
 export async function repairIfMisdated(ctx: RefreshContext, projectPath: string): Promise<boolean> {
@@ -126,6 +131,8 @@ export async function repairIfMisdated(ctx: RefreshContext, projectPath: string)
     fallbackTime(messages)
   );
   if (candidates.length === 0) return false;
+  // hook が管理するセッションは、projectPath が違っても置き換えない
+  if (!followsOffsetRule(new Set(store.getSessionTurnKeys(sessionId)), candidates)) return false;
 
   await commit(config, sessionId, candidates, true);
   marks.set(sessionId, size);
@@ -181,13 +188,18 @@ async function replaceLegacy(
   return 'refreshed';
 }
 
+/** 生ログから作った turnKey だけで成り立つか。hook が付けた鍵が混ざるセッションは hook の管理下にある。 */
+function followsOffsetRule(existing: Set<string>, candidates: TurnCheckpointCandidate[]): boolean {
+  const known = new Set(candidates.map((c) => c.turnKey));
+  return [...existing].every((key) => known.has(key));
+}
+
 async function appendMissingTurns(
   ctx: RefreshContext,
   candidates: TurnCheckpointCandidate[]
 ): Promise<RefreshOutcome> {
-  const known = new Set(candidates.map((c) => c.turnKey));
   const existing = new Set(ctx.store.getSessionTurnKeys(ctx.sessionId));
-  if (existing.size === 0 || [...existing].some((key) => !known.has(key))) return 'skipped';
+  if (existing.size === 0 || !followsOffsetRule(existing, candidates)) return 'skipped';
   const missing = candidates.filter((c) => !existing.has(c.turnKey));
   if (missing.length === 0) return 'unchanged';
   await commit(ctx.config, ctx.sessionId, missing, false);

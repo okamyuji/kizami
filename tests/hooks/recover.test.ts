@@ -1027,6 +1027,32 @@ describe('recoverTranscripts repairs sessions imported with the wrong time or pr
     ]);
   });
 
+  it('does not repair a hook-managed session only because its project path differs', async () => {
+    await importThenCorrupt();
+    sql('UPDATE chunks SET turn_key = ?, project_path = ?', 'tk-hook', '/elsewhere');
+    sql('UPDATE sessions SET project_path = ?', '/elsewhere');
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.repaired).toBe(0);
+    expect(all('SELECT turn_key, project_path FROM chunks')).toEqual([
+      { turn_key: 'tk-hook', project_path: '/elsewhere' },
+    ]);
+  });
+
+  it('repairs a session whose turn keys all follow the transcript offset rule', async () => {
+    await importThenCorrupt({ createdAt: '2026-10-17T00:31:43.000Z' });
+    await recoverTranscripts(configPath, projectsDir);
+    sql('UPDATE chunks SET project_path = ?', WRONG);
+    sql('UPDATE sessions SET project_path = ?', WRONG);
+    fs.rmSync(marker(), { force: true });
+
+    const result = await recoverTranscripts(configPath, projectsDir);
+
+    expect(result.repaired).toBe(1);
+    expect(all('SELECT DISTINCT project_path FROM chunks')).toEqual([{ project_path: CWD }]);
+  });
+
   it('does not repair a session that already aged out of retention', async () => {
     const old = new Date();
     old.setDate(old.getDate() - 120);

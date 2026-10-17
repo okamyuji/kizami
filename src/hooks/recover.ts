@@ -216,7 +216,7 @@ export async function recoverTranscripts(
 
     saveRecoverMarks(config, marks);
     // 失敗したセッションがあれば次回も判定し直す
-    if (result.errors === 0) markRepairDone(config);
+    if (!repairDone && result.errors === 0) markRepairDone(config);
     return result;
   } finally {
     db.close();

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -155,5 +155,47 @@ describe('parseTranscriptText', () => {
     expect(parseTranscriptText(`null\n42\n${summary}\n${line}`)).toEqual([
       expect.objectContaining({ kind: 'user', text: 'hi' }),
     ]);
+  });
+});
+
+describe('parseTranscriptText timestamps', () => {
+  const line = (timestamp: unknown) =>
+    JSON.stringify({
+      type: 'user',
+      sessionId: 's',
+      timestamp,
+      message: { role: 'user', content: 'hello' },
+    });
+  const stamp = (timestamp: unknown) => parseTranscriptText(line(timestamp))[0].timestamp;
+
+  it('keeps a valid ISO timestamp as written', () => {
+    expect(stamp('2026-10-05T06:44:12.345Z')).toBe('2026-10-05T06:44:12.345Z');
+    expect(stamp('2024-06-15T10:00:00Z')).toBe('2024-06-15T10:00:00Z');
+    expect(stamp('2026-10-05T06:44:12.345678Z')).toBe('2026-10-05T06:44:12.345678Z');
+  });
+
+  it('ignores a timestamp that is not a date', () => {
+    expect(stamp('zzz-not-a-date')).toBeUndefined();
+    expect(stamp('')).toBeUndefined();
+    expect(stamp(2020)).toBeUndefined();
+  });
+
+  it('normalizes a parseable timestamp that is not in UTC ISO form', () => {
+    expect(stamp('Oct 5 2026 10:00:00 GMT')).toBe('2026-10-05T10:00:00.000Z');
+    expect(stamp('2026-10-05T19:00:00+09:00')).toBe('2026-10-05T10:00:00.000Z');
+  });
+
+  it('ignores a timestamp far in the future', () => {
+    expect(stamp('9999-12-31T00:00:00Z')).toBeUndefined();
+  });
+
+  it('accepts a timestamp up to one day ahead and rejects anything later', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-17T12:00:00.000Z') });
+    try {
+      expect(stamp('2026-10-18T12:00:00.000Z')).toBe('2026-10-18T12:00:00.000Z');
+      expect(stamp('2026-10-18T12:00:00.001Z')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
