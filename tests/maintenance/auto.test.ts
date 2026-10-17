@@ -6,7 +6,7 @@ import { getDatabase } from '../../src/db/connection';
 import { initializeSchema } from '../../src/db/schema';
 import { Store } from '../../src/db/store';
 import type { Chunk } from '../../src/db/store';
-import { deleteBySizeLimit, runAutoMaintenance } from '../../src/maintenance/auto';
+import { deleteBySizeLimit, isAgedOut, runAutoMaintenance } from '../../src/maintenance/auto';
 import type { SizeLimitStore } from '../../src/maintenance/auto';
 import { getDefaultConfig, type EngramConfig } from '../../src/config';
 import type Database from 'better-sqlite3';
@@ -548,5 +548,37 @@ describe('deleteBySizeLimit', () => {
 
     expect(calls.chunkBatches).toEqual([1]);
     expect(deleted).toEqual({ chunks: 0, observations: 0, orphanedSessions: 0 });
+  });
+});
+
+describe('isAgedOut', () => {
+  const now = new Date('2026-10-17T12:00:00.000Z');
+  const cutoff = new Date(now);
+  cutoff.setDate(cutoff.getDate() - 90);
+
+  it('is true only for a conversation that ended before the retention cutoff', () => {
+    const config = makeConfig({ maxChunkAgeDays: 90 });
+
+    expect(isAgedOut(config, new Date(cutoff.getTime() - 1).toISOString(), now)).toBe(true);
+    expect(isAgedOut(config, cutoff.toISOString(), now)).toBe(false);
+    expect(isAgedOut(config, new Date(cutoff.getTime() + 1).toISOString(), now)).toBe(false);
+  });
+
+  it('is false when retention is disabled', () => {
+    expect(isAgedOut(makeConfig({ enabled: false }), '2000-01-01T00:00:00.000Z', now)).toBe(false);
+  });
+
+  it('is false when the end time is unknown or unparsable', () => {
+    const config = makeConfig();
+
+    expect(isAgedOut(config, undefined, now)).toBe(false);
+    expect(isAgedOut(config, 'not a date', now)).toBe(false);
+  });
+
+  it('uses the current time by default', () => {
+    const config = makeConfig({ maxChunkAgeDays: 90 });
+
+    expect(isAgedOut(config, '2000-01-01T00:00:00.000Z')).toBe(true);
+    expect(isAgedOut(config, new Date().toISOString())).toBe(false);
   });
 });

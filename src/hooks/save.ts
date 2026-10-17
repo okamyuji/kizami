@@ -89,9 +89,10 @@ export async function handleSave(
 
     // chunks に externalId/createdAt を割り当ててから JSONL に先書きする。
     // 失敗した場合は SQLite を一切触らずに例外を伝播するフェイルファスト方針（設計書 §3.3）。
+    // createdAt は保存時刻に固定する。会話時刻を使うと保持期間より古い会話が保存直後の自動メンテナンスで消える。
     for (const c of chunks) {
       if (!c.externalId) c.externalId = randomUUID();
-      if (!c.createdAt) c.createdAt = new Date().toISOString();
+      c.createdAt = new Date().toISOString();
     }
     const records = chunksToJsonlRecords(chunks, embeddings);
     const writer = new JsonlWriter(config.storage.jsonlDir);

@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { loadConfig, applyProjectAlias } from '@/config';
 import type { EngramConfig } from '@/config';
 import { getClaudeProjectsDir } from '@/archive/store';
+import { readHeader } from '@/archive/resolve';
 import { getDatabase } from '@/db/connection';
 import { initializeSchema } from '@/db/schema';
 import { Store } from '@/db/store';
@@ -11,11 +12,20 @@ import { buildChunks } from '@/parser/chunker';
 import { JsonlWriter } from '@/jsonl/writer';
 import { chunksToJsonlRecords } from '@/jsonl/converter';
 import { loadDeletions, deletionsFile, contentDigest } from '@/archive/deletions';
-import { loadRecoverMarks, saveRecoverMarks, refreshIfGrown } from '@/hooks/refresh';
+import { isAgedOut } from '@/maintenance/auto';
+import {
+  loadRecoverMarks,
+  saveRecoverMarks,
+  refreshIfGrown,
+  repairIfMisdated,
+  isRepairDone,
+  markRepairDone,
+} from '@/hooks/refresh';
 
 export interface RecoverResult {
   recovered: number;
   refreshed: number;
+  repaired: number;
   skipped: number;
   errors: number;
   details: string[];
@@ -45,6 +55,26 @@ export function projectDirToPath(dirName: string): string {
 }
 
 /**
+ * 生ログに記録された cwd を優先し、無いときだけディレクトリ名から復号する。
+ * hook の保存と同じく realpath を通し、同じプロジェクトが別のパスに分かれないようにする。
+ */
+async function resolveProjectPath(
+  config: EngramConfig,
+  transcriptPath: string,
+  dirName: string
+): Promise<string> {
+  const { cwd } = await readHeader(transcriptPath);
+  if (!cwd) return applyProjectAlias(config.storage.projectAliases, projectDirToPath(dirName));
+  let resolved = cwd;
+  try {
+    resolved = fs.realpathSync(cwd);
+  } catch {
+    // 別マシンで記録されたパスなど、このホストに無い cwd はそのまま使う
+  }
+  return applyProjectAlias(config.storage.projectAliases, resolved);
+}
+
+/**
  * ~/.claude/projects/ 配下のトランスクリプトファイルを走査し、
  * DBに未保存のセッションを検出して保存する。
  */
@@ -58,6 +88,7 @@ export async function recoverTranscripts(
   const result: RecoverResult = {
     recovered: 0,
     refreshed: 0,
+    repaired: 0,
     skipped: 0,
     errors: 0,
     details: [],
@@ -68,6 +99,7 @@ export async function recoverTranscripts(
     const store = new Store(db);
     const deleted = loadDeletions(deletionsFile(config.database.path));
     const marks = loadRecoverMarks(config);
+    const repairDone = isRepairDone(config);
 
     const projectsDir = claudeProjectsDir ?? getClaudeProjectsDir();
     if (!fs.existsSync(projectsDir)) {
@@ -80,10 +112,6 @@ export async function recoverTranscripts(
       if (!dirent.isDirectory()) continue;
 
       const projectDir = path.join(projectsDir, dirent.name);
-      const projectPath = applyProjectAlias(
-        config.storage.projectAliases,
-        projectDirToPath(dirent.name)
-      );
 
       let entries: fs.Dirent[];
       try {
@@ -104,14 +132,26 @@ export async function recoverTranscripts(
         }
         try {
           if (store.hasSession(sessionId)) {
-            const outcome = await refreshIfGrown({
+            const ctx = {
               config,
               store,
               sessionId,
               transcriptPath,
               marks,
               deletedChunkDigests: deleted.chunkDigests,
-            });
+            };
+            if (!repairDone) {
+              const repaired = await repairIfMisdated(
+                ctx,
+                await resolveProjectPath(config, transcriptPath, dirent.name)
+              );
+              if (repaired) {
+                result.repaired++;
+                result.details.push(`${sessionId.slice(0, 8)} (repaired)`);
+                continue;
+              }
+            }
+            const outcome = await refreshIfGrown(ctx);
             if (outcome === 'refreshed') {
               result.refreshed++;
               result.details.push(`${sessionId.slice(0, 8)} (refreshed)`);
@@ -129,6 +169,12 @@ export async function recoverTranscripts(
             continue;
           }
 
+          // 保持期間より古い会話は、入れても次の整理で消えてまた入る。生ログは保管側の検索で読める
+          if (isAgedOut(config, messages[messages.length - 1].timestamp)) {
+            result.skipped++;
+            continue;
+          }
+          const projectPath = await resolveProjectPath(config, transcriptPath, dirent.name);
           const chunks = buildChunks(messages, sessionId, projectPath);
           // rebuild で全チャンクを消したセッションは行ごと無くなる。取り込み直すと削除した本文が戻る。
           if (
@@ -169,6 +215,8 @@ export async function recoverTranscripts(
     }
 
     saveRecoverMarks(config, marks);
+    // 失敗したセッションがあれば次回も判定し直す
+    if (result.errors === 0) markRepairDone(config);
     return result;
   } finally {
     db.close();

@@ -55,7 +55,7 @@ function parseLine(raw: string): Header | undefined {
 }
 // Stryker restore BlockStatement
 
-async function readHeader(file: string): Promise<{ cwd?: string; gitBranch?: string }> {
+export async function readHeader(file: string): Promise<{ cwd?: string; gitBranch?: string }> {
   const rl = createInterface({ input: createReadStream(file), crlfDelay: Infinity });
   // return / break で for await を抜けると readline は自動で閉じる
   for await (const raw of rl) {

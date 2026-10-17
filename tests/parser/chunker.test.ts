@@ -2,19 +2,21 @@ import { describe, it, expect } from 'vitest';
 import { buildChunks, MAX_TOOL_OUTPUT_BYTES, truncateToolOutput } from '../../src/parser/chunker';
 import type { TranscriptMessage, AssistantMessage, UserMessage } from '../../src/parser/transcript';
 
-function makeUser(text: string): UserMessage {
-  return { kind: 'user', sessionId: 'sess-1', text };
+function makeUser(text: string, timestamp?: string): UserMessage {
+  return { kind: 'user', sessionId: 'sess-1', text, timestamp };
 }
 
 function makeAssistant(
   text: string,
-  toolResults: AssistantMessage['toolResults'] = []
+  toolResults: AssistantMessage['toolResults'] = [],
+  timestamp?: string
 ): AssistantMessage {
   return {
     kind: 'assistant',
     sessionId: 'sess-1',
     content: [{ type: 'text', text }],
     toolResults,
+    timestamp,
   };
 }
 
@@ -29,6 +31,74 @@ describe('buildChunks', () => {
     expect(chunks[0].role).toBe('mixed');
     expect(chunks[0].sessionId).toBe('sess-1');
     expect(chunks[0].projectPath).toBe('/project');
+  });
+
+  it('should stamp each chunk with the timestamp of the turn it came from', () => {
+    const messages: TranscriptMessage[] = [
+      makeUser('First question', '2026-10-05T06:44:00.000Z'),
+      makeAssistant('First answer', [], '2026-10-05T06:44:30.000Z'),
+      makeUser('Second question', '2026-10-05T08:17:00.000Z'),
+      makeAssistant('Second answer', [], '2026-10-05T08:17:30.000Z'),
+    ];
+    const chunks = buildChunks(messages, 'sess-1', '/project');
+
+    expect(chunks.map((c) => c.createdAt)).toEqual([
+      '2026-10-05T06:44:00.000Z',
+      '2026-10-05T08:17:00.000Z',
+    ]);
+  });
+
+  it('should stamp every split chunk of one turn with the turn timestamp', () => {
+    const long = Array.from({ length: 40 }, (_, i) => `paragraph ${i} ${'x'.repeat(200)}`).join(
+      '\n\n'
+    );
+    const messages: TranscriptMessage[] = [
+      makeUser('Q', '2026-10-05T06:44:00.000Z'),
+      makeAssistant(long, [], '2026-10-05T06:50:00.000Z'),
+    ];
+    const chunks = buildChunks(messages, 'sess-1', '/project');
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(new Set(chunks.map((c) => c.createdAt))).toEqual(new Set(['2026-10-05T06:44:00.000Z']));
+  });
+
+  it('should use the first assistant timestamp when the turn has no user message', () => {
+    const messages: TranscriptMessage[] = [
+      makeAssistant('Orphan', [], '2026-10-05T06:44:30.000Z'),
+      makeAssistant('More', [], '2026-10-05T06:45:00.000Z'),
+    ];
+    const chunks = buildChunks(messages, 'sess-1', '/project');
+
+    expect(chunks[0].createdAt).toBe('2026-10-05T06:44:30.000Z');
+  });
+
+  it('should fall back to the assistant timestamp when the user line has none', () => {
+    const messages: TranscriptMessage[] = [
+      makeUser('Q'),
+      makeAssistant('A', [], '2026-10-05T06:44:30.000Z'),
+    ];
+    const chunks = buildChunks(messages, 'sess-1', '/project');
+
+    expect(chunks[0].createdAt).toBe('2026-10-05T06:44:30.000Z');
+  });
+
+  it('should not leak the previous turn timestamp into a turn without timestamps', () => {
+    const messages: TranscriptMessage[] = [
+      makeUser('First', '2026-10-05T06:44:00.000Z'),
+      makeAssistant('A1'),
+      makeUser('Second'),
+      makeAssistant('A2'),
+    ];
+    const chunks = buildChunks(messages, 'sess-1', '/project');
+
+    expect(chunks[0].createdAt).toBe('2026-10-05T06:44:00.000Z');
+    expect(chunks[1].createdAt).toBeUndefined();
+  });
+
+  it('should leave createdAt unset when no message has a timestamp', () => {
+    const chunks = buildChunks([makeUser('Hello'), makeAssistant('Hi')], 'sess-1', '/project');
+
+    expect(chunks[0].createdAt).toBeUndefined();
   });
 
   it('should create multiple turns from alternating messages', () => {

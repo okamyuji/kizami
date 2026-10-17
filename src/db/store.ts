@@ -154,6 +154,13 @@ export class Store {
     return row.n;
   }
 
+  getLegacyChunkStart(sessionId: string): string | undefined {
+    const row = this.db
+      .prepare('SELECT MIN(created_at) AS t FROM chunks WHERE session_id = ? AND turn_key IS NULL')
+      .get(sessionId) as { t: string | null };
+    return row.t ?? undefined;
+  }
+
   getSessionTurnKeys(sessionId: string): string[] {
     const rows = this.db
       .prepare('SELECT DISTINCT turn_key FROM chunks WHERE session_id = ? AND turn_key IS NOT NULL')

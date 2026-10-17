@@ -1,3 +1,4 @@
+import { copyRecentTranscript } from './helpers/recent-transcript';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -1160,6 +1161,37 @@ describe('cli commands', () => {
       expect(log).not.toHaveBeenCalledWith('No unsaved transcripts found.');
       log.mockRestore();
     });
+
+    it('reports repaired sessions even when nothing else changed', async () => {
+      process.env['HOME'] = path.join(tmpDir, 'home-repair');
+      const dir = path.join(tmpDir, 'home-repair', '.claude', 'projects', '-p');
+      fs.mkdirSync(dir, { recursive: true });
+      const line = (o: object) => JSON.stringify(o) + '\n';
+      fs.writeFileSync(
+        path.join(dir, 'fix-0001.jsonl'),
+        line({
+          type: 'user',
+          timestamp: '2026-09-01T00:00:00Z',
+          message: { role: 'user', content: 'q1' },
+        }) +
+          line({
+            type: 'assistant',
+            timestamp: '2026-09-01T00:01:00Z',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'a1' }] },
+          })
+      );
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      await cmdRecover({ config: configPath });
+      db.prepare("UPDATE chunks SET created_at = '2026-10-17T00:31:43.000Z'").run();
+      fs.rmSync(path.join(tmpDir, 'recover-repaired'));
+      log.mockClear();
+
+      await cmdRecover({ config: configPath });
+
+      expect(log).toHaveBeenCalledWith('Repaired:  1');
+      expect(log).not.toHaveBeenCalledWith('No unsaved transcripts found.');
+      log.mockRestore();
+    });
   });
 
   describe('cmdSearchFresh', () => {
@@ -1174,10 +1206,7 @@ describe('cli commands', () => {
       process.env['CLAUDE_CONFIG_DIR'] = path.join(tmpDir, 'HOME', '.claude');
       const projectDir = path.join(tmpDir, 'HOME', '.claude', 'projects', '-test-project');
       fs.mkdirSync(projectDir, { recursive: true });
-      fs.copyFileSync(
-        path.resolve(__dirname, 'fixtures/sample-transcript.jsonl'),
-        path.join(projectDir, 'fresh-0001.jsonl')
-      );
+      copyRecentTranscript(path.join(projectDir, 'fresh-0001.jsonl'));
     });
 
     afterEach(() => {

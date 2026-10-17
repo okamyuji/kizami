@@ -673,11 +673,17 @@ export async function cmdResume(
 
 export async function cmdRecover(options: { config?: string }): Promise<RecoverResult> {
   const result = await recoverTranscripts(options.config);
-  if (result.recovered === 0 && result.refreshed === 0 && result.errors === 0) {
+  if (
+    result.recovered === 0 &&
+    result.refreshed === 0 &&
+    result.repaired === 0 &&
+    result.errors === 0
+  ) {
     console.log('No unsaved transcripts found.');
   } else {
     console.log(`Recovered: ${result.recovered}`);
     console.log(`Refreshed: ${result.refreshed}`);
+    console.log(`Repaired:  ${result.repaired}`);
     console.log(`Skipped:   ${result.skipped}`);
     console.log(`Errors:    ${result.errors}`);
     if (result.details.length > 0) {
