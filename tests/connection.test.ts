@@ -2,7 +2,9 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { getDatabase } from '../src/db/connection';
+import { JsonlTransactionWriter } from '../src/jsonl/writer';
 
 describe('connection', () => {
   const tmpDirs: string[] = [];
@@ -55,4 +57,75 @@ describe('connection', () => {
     expect(() => getDatabase(dbPath)).toThrow(/symlink/);
     expect(fs.readFileSync(targetPath, 'utf-8')).toBe('unchanged');
   });
+
+  // 別のプロセスが接続を開いて閉じる。そのプロセスは、自分が最後の接続だと判断すると -shm と WAL を消す
+  const openAndCloseElsewhere = (dbPath: string) => {
+    const script = `const D = require('better-sqlite3'); const d = new D(process.argv[1]);
+      d.pragma('journal_mode = WAL'); d.prepare('select 1').get(); d.close();`;
+    const r = spawnSync(process.execPath, ['-e', script, dbPath], { encoding: 'utf-8' });
+    expect(r.stderr).toBe('');
+  };
+
+  it.skipIf(process.platform === 'win32')(
+    'keeps the locks of a connection already open in the process when it opens another one',
+    () => {
+      const dbPath = makeTmpDb();
+      const first = getDatabase(dbPath);
+      first.exec('CREATE TABLE t (x TEXT)');
+      const insert = first.prepare('INSERT INTO t VALUES (?)');
+      for (let i = 0; i < 100; i++) insert.run(`row ${i}`);
+
+      getDatabase(dbPath).close();
+      openAndCloseElsewhere(dbPath);
+
+      expect(fs.existsSync(`${dbPath}-shm`)).toBe(true);
+      expect(first.prepare('SELECT count(*) AS n FROM t').get()).toEqual({ n: 100 });
+      first.close();
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'keeps the locks of the JSONL writer lock when another writer opens in the process',
+    () => {
+      const dir = path.dirname(makeTmpDb());
+      const first = new JsonlTransactionWriter(dir);
+      const second = new JsonlTransactionWriter(dir);
+      second.close();
+
+      openAndCloseElsewhere(path.join(dir, '.writer-lock.sqlite'));
+
+      expect(fs.existsSync(path.join(dir, '.writer-lock.sqlite-shm'))).toBe(true);
+      first.close();
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'gives the JSONL writer lock files to the owner only',
+    () => {
+      const dir = path.dirname(makeTmpDb());
+      const first = new JsonlTransactionWriter(dir);
+      const files = ['', '-wal', '-shm'].map((s) => path.join(dir, `.writer-lock.sqlite${s}`));
+      for (const f of files) fs.chmodSync(f, 0o644);
+
+      new JsonlTransactionWriter(dir).close();
+
+      for (const f of files) expect(fs.statSync(f).mode & 0o777).toBe(0o600);
+      first.close();
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'still gives the database files to the owner only',
+    () => {
+      const dbPath = makeTmpDb();
+      const db = getDatabase(dbPath);
+      db.exec('CREATE TABLE t (x TEXT)');
+      for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) fs.chmodSync(f, 0o644);
+      getDatabase(dbPath).close();
+      for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+        expect(fs.statSync(f).mode & 0o777).toBe(0o600);
+      }
+      db.close();
+    }
+  );
 });

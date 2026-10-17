@@ -4,7 +4,7 @@ import { getDefaultDbPath } from '@/config';
 import {
   assertPrivateFileTarget,
   enforcePrivateDirectory,
-  enforcePrivateFile,
+  restrictSqliteFile,
 } from '@/storage/permissions';
 
 export function getDatabase(dbPath?: string): Database.Database {
@@ -24,9 +24,9 @@ export function getDatabase(dbPath?: string): Database.Database {
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
 
-    enforcePrivateFile(resolvedPath);
-    enforcePrivateFile(`${resolvedPath}-wal`);
-    enforcePrivateFile(`${resolvedPath}-shm`);
+    restrictSqliteFile(resolvedPath);
+    restrictSqliteFile(`${resolvedPath}-wal`);
+    restrictSqliteFile(`${resolvedPath}-shm`);
   } catch (error: unknown) {
     db.close();
     throw error;

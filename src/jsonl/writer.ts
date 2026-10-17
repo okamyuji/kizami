@@ -12,7 +12,11 @@ import type {
 import type { HookRuntime, ObservationBoundaryV2, TurnCheckpointV2 } from '@/checkpoint/types';
 import { compareObservationBoundary } from '@/checkpoint/identity';
 import { isBlankLine } from '@/storage/lines';
-import { assertPrivateFileTarget, enforcePrivateFile } from '@/storage/permissions';
+import {
+  assertPrivateFileTarget,
+  enforcePrivateFile,
+  restrictSqliteFile,
+} from '@/storage/permissions';
 import { isJsonlV2Payload, isJsonlV2Record, MAX_JSONL_RECORD_BYTES } from '@/jsonl/transaction';
 
 function noFollowFlag(): number {
@@ -331,9 +335,9 @@ export class JsonlTransactionWriter {
           lockDb.exec(COORDINATION_SCHEMA);
         })
         .immediate();
-      enforcePrivateFile(lockDbPath);
-      enforcePrivateFile(`${lockDbPath}-wal`);
-      enforcePrivateFile(`${lockDbPath}-shm`);
+      restrictSqliteFile(lockDbPath);
+      restrictSqliteFile(`${lockDbPath}-wal`);
+      restrictSqliteFile(`${lockDbPath}-shm`);
     } catch (error: unknown) {
       lockDb.close();
       throw error;

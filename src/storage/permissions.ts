@@ -51,6 +51,23 @@ export function enforcePrivateFile(filePath: string): void {
   }
 }
 
+/**
+ * SQLite のファイルの権限を、fd を開かずに絞る。POSIX のロックはプロセス単位で、同じファイルの fd を
+ * どれか 1 つ閉じると、同じプロセスの SQLite の接続が持つロックまで外れる。外れると、別のプロセスが
+ * 自分を最後の接続とみなして -shm と WAL を消し、開いている接続の読み込みが壊れる。
+ * パスでの chmod はリンクを辿るが、親ディレクトリは enforcePrivateDirectory で所有者だけのものにしてある。
+ */
+export function restrictSqliteFile(filePath: string): void {
+  assertPrivateFileTarget(filePath);
+  if (process.platform === 'win32') return;
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch (error: unknown) {
+    // 確かめた後に、別のプロセスが最後の接続として -shm や WAL を消すことがある
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
 function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
   return left.dev === right.dev && left.ino === right.ino;
 }

@@ -6,6 +6,7 @@ import {
   enforcePrivateDirectory,
   enforcePrivateFile,
   readPrivateTextFile,
+  restrictSqliteFile,
 } from '@/storage/permissions';
 
 const dirs: string[] = [];
@@ -39,6 +40,27 @@ describe.skipIf(process.platform === 'win32')('private storage permissions', () 
 
     enforcePrivateDirectory(directory);
     expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
+  });
+
+  it('restricts a SQLite file by its path, does nothing for a missing one, and rejects a link or a directory', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kizami-mode-'));
+    dirs.push(root);
+    const file = path.join(root, 'memory.db');
+    fs.writeFileSync(file, 'db', { mode: 0o644 });
+    fs.chmodSync(file, 0o644);
+
+    restrictSqliteFile(file);
+
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(() => restrictSqliteFile(path.join(root, 'missing.db-wal'))).not.toThrow();
+    const target = path.join(root, 'target.db');
+    fs.writeFileSync(target, 'other', { mode: 0o644 });
+    fs.chmodSync(target, 0o644);
+    fs.symlinkSync(target, path.join(root, 'link.db'));
+    expect(() => restrictSqliteFile(path.join(root, 'link.db'))).toThrow(/symlink/);
+    expect(fs.statSync(target).mode & 0o777).toBe(0o644);
+    fs.mkdirSync(path.join(root, 'dir.db'));
+    expect(() => restrictSqliteFile(path.join(root, 'dir.db'))).toThrow(/not a file/);
   });
 
   it('does nothing for a missing file', () => {
