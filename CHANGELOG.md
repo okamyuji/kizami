@@ -1,3 +1,9 @@
+## [0.8.4](https://github.com/okamyuji/kizami/compare/v0.8.3...v0.8.4) (2026-10-17)
+
+### Bug Fixes
+
+- **deps:** bump global-agent to 4.1.3 to drop sprintf-js ([#42](https://github.com/okamyuji/kizami/issues/42)) ([e29f6e6](https://github.com/okamyuji/kizami/commit/e29f6e66228de1dee109c5e3b7df2bcf9744de3b))
+
 ## [0.8.3](https://github.com/okamyuji/kizami/compare/v0.8.2...v0.8.3) (2026-10-17)
 
 ### Bug Fixes
