@@ -1,3 +1,9 @@
+## [0.8.7](https://github.com/okamyuji/kizami/compare/v0.8.6...v0.8.7) (2026-10-23)
+
+### Bug Fixes
+
+- **deps:** bump vitest to 4.1.12 (GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp) ([991b9ba](https://github.com/okamyuji/kizami/commit/991b9ba2f7940b38b4fce2973d97e8999c20923d))
+
 ## [0.8.6](https://github.com/okamyuji/kizami/compare/v0.8.5...v0.8.6) (2026-10-17)
 
 ### Bug Fixes
