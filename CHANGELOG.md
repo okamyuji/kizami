@@ -1,3 +1,10 @@
+## [0.8.8](https://github.com/okamyuji/kizami/compare/v0.8.7...v0.8.8) (2026-10-31)
+
+### Bug Fixes
+
+- **deps:** bump undici override to 8.12.2 (GHSA-xjj6-f33q-929c) ([a549f4d](https://github.com/okamyuji/kizami/commit/a549f4dc815b08d35e77dedb810e098687cc13c5))
+- **deps:** bump zod, fast-uri and qs overrides ([b16d7a5](https://github.com/okamyuji/kizami/commit/b16d7a5fdc0e6b7963a19b1c5fd1ec57b51f62c5))
+
 ## [0.8.7](https://github.com/okamyuji/kizami/compare/v0.8.6...v0.8.7) (2026-10-23)
 
 ### Bug Fixes
