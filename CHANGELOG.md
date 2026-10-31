@@ -1,3 +1,9 @@
+## [0.8.9](https://github.com/okamyuji/kizami/compare/v0.8.8...v0.8.9) (2026-10-31)
+
+### Bug Fixes
+
+- **deps:** bump minimatch to 11.0.3 (GHSA-g3hv-75wg-m249) ([88ede19](https://github.com/okamyuji/kizami/commit/88ede1934f625e371a5de2cf8a7b229c0694e7f1))
+
 ## [0.8.8](https://github.com/okamyuji/kizami/compare/v0.8.7...v0.8.8) (2026-10-31)
 
 ### Bug Fixes
