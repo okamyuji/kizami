@@ -2,7 +2,7 @@
 # kizami pre-commit gates (v0.2.0):
 #   1. secretlint: クロスプラットフォーム Node-native スキャナ (pnpm dev依存, 必ず実行)
 #   2. gitleaks:   インストール済みなら追加実行 (より広範なルール)
-#   3. lint-staged: 差分ファイルのみ ESLint --fix + Prettier --write
+#   3. lint-staged: 差分ファイルのみ oxlint --fix + oxfmt
 #
 # 重い処理 (typecheck/test/build) は意図的に外している。
 # それらは CI ジョブ (pnpm check) で必ず走るので、ローカルでは差分にだけ介入する。
@@ -29,5 +29,5 @@ else
   echo "[pre-commit]   Install for extended rules: brew install gitleaks"
 fi
 
-# 3. lint-staged: 変更ファイルのみ eslint --fix + prettier --write
+# 3. lint-staged: 変更ファイルのみ oxlint --fix + oxfmt
 pnpm exec lint-staged
