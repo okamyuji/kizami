@@ -1,6 +1,10 @@
 autoInstallPeers: true
 engineStrict: true
 minimumReleaseAge: 10080
+# shortcut: the GHSA-g3hv-75wg-m249 fix is younger than minimumReleaseAge; drop these after 2026-11-05.
+minimumReleaseAgeExclude:
+  - minimatch@11.0.3
+  - '@isaacs/nonrecursive-glob-match@1.0.3'
 allowBuilds:
   better-sqlite3: true
   onnxruntime-node: true
@@ -25,3 +29,4 @@ overrides:
   source-map-js@<1.2.2: 1.2.2
   global-agent@<4.1.3: 4.1.3
   zod@>=4.0.0 <4.6.6: ^4.6.6
+  minimatch@>=10.0.0 <11.0.1: ^11.0.3
