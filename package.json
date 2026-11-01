@@ -38,23 +38,23 @@
   },
   "dependencies": {
     "@huggingface/transformers": "4.2.0",
-    "better-sqlite3": "12.10.1",
+    "better-sqlite3": "13.0.3",
     "sqlite-vec": "0.1.9"
   },
   "devDependencies": {
     "@commitlint/cli": "21.0.2",
     "@commitlint/config-conventional": "21.0.2",
     "@secretlint/secretlint-rule-preset-recommend": "^13.0.2",
-    "@semantic-release/changelog": "6.0.3",
+    "@semantic-release/changelog": "7.0.0",
     "@semantic-release/exec": "7.1.0",
-    "@semantic-release/git": "10.0.1",
+    "@semantic-release/git": "11.0.1",
     "@semantic-release/github": "12.0.8",
     "@semantic-release/npm": "13.1.5",
-    "@stryker-mutator/core": "^9.6.1",
-    "@stryker-mutator/vitest-runner": "^9.6.1",
-    "@types/better-sqlite3": "7.6.13",
-    "@types/node": "25.9.3",
-    "conventional-changelog-conventionalcommits": "9.3.1",
+    "@stryker-mutator/core": "^10.1.1",
+    "@stryker-mutator/vitest-runner": "^10.1.1",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "26.6.6",
+    "conventional-changelog-conventionalcommits": "10.4.1",
     "husky": "9.1.7",
     "lint-staged": "17.0.7",
     "oxfmt": "^0.74.0",
@@ -62,8 +62,8 @@
     "secretlint": "^13.0.2",
     "semantic-release": "25.0.5",
     "tsx": "4.22.4",
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "vite": "8.1.6",
-    "vitest": "4.1.12"
+    "vitest": "5.0.5"
   }
 }
