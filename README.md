@@ -84,7 +84,7 @@ hybridモードを有効にするには `kizami setup --hybrid` を実行しま�
 
 ## 必要環境
 
-- Node.js 24.14.1 以上（`package.json` の `engines.node` で `>=24.14.1` を指定。`engineStrict: true` のため、この下限を満たす Node.js を使うこと）
+- Node.js 24.15.0 以上（`package.json` の `engines.node` で `>=24.15.0` を指定。`engineStrict: true` のため、この下限を満たす Node.js を使うこと）
 - pnpm 11以上
 
 ## インストール

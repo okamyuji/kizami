@@ -27,7 +27,7 @@ jobs:
   check:
     uses: okamyuji/reusable-workflows/.github/workflows/node-ci.yml@v1
     with:
-      node-version: '24.14.1'
+      node-version: '24.15.0'
       test-command: 'run check'
 
   # gitleaks は二重防衛のための追加レイヤ (より広範なシークレットルール)。
@@ -46,7 +46,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24.14.1
+          node-version: 24.15.0
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -65,7 +65,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24.14.1
+          node-version: 24.15.0
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
