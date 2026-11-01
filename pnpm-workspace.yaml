@@ -9,6 +9,9 @@ allowBuilds:
   protobufjs: false
   sharp: false
 overrides:
+  # shortcut: semantic-release のプラグインは conventional-changelog-writer ^8 に固定されているが、
+  # conventional-changelog-conventionalcommits 10 は writer 9 を要る。プラグインが writer 9 に対応したら消す。
+  conventional-changelog-writer@<9: ^9.3.0
   protobufjs@<7.6.5: ^7.6.5
   '@protobufjs/utf8@<1.1.1': ^1.1.1
   postcss@<8.5.23: 8.5.23
