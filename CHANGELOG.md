@@ -1,3 +1,10 @@
+## [0.8.10](https://github.com/okamyuji/kizami/compare/v0.8.9...v0.8.10) (2026-11-01)
+
+### Bug Fixes
+
+- Node.js を 24.15.0 に上げ、origin/main を取り込む ([8de49e8](https://github.com/okamyuji/kizami/commit/8de49e8f4aa35af38d9d600d241f0c053f9da6d7))
+- **release:** conventional-changelog-writer を 9 に揃え、隠す節を preset 10 の書き方にする ([#55](https://github.com/okamyuji/kizami/issues/55)) ([85fb83a](https://github.com/okamyuji/kizami/commit/85fb83ace038693a7c40f6da6533119a94ba4f3d))
+
 ## [0.8.9](https://github.com/okamyuji/kizami/compare/v0.8.8...v0.8.9) (2026-10-31)
 
 ### Bug Fixes
