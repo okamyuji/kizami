@@ -27,6 +27,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
+          # semantic-release pushes the release commit over this SSH origin; the deploy key is the only
+          # bypass of the require-PR ruleset on main. GITHUB_TOKEN below is still used for the GitHub release.
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
 
       - uses: pnpm/action-setup@v4
 
